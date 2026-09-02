@@ -3,6 +3,7 @@ const $ = s => document.querySelector(s);
 const state = {
   entries: [],
   filter: { year: 'all', month: 'all', text: '' },
+  rangeFocus: { type: 'all' }, // 范围聚焦（ADR-0003）：与年/月下拉互斥，搜索叠加
   manage: false,
   selected: new Set(),
   settings: null,
@@ -122,6 +123,7 @@ function renderStats() {
     card.append(valueEl, labelEl);
     statsStrip.appendChild(card);
   }
+  bindStatCardClicks();
 }
 
 /* ---------- 录入（时间自动跟随当前） ---------- */
@@ -255,7 +257,7 @@ function populateYearOptions() {
 
 function filteredEntries() {
   const { year, month, text } = state.filter;
-  let list = state.entries;
+  let list = window.DRStats.filterByRange(state.entries, state.rangeFocus, Date.now());
   if (year !== 'all') list = list.filter(x => new Date(x.ts).getFullYear() === Number(year));
   if (month !== 'all') list = list.filter(x => new Date(x.ts).getMonth() === Number(month) - 1);
   if (text) list = list.filter(x => x.text.toLowerCase().includes(text.toLowerCase()));
@@ -264,12 +266,17 @@ function filteredEntries() {
 
 function isFiltering() {
   const { year, month, text } = state.filter;
-  return year !== 'all' || month !== 'all' || !!text;
+  return state.rangeFocus.type !== 'all' || year !== 'all' || month !== 'all' || !!text;
 }
 
 [fYear, fMonth].forEach(el => el.addEventListener('change', () => {
   state.filter.year = fYear.value;
   state.filter.month = fMonth.value;
+  // 互斥（ADR-0003）：手动改年/月时摘除范围聚焦
+  if (state.rangeFocus.type !== 'all') {
+    state.rangeFocus = { type: 'all' };
+    renderRangeChip();
+  }
   renderList();
 }));
 
@@ -277,6 +284,60 @@ fText.addEventListener('input', () => {
   state.filter.text = fText.value.trim();
   renderList();
 });
+
+/* ---------- 范围聚焦（统计卡点击，票02） ---------- */
+
+const DR = window.DRStats;
+
+// range 为 null 表示切换/取消当前聚焦
+function setRangeFocus(range) {
+  const same = JSON.stringify(state.rangeFocus) === JSON.stringify(range);
+  state.rangeFocus = same ? { type: 'all' } : range;
+  // 互斥（ADR-0003）：聚焦时复位年/月下拉
+  if (state.rangeFocus.type !== 'all') {
+    state.filter.year = 'all';
+    state.filter.month = 'all';
+    fYear.value = 'all';
+    fMonth.value = 'all';
+  }
+  renderRangeChip();
+  renderList();
+}
+
+const rangeChip = document.createElement('button');
+rangeChip.className = 'range-chip';
+rangeChip.style.display = 'none';
+rangeChip.addEventListener('click', () => setRangeFocus({ type: 'all' }));
+
+function renderRangeChip() {
+  const label = DR.rangeLabel(state.rangeFocus);
+  rangeChip.style.display = label ? '' : 'none';
+  rangeChip.innerHTML = '';
+  if (label) {
+    rangeChip.append(label + ' ');
+    const x = document.createElement('span');
+    x.className = 'chip-x';
+    x.textContent = '×';
+    rangeChip.appendChild(x);
+  }
+}
+
+// 统计卡点击：今日/本周聚焦，累计=清除聚焦
+function bindStatCardClicks() {
+  const cards = statsStrip.querySelectorAll('.stat-card');
+  const ranges = [{ type: 'day', day: null }, { type: 'week' }, { type: 'all' }];
+  cards.forEach((card, i) => {
+    card.classList.add('clickable');
+    card.addEventListener('click', () => {
+      const r = ranges[i];
+      if (r.type === 'day') {
+        setRangeFocus({ type: 'day', day: dateStr(Date.now()) });
+      } else {
+        setRangeFocus(r);
+      }
+    });
+  });
+}
 
 /* ---------- 历史列表 ---------- */
 
@@ -638,6 +699,8 @@ async function refresh() {
   syncComposerTime();
   defaultRange();
   buildMonthOptions();
+  $('#list-toolbar').insertBefore(rangeChip, $('#f-count'));
+  renderRangeChip();
   window.api.onEntriesChanged(refresh);
   loadSettingsUI();
   refresh();

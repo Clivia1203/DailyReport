@@ -1,6 +1,6 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { statsFor, weekStart } = require('./stats.js');
+const { statsFor, weekStart, filterByRange, rangeLabel } = require('./stats.js');
 
 /* 时间口径说明：全部用本地时间构造，与产品口径一致（用户所在时区）。
    2026-09-01 是周二；2026-08-31 是周一；2026-08-30 是周日。 */
@@ -24,6 +24,47 @@ test('weekStart: 周日深夜 -> 本周一（6 天前）', () => {
 
 test('weekStart: 跨年的周（2027-01-01 周五 -> 2026-12-28 周一）', () => {
   assert.equal(weekStart(day(2027, 1, 1)), day(2026, 12, 28));
+});
+
+/* ---------- filterByRange / rangeLabel：范围聚焦（ADR-0003） ---------- */
+
+/* range 形态：{ type: 'all' } | { type: 'day', day: 'YYYY-MM-DD' } | { type: 'week', start: ts } */
+
+test('filterByRange: all 返回全部', () => {
+  const now = day(2026, 9, 1, 12);
+  const entries = [entry(day(2026, 8, 1)), entry(day(2026, 9, 1))];
+  assert.equal(filterByRange(entries, { type: 'all' }, now).length, 2);
+});
+
+test('filterByRange: day 聚焦只留当天', () => {
+  const now = day(2026, 9, 1, 12);
+  const entries = [
+    entry(day(2026, 8, 31, 23, 59)),
+    entry(day(2026, 9, 1, 0, 0)),
+    entry(day(2026, 9, 1, 22)),
+    entry(day(2026, 9, 2, 8))
+  ];
+  const got = filterByRange(entries, { type: 'day', day: '2026-09-01' }, now);
+  assert.deepEqual(got.map(e => e.ts), [day(2026, 9, 1, 0, 0), day(2026, 9, 1, 22)]);
+});
+
+test('filterByRange: week 聚焦留整个自然周（周一~周日）', () => {
+  const now = day(2026, 9, 2, 12); // 周三
+  const entries = [
+    entry(day(2026, 8, 30, 12)),  // 上周日 -> 排除
+    entry(day(2026, 8, 31, 0, 1)),// 本周一 -> 包含
+    entry(day(2026, 9, 2, 12)),   // 本周三 -> 包含
+    entry(day(2026, 9, 6, 23, 59)),// 本周日 -> 包含
+    entry(day(2026, 9, 7, 0, 1))  // 下周一 -> 排除
+  ];
+  const got = filterByRange(entries, { type: 'week' }, now);
+  assert.equal(got.length, 3);
+});
+
+test('rangeLabel: day 聚焦显示具体日期，week 显示"本周"，all 为空', () => {
+  assert.equal(rangeLabel({ type: 'day', day: '2026-09-01' }), '9 月 1 日');
+  assert.equal(rangeLabel({ type: 'week' }), '本周');
+  assert.equal(rangeLabel({ type: 'all' }), '');
 });
 
 /* ---------- statsFor：今日 / 本周 / 累计 ---------- */

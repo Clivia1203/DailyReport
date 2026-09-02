@@ -36,5 +36,31 @@
     return { today, week, total: entries.length };
   }
 
-  return { weekStart, statsFor };
+  // 范围聚焦筛选（ADR-0003）。range: {type:'all'} | {type:'day',day:'YYYY-MM-DD'} | {type:'week'}
+  function filterByRange(entries, range, now) {
+    if (!range || range.type === 'all') return entries.slice();
+    if (range.type === 'day') {
+      const day0 = startOfDay(new Date(range.day + 'T00:00:00').getTime());
+      return entries.filter(e => startOfDay(e.ts) === day0);
+    }
+    if (range.type === 'week') {
+      const week0 = weekStart(now || Date.now());
+      const weekEnd = week0 + 7 * DAY_MS;
+      return entries.filter(e => e.ts >= week0 && e.ts < weekEnd);
+    }
+    return entries.slice();
+  }
+
+  // 范围芯片文案。空串表示无聚焦（all）。
+  function rangeLabel(range) {
+    if (!range || range.type === 'all') return '';
+    if (range.type === 'day') {
+      const d = new Date(range.day + 'T00:00:00');
+      return `${d.getMonth() + 1} 月 ${d.getDate()} 日`;
+    }
+    if (range.type === 'week') return '本周';
+    return '';
+  }
+
+  return { weekStart, statsFor, filterByRange, rangeLabel };
 });
