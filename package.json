@@ -6,7 +6,8 @@
   "main": "src/main.js",
   "author": "ddup5",
   "scripts": {
-    "start": "electron ."
+    "start": "electron .",
+    "test": "node --test \"src/renderer/*.test.js\""
   },
   "devDependencies": {
     "electron": "^37.0.0"

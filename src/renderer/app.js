@@ -98,6 +98,32 @@ $('#btn-theme').addEventListener('click', async () => {
 
 window.api.onThemeChanged(t => { applyTheme(t); syncThemeSeg(); });
 
+/* ---------- 统计条 ---------- */
+
+const statsStrip = $('#stats-strip');
+
+function renderStats() {
+  const stats = window.DRStats.statsFor(state.entries, Date.now());
+  statsStrip.innerHTML = '';
+  const defs = [
+    ['今日', stats.today],
+    ['本周', stats.week],
+    ['累计', stats.total]
+  ];
+  for (const [label, value] of defs) {
+    const card = document.createElement('div');
+    card.className = 'stat-card';
+    const valueEl = document.createElement('div');
+    valueEl.className = 'stat-value';
+    valueEl.textContent = String(value);
+    const labelEl = document.createElement('div');
+    labelEl.className = 'stat-label';
+    labelEl.textContent = label;
+    card.append(valueEl, labelEl);
+    statsStrip.appendChild(card);
+  }
+}
+
 /* ---------- 录入（时间自动跟随当前） ---------- */
 
 const composerText = $('#composer-text');
@@ -117,10 +143,16 @@ composerTs.addEventListener('input', () => {
 });
 
 $('#btn-now').addEventListener('click', () => { tsTouched = false; syncComposerTime(); });
-setInterval(syncComposerTime, 30000);
+
+// 周期/焦点恢复时的公共校准：录入时间跟随 + 统计数字（跨零点翻卡）
+function recalibrate() {
+  syncComposerTime();
+  renderStats();
+}
+setInterval(recalibrate, 30000);
 // 窗口从托盘恢复/重新获得焦点时立即校准（隐藏状态下定时器会被节流）
-document.addEventListener('visibilitychange', () => { if (!document.hidden) syncComposerTime(); });
-window.addEventListener('focus', syncComposerTime);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) recalibrate(); });
+window.addEventListener('focus', recalibrate);
 
 function growTextarea(el) {
   el.style.height = 'auto';
@@ -595,6 +627,7 @@ document.addEventListener('keydown', async e => {
 
 async function refresh() {
   state.entries = await window.api.list();
+  renderStats();
   populateYearOptions();
   renderList();
   renderExportPreview();

@@ -482,3 +482,30 @@ input::placeholder { color: var(--text-3); }
 ::-webkit-scrollbar { width: 10px; }
 ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 6px; border: 2px solid var(--bg); }
 ::-webkit-scrollbar-track { background: transparent; }
+
+/* ---------- 统计条 ---------- */
+
+.stats-strip {
+  display: flex; gap: 12px;
+  flex: none;
+}
+
+.stat-card {
+  flex: 1;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 12px 16px 10px;
+  text-align: center;
+}
+
+.stat-value {
+  font-size: 24px; font-weight: 750;
+  line-height: 1.2;
+  font-variant-numeric: tabular-nums;
+}
+
+.stat-label {
+  font-size: 12px; color: var(--text-3);
+  margin-top: 2px;
+}
