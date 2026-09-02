@@ -1,0 +1,612 @@
+const $ = s => document.querySelector(s);
+
+const state = {
+  entries: [],
+  filter: { year: 'all', month: 'all', text: '' },
+  manage: false,
+  selected: new Set(),
+  settings: null,
+  recording: false
+};
+
+/* ---------- 工具 ---------- */
+
+const pad = n => String(n).padStart(2, '0');
+
+function dateStr(ts) {
+  const d = new Date(ts);
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
+function timeStr(ts) {
+  const d = new Date(ts);
+  return `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+function toLocalInputValue(ts) {
+  const d = new Date(ts);
+  return `${dateStr(ts)}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+function weekdayOf(ds) {
+  return '日一二三四五六'[new Date(ds + 'T00:00:00').getDay()];
+}
+
+function relDayLabel(ds) {
+  const today = dateStr(Date.now());
+  const yesterday = dateStr(Date.now() - 86400000);
+  if (ds === today) return '今天';
+  if (ds === yesterday) return '昨天';
+  return '';
+}
+
+let toastTimer = null;
+function toast(msg, action) {
+  const t = $('#toast');
+  t.innerHTML = '';
+  const span = document.createElement('span');
+  span.textContent = msg;
+  t.appendChild(span);
+  if (action) {
+    const btn = document.createElement('button');
+    btn.textContent = action.label;
+    btn.onclick = () => { action.fn(); hideToast(); };
+    t.appendChild(btn);
+  }
+  t.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(hideToast, action ? 4000 : 1800);
+}
+function hideToast() { $('#toast').classList.remove('show'); }
+
+/* ---------- 视图切换 ---------- */
+
+const viewMain = $('#view-main');
+const viewSettings = $('#view-settings');
+
+function showView(name) {
+  viewMain.hidden = name !== 'main';
+  viewSettings.hidden = name !== 'settings';
+}
+
+$('#btn-settings').addEventListener('click', () => { showView('settings'); loadSettingsUI(); });
+$('#btn-back').addEventListener('click', () => showView('main'));
+window.api.onNavigate(v => showView(v));
+
+/* ---------- 主题 ---------- */
+
+const ICONS = {
+  moon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>',
+  sun: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>',
+  pencil: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"/></svg>',
+  trash: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>'
+};
+
+function applyTheme(theme) {
+  document.documentElement.dataset.theme = theme;
+  $('#btn-theme').innerHTML = theme === 'dark' ? ICONS.sun : ICONS.moon;
+  try { localStorage.setItem('theme:cache', theme); } catch { /* 忽略 */ }
+}
+
+$('#btn-theme').addEventListener('click', async () => {
+  const cur = document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light';
+  const next = cur === 'dark' ? 'light' : 'dark';
+  applyTheme(next);
+  await window.api.setTheme(next);
+  syncThemeSeg();
+});
+
+window.api.onThemeChanged(t => { applyTheme(t); syncThemeSeg(); });
+
+/* ---------- 录入（时间自动跟随当前） ---------- */
+
+const composerText = $('#composer-text');
+const composerTs = $('#composer-ts');
+let tsTouched = false;    // 用户真正修改过时间后停止自动跟随，保存/点"此刻"后恢复
+let lastAutoTime = '';    // 最近一次自动写入的值，用于排除"点开控件但没改值"的 input 事件
+
+function syncComposerTime() {
+  if (tsTouched) return;
+  lastAutoTime = toLocalInputValue(Date.now());
+  composerTs.value = lastAutoTime;
+}
+
+composerTs.addEventListener('input', () => {
+  // datetime-local 被点开/聚焦也会触发 input，只有值真正偏离自动值才算手动修改
+  if (composerTs.value !== lastAutoTime) tsTouched = true;
+});
+
+$('#btn-now').addEventListener('click', () => { tsTouched = false; syncComposerTime(); });
+setInterval(syncComposerTime, 30000);
+// 窗口从托盘恢复/重新获得焦点时立即校准（隐藏状态下定时器会被节流）
+document.addEventListener('visibilitychange', () => { if (!document.hidden) syncComposerTime(); });
+window.addEventListener('focus', syncComposerTime);
+
+function growTextarea(el) {
+  el.style.height = 'auto';
+  el.style.height = Math.min(el.scrollHeight, 240) + 'px';
+}
+composerText.addEventListener('input', () => growTextarea(composerText));
+
+composerText.addEventListener('keydown', e => {
+  if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) saveComposer();
+});
+
+$('#btn-save').addEventListener('click', saveComposer);
+
+async function saveComposer() {
+  const text = composerText.value.trim();
+  if (!text) { composerText.focus(); return; }
+  const ts = composerTs.value ? new Date(composerTs.value).getTime() : Date.now();
+  const res = await window.api.add(text, ts);
+  if (res.ok) {
+    composerText.value = '';
+    growTextarea(composerText);
+    tsTouched = false;
+    syncComposerTime();
+    toast('已记录 ✓');
+    refresh();
+  }
+}
+
+/* ---------- 导出 ---------- */
+
+const expStart = $('#exp-start');
+const expEnd = $('#exp-end');
+const expFormat = $('#exp-format');
+const expPreview = $('#exp-preview');
+
+function defaultRange() {
+  expStart.value = dateStr(Date.now() - 6 * 86400000);
+  expEnd.value = dateStr(Date.now());
+}
+
+function renderExportPreview() {
+  const s = expStart.value, e = expEnd.value;
+  expPreview.innerHTML = '';
+  if (!s || !e) return;
+  const n = state.entries.filter(x => {
+    const d = dateStr(x.ts);
+    return d >= s && d <= e;
+  }).length;
+  expPreview.append('将导出 ');
+  const b = document.createElement('b');
+  b.textContent = String(n);
+  expPreview.appendChild(b);
+  expPreview.append(' 条');
+}
+
+[expStart, expEnd, expFormat].forEach(el => el.addEventListener('change', renderExportPreview));
+
+$('#btn-export').addEventListener('click', async () => {
+  const s = expStart.value, e = expEnd.value;
+  if (!s || !e) { toast('请先选择开始和结束日期'); return; }
+  if (s > e) { toast('开始日期不能晚于结束日期'); return; }
+  const res = await window.api.exportRange(s, e, expFormat.value);
+  if (res.ok) toast('已导出到 ' + res.filePath);
+  else if (res.error) toast(res.error);
+});
+
+/* ---------- 列表筛选 ---------- */
+
+const fYear = $('#f-year');
+const fMonth = $('#f-month');
+const fText = $('#f-text');
+const fCount = $('#f-count');
+
+function buildMonthOptions() {
+  fMonth.innerHTML = '';
+  const all = document.createElement('option');
+  all.value = 'all'; all.textContent = '全部月份';
+  fMonth.appendChild(all);
+  for (let m = 1; m <= 12; m++) {
+    const o = document.createElement('option');
+    o.value = String(m); o.textContent = `${m} 月`;
+    fMonth.appendChild(o);
+  }
+}
+
+function populateYearOptions() {
+  const years = [...new Set(state.entries.map(e => new Date(e.ts).getFullYear()))].sort((a, b) => b - a);
+  const cur = fYear.value;
+  fYear.innerHTML = '';
+  const all = document.createElement('option');
+  all.value = 'all'; all.textContent = '全部年份';
+  fYear.appendChild(all);
+  for (const y of years) {
+    const o = document.createElement('option');
+    o.value = String(y); o.textContent = `${y} 年`;
+    fYear.appendChild(o);
+  }
+  if ([...fYear.options].some(o => o.value === cur)) fYear.value = cur;
+}
+
+function filteredEntries() {
+  const { year, month, text } = state.filter;
+  let list = state.entries;
+  if (year !== 'all') list = list.filter(x => new Date(x.ts).getFullYear() === Number(year));
+  if (month !== 'all') list = list.filter(x => new Date(x.ts).getMonth() === Number(month) - 1);
+  if (text) list = list.filter(x => x.text.toLowerCase().includes(text.toLowerCase()));
+  return list;
+}
+
+function isFiltering() {
+  const { year, month, text } = state.filter;
+  return year !== 'all' || month !== 'all' || !!text;
+}
+
+[fYear, fMonth].forEach(el => el.addEventListener('change', () => {
+  state.filter.year = fYear.value;
+  state.filter.month = fMonth.value;
+  renderList();
+}));
+
+fText.addEventListener('input', () => {
+  state.filter.text = fText.value.trim();
+  renderList();
+});
+
+/* ---------- 历史列表 ---------- */
+
+const listEl = $('#list');
+
+function renderList() {
+  const list = filteredEntries();
+  listEl.innerHTML = '';
+  listEl.classList.toggle('manage', state.manage);
+  updateManageUI(list);
+
+  if (!list.length) {
+    const div = document.createElement('div');
+    div.className = 'empty';
+    const em = document.createElement('span');
+    em.className = 'emoji';
+    em.textContent = '📝';
+    const tip = document.createElement('div');
+    tip.className = 'tip';
+    tip.textContent = state.entries.length
+      ? (isFiltering() ? '当前筛选范围内没有记录' : '还没有记录')
+      : '还没有记录，按 Alt+Shift+D 或在上方输入第一条';
+    div.append(em, tip);
+    listEl.appendChild(div);
+    return;
+  }
+
+  const groups = new Map();
+  for (const e of list) {
+    const d = dateStr(e.ts);
+    if (!groups.has(d)) groups.set(d, []);
+    groups.get(d).push(e);
+  }
+  const days = [...groups.keys()].sort((a, b) => b.localeCompare(a));
+  for (const glist of groups.values()) glist.sort((a, b) => b.ts - a.ts || b.createdAt - a.createdAt);
+
+  for (const day of days) {
+    const items = groups.get(day);
+
+    const dayEl = document.createElement('div');
+    dayEl.className = 'day';
+
+    const head = document.createElement('div');
+    head.className = 'day-head';
+    const dateSpan = document.createElement('span');
+    dateSpan.className = 'day-date';
+    const rel = relDayLabel(day);
+    if (rel) {
+      const r = document.createElement('span');
+      r.className = 'rel';
+      r.textContent = rel;
+      dateSpan.appendChild(r);
+    }
+    dateSpan.append(`${day} 星期${weekdayOf(day)}`);
+    const count = document.createElement('span');
+    count.className = 'day-count';
+    count.textContent = `${items.length} 条`;
+    head.append(dateSpan, count);
+
+    const wrap = document.createElement('div');
+    wrap.className = 'day-items';
+    for (const e of items) wrap.appendChild(buildEntryEl(e));
+
+    dayEl.append(head, wrap);
+    listEl.appendChild(dayEl);
+  }
+}
+
+function buildEntryEl(e) {
+  const el = document.createElement('div');
+  el.className = 'entry';
+  el.dataset.id = e.id;
+
+  if (state.manage) {
+    const check = document.createElement('input');
+    check.type = 'checkbox';
+    check.className = 'entry-check';
+    check.checked = state.selected.has(e.id);
+    check.addEventListener('change', () => {
+      if (check.checked) state.selected.add(e.id);
+      else state.selected.delete(e.id);
+      updateManageUI();
+    });
+    el.appendChild(check);
+  }
+
+  const time = document.createElement('span');
+  time.className = 'entry-time';
+  time.textContent = timeStr(e.ts);
+
+  const text = document.createElement('div');
+  text.className = 'entry-text';
+  text.textContent = e.text;
+
+  el.append(time, text);
+
+  if (!state.manage) {
+    const actions = document.createElement('div');
+    actions.className = 'entry-actions';
+
+    const btnEdit = document.createElement('button');
+    btnEdit.className = 'mini-btn';
+    btnEdit.title = '编辑';
+    btnEdit.innerHTML = ICONS.pencil;
+    btnEdit.onclick = () => startEdit(el, e);
+
+    const btnDel = document.createElement('button');
+    btnDel.className = 'mini-btn danger';
+    btnDel.title = '删除';
+    btnDel.innerHTML = ICONS.trash;
+    btnDel.onclick = () => removeEntry(e);
+
+    actions.append(btnEdit, btnDel);
+    el.appendChild(actions);
+  }
+  return el;
+}
+
+function startEdit(el, e) {
+  el.classList.add('edit');
+  el.innerHTML = '';
+
+  const area = document.createElement('div');
+  area.className = 'edit-area';
+
+  const ta = document.createElement('textarea');
+  ta.value = e.text;
+
+  const foot = document.createElement('div');
+  foot.className = 'edit-foot';
+
+  const tsInput = document.createElement('input');
+  tsInput.type = 'datetime-local';
+  tsInput.value = toLocalInputValue(e.ts);
+
+  const spacer = document.createElement('span');
+  spacer.className = 'spacer';
+
+  const cancel = document.createElement('button');
+  cancel.className = 'btn small';
+  cancel.textContent = '取消';
+  cancel.onclick = renderList;
+
+  const save = document.createElement('button');
+  save.className = 'btn small primary';
+  save.textContent = '保存';
+  save.onclick = async () => {
+    const text = ta.value.trim();
+    if (!text) { ta.focus(); return; }
+    const ts = tsInput.value ? new Date(tsInput.value).getTime() : e.ts;
+    await window.api.update(e.id, { text, ts });
+    toast('已更新 ✓');
+    refresh();
+  };
+
+  foot.append(tsInput, spacer, cancel, save);
+  area.append(ta, foot);
+  el.appendChild(area);
+  ta.focus();
+  ta.addEventListener('keydown', ev => {
+    if (ev.key === 'Enter' && (ev.ctrlKey || ev.metaKey)) save.click();
+    if (ev.key === 'Escape') cancel.click();
+  });
+}
+
+async function removeEntry(e) {
+  await window.api.remove(e.id);
+  refresh();
+  toast('已删除 1 条记录', {
+    label: '撤销',
+    fn: async () => { await window.api.add(e.text, e.ts); refresh(); }
+  });
+}
+
+/* ---------- 批量管理 ---------- */
+
+const btnManage = $('#btn-manage');
+const manageBar = $('#manage-bar');
+const mgCount = $('#mg-count');
+const mgDelete = $('#mg-delete');
+let armTimer = null;
+
+btnManage.addEventListener('click', () => {
+  state.manage = true;
+  state.selected.clear();
+  renderList();
+});
+
+$('#mg-done').addEventListener('click', () => {
+  state.manage = false;
+  state.selected.clear();
+  renderList();
+});
+
+$('#mg-selectall').addEventListener('click', () => {
+  const ids = filteredEntries().map(e => e.id);
+  const all = ids.length > 0 && ids.every(id => state.selected.has(id));
+  if (all) ids.forEach(id => state.selected.delete(id));
+  else ids.forEach(id => state.selected.add(id));
+  renderList();
+});
+
+function disarmDelete() {
+  mgDelete.classList.remove('armed');
+  mgDelete.textContent = '删除选中';
+}
+
+mgDelete.addEventListener('click', async () => {
+  const n = state.selected.size;
+  if (!n) { toast('请先勾选要删除的记录'); return; }
+  if (!mgDelete.classList.contains('armed')) {
+    mgDelete.classList.add('armed');
+    mgDelete.textContent = `确认删除 ${n} 条`;
+    clearTimeout(armTimer);
+    armTimer = setTimeout(disarmDelete, 3000);
+    return;
+  }
+  clearTimeout(armTimer);
+  const res = await window.api.deleteMany([...state.selected]);
+  state.selected.clear();
+  disarmDelete();
+  toast(`已删除 ${res.removed} 条`);
+  refresh();
+});
+
+function updateManageUI() {
+  manageBar.hidden = !state.manage;
+  $('#list-toolbar').style.display = state.manage ? 'none' : '';
+  btnManage.hidden = state.manage;
+  mgCount.textContent = `已选 ${state.selected.size} 条`;
+  if (state.selected.size === 0) disarmDelete();
+}
+
+/* ---------- 设置界面 ---------- */
+
+const hkDisplay = $('#hk-display');
+const hkMsg = $('#hk-msg');
+const themeSeg = $('#theme-seg');
+const autoStart = $('#set-autostart');
+
+async function loadSettingsUI() {
+  const s = await window.api.getSettings();
+  state.settings = s;
+  hkDisplay.textContent = s.hotkey || '未设置';
+  $('#hotkey-tip').textContent = s.hotkey || '--';
+  $('#set-datapath').textContent = s.dataFile;
+  autoStart.checked = s.openAtLogin;
+  hkMsg.textContent = '';
+  syncThemeSeg();
+}
+
+function syncThemeSeg() {
+  const active = state.settings ? state.settings.theme : 'auto';
+  for (const b of themeSeg.querySelectorAll('button')) {
+    b.classList.toggle('active', b.dataset.v === active);
+  }
+}
+
+themeSeg.addEventListener('click', async ev => {
+  const btn = ev.target.closest('button[data-v]');
+  if (!btn) return;
+  const res = await window.api.setSettings({ theme: btn.dataset.v });
+  if (res.ok && state.settings) state.settings.theme = btn.dataset.v;
+  syncThemeSeg();
+});
+
+autoStart.addEventListener('change', async () => {
+  const res = await window.api.setSettings({ openAtLogin: autoStart.checked });
+  if (!res.ok) { autoStart.checked = !autoStart.checked; toast(res.error || '设置失败'); }
+  else toast(autoStart.checked ? '将在开机时自动启动' : '已关闭开机自启');
+});
+
+$('#set-openfolder').addEventListener('click', () => window.api.openDataFolder());
+
+/* ---------- 快捷键录制（带冲突检测） ---------- */
+
+function normKey(e) {
+  const k = e.key;
+  if (/^[a-z]$/i.test(k)) return k.toUpperCase();
+  if (/^[0-9]$/.test(k)) return k;
+  const m = /^F([1-9]|1[0-2])$/i.exec(k);
+  if (m) return 'F' + m[1];
+  return null;
+}
+
+function exitRecording(ok) {
+  state.recording = false;
+  hkDisplay.classList.remove('recording');
+  hkDisplay.textContent = (state.settings && state.settings.hotkey) || '未设置';
+  if (!ok) hkMsg.textContent = '';
+}
+
+$('#hk-record').addEventListener('click', () => {
+  state.recording = true;
+  hkDisplay.classList.add('recording');
+  hkDisplay.textContent = '请按下组合键…';
+  hkMsg.textContent = 'Esc 取消';
+});
+
+$('#hk-reset').addEventListener('click', async () => {
+  if (!state.settings) return;
+  const res = await window.api.setSettings({ hotkey: state.settings.defaultHotkey });
+  if (res.ok) {
+    state.settings.hotkey = res.settings.hotkey;
+    exitRecording(true);
+    hkMsg.textContent = '';
+    $('#hotkey-tip').textContent = res.settings.hotkey;
+    toast('已恢复默认快捷键');
+  } else {
+    hkMsg.textContent = res.error;
+  }
+});
+
+// 捕获阶段监听，录制时拦截一切按键
+document.addEventListener('keydown', async e => {
+  if (state.recording) {
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.key === 'Escape') { exitRecording(false); return; }
+    const mods = [];
+    if (e.ctrlKey) mods.push('Ctrl');
+    if (e.altKey) mods.push('Alt');
+    if (e.shiftKey) mods.push('Shift');
+    if (!mods.length && !e.metaKey) { hkMsg.textContent = '需包含 Ctrl / Alt / Shift 中至少一个修饰键'; return; }
+    const key = normKey(e);
+    if (!key) { hkMsg.textContent = '请再按一个字母 / 数字 / F1-F12 键'; return; }
+    const accel = [...mods, key].join('+');
+    const res = await window.api.setSettings({ hotkey: accel });
+    if (res.ok) {
+      state.settings.hotkey = res.settings.hotkey;
+      exitRecording(true);
+      hkMsg.textContent = '';
+      $('#hotkey-tip').textContent = res.settings.hotkey;
+      toast(`快捷键已更新为 ${res.settings.hotkey}`);
+    } else {
+      hkDisplay.textContent = '请按下组合键…';
+      hkMsg.textContent = `${res.error}，请重试`;
+    }
+    return;
+  }
+  // 设置页按 Esc 返回主界面（输入控件内除外）
+  if (e.key === 'Escape' && !viewSettings.hidden && !e.target.closest('input, textarea, select')) {
+    showView('main');
+  }
+}, true);
+
+/* ---------- 初始化 ---------- */
+
+async function refresh() {
+  state.entries = await window.api.list();
+  populateYearOptions();
+  renderList();
+  renderExportPreview();
+}
+
+(function init() {
+  window.api.getTheme().then(applyTheme);
+  syncComposerTime();
+  defaultRange();
+  buildMonthOptions();
+  window.api.onEntriesChanged(refresh);
+  loadSettingsUI();
+  refresh();
+  composerText.focus();
+})();

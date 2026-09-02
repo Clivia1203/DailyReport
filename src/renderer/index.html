@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'">
+  <title>日报随手记</title>
+  <script src="bootstrap.js"></script>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="app">
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-dot"></span>
+        <span class="brand-name">日报随手记</span>
+        <span class="brand-kbd" id="hotkey-tip">Alt+Shift+D</span>
+      </div>
+      <div class="topbar-actions">
+        <button class="icon-btn" id="btn-theme" title="切换深浅主题"></button>
+        <button class="icon-btn" id="btn-settings" title="设置">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="21" y1="4" x2="14" y2="4"/><line x1="10" y1="4" x2="3" y2="4"/><line x1="21" y1="12" x2="12" y2="12"/><line x1="8" y1="12" x2="3" y2="12"/><line x1="21" y1="20" x2="16" y2="20"/><line x1="12" y1="20" x2="3" y2="20"/><line x1="14" y1="2" x2="14" y2="6"/><line x1="8" y1="10" x2="8" y2="14"/><line x1="16" y1="18" x2="16" y2="22"/></svg>
+        </button>
+      </div>
+    </header>
+
+    <main class="content">
+      <!-- ===== 主视图 ===== -->
+      <section id="view-main" class="view">
+        <!-- 录入区 -->
+        <section class="card composer">
+          <textarea id="composer-text" rows="2" placeholder="记下这一条工作内容…（Ctrl+Enter 保存）"></textarea>
+          <div class="composer-foot">
+            <div class="composer-ts">
+              <input type="datetime-local" id="composer-ts" title="默认自动跟随当前时间，可手动修改">
+              <button class="link-btn" id="btn-now" title="恢复为当前时间">此刻</button>
+            </div>
+            <button class="btn primary" id="btn-save">保存</button>
+          </div>
+        </section>
+
+        <!-- 导出区 -->
+        <section class="card export">
+          <div class="export-title">导出日报</div>
+          <div class="export-row">
+            <label>开始日期 <input type="date" id="exp-start"></label>
+            <span class="export-sep">→</span>
+            <label>结束日期 <input type="date" id="exp-end"></label>
+            <label>格式
+              <select id="exp-format">
+                <option value="md">Markdown</option>
+                <option value="txt">纯文本</option>
+              </select>
+            </label>
+            <div class="export-spacer"></div>
+            <span class="export-preview" id="exp-preview"></span>
+            <button class="btn" id="btn-export">导出文件</button>
+          </div>
+        </section>
+
+        <!-- 列表筛选栏 -->
+        <div class="list-toolbar" id="list-toolbar">
+          <select id="f-year"></select>
+          <select id="f-month"></select>
+          <div class="search-wrap">
+            <span class="search-ico">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+            </span>
+            <input type="search" id="f-text" placeholder="搜索内容…">
+          </div>
+          <span class="f-count" id="f-count"></span>
+          <button class="btn small" id="btn-manage">管理</button>
+        </div>
+
+        <!-- 批量管理栏 -->
+        <div class="card manage-bar" id="manage-bar" hidden>
+          <button class="link-btn" id="mg-selectall">全选</button>
+          <span class="f-count" id="mg-count">已选 0 条</span>
+          <div class="export-spacer"></div>
+          <button class="btn small danger-ghost" id="mg-delete">删除选中</button>
+          <button class="btn small" id="mg-done">完成</button>
+        </div>
+
+        <!-- 历史记录 -->
+        <section class="list" id="list"></section>
+      </section>
+
+      <!-- ===== 设置视图 ===== -->
+      <section id="view-settings" class="view" hidden>
+        <div class="settings-head">
+          <button class="icon-btn" id="btn-back" title="返回">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+          </button>
+          <span class="settings-title">设置</span>
+        </div>
+
+        <div class="settings-scroll">
+          <div class="card set-group">
+          <div class="set-title">快捷键</div>
+          <div class="set-row">
+            <div class="set-info">唤起快速记录条
+              <div class="set-sub">需包含 Ctrl / Alt / Shift 中至少一个修饰键</div>
+            </div>
+            <div class="hk-area">
+              <span class="hotkey-box" id="hk-display">--</span>
+              <button class="btn small" id="hk-record">修改</button>
+              <button class="link-btn" id="hk-reset">恢复默认</button>
+            </div>
+          </div>
+          <div class="set-msg" id="hk-msg"></div>
+        </div>
+
+        <div class="card set-group">
+          <div class="set-title">外观</div>
+          <div class="set-row">
+            <div class="set-info">界面主题
+              <div class="set-sub">跟随系统时随 Windows 深浅色自动切换</div>
+            </div>
+            <div class="segmented" id="theme-seg">
+              <button data-v="auto">跟随系统</button>
+              <button data-v="light">浅色</button>
+              <button data-v="dark">深色</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="card set-group">
+          <div class="set-title">通用</div>
+          <div class="set-row">
+            <div class="set-info">开机自动启动
+              <div class="set-sub">登录 Windows 后自动驻留托盘（会写入系统启动项）</div>
+            </div>
+            <label class="switch"><input type="checkbox" id="set-autostart"><span></span></label>
+          </div>
+        </div>
+
+        <div class="card set-group">
+          <div class="set-title">数据</div>
+          <div class="set-row">
+            <div class="set-info">数据文件
+              <div class="set-sub path" id="set-datapath"></div>
+            </div>
+            <button class="btn small" id="set-openfolder">打开所在文件夹</button>
+          </div>
+        </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <div id="toast"></div>
+  <script src="app.js"></script>
+</body>
+</html>

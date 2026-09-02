@@ -1,0 +1,14 @@
+{
+  "name": "daily-report",
+  "productName": "日报随手记",
+  "version": "0.1.0",
+  "description": "随手记录每日工作，按日期范围导出日报",
+  "main": "src/main.js",
+  "author": "ddup5",
+  "scripts": {
+    "start": "electron ."
+  },
+  "devDependencies": {
+    "electron": "^37.0.0"
+  }
+}

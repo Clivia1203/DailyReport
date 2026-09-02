@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'">
+  <title>快速记录</title>
+  <script src="bootstrap.js"></script>
+  <link rel="stylesheet" href="quick.css">
+</head>
+<body>
+  <div class="quickbar">
+    <div class="meta">
+      <span class="dt" id="quick-dt">--</span>
+      <span>自动记录当前时间</span>
+    </div>
+    <div class="row">
+      <input id="quick-input" type="text" placeholder="记点什么，回车保存…" autocomplete="off" spellcheck="false">
+      <span class="status" id="quick-status">✓ 已保存</span>
+    </div>
+    <div class="hint">Enter 保存 · Esc 收起</div>
+  </div>
+  <script src="quick.js"></script>
+</body>
+</html>
