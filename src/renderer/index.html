@@ -26,28 +26,18 @@
     <main class="content">
       <!-- ===== 主视图 ===== -->
       <section id="view-main" class="view">
-        <!-- 今日面板 -->
-        <div class="today-panel" id="today-panel"></div>
+        <div class="cols">
+          <div class="side-col">
+            <!-- 今日面板 -->
+            <div class="today-panel" id="today-panel"></div>
 
-        <!-- 统计条 -->
-        <div class="stats-strip" id="stats-strip"></div>
+            <!-- 统计条 -->
+            <div class="stats-strip" id="stats-strip"></div>
+          </div>
 
-        <!-- 录入弹窗 -->
-  <div class="modal-backdrop blur" id="composer-modal" hidden>
-    <div class="modal card composer" role="dialog" aria-label="记录">
-      <textarea id="composer-text" rows="3" placeholder="记下这一条工作内容…（Ctrl+Enter 保存）"></textarea>
-      <div class="composer-foot">
-        <div class="composer-ts">
-          <input type="datetime-local" id="composer-ts" title="默认自动跟随当前时间，可手动修改">
-          <button class="link-btn" id="btn-now" title="恢复为当前时间">此刻</button>
-        </div>
-        <button class="btn primary" id="btn-save">保存</button>
-      </div>
-    </div>
-  </div>
-
-        <!-- 列表筛选栏 -->
-        <div class="list-toolbar" id="list-toolbar">
+          <div class="main-col">
+            <!-- 列表筛选栏 -->
+            <div class="list-toolbar" id="list-toolbar">
           <select id="f-year"></select>
           <select id="f-month"></select>
           <div class="search-wrap">
@@ -76,6 +66,8 @@
           <div class="activity-chart" id="activity-chart"></div>
           <div id="list-items"></div>
         </section>
+          </div><!-- /main-col -->
+        </div><!-- /cols -->
       </section>
 
       <!-- ===== 设置视图 ===== -->
@@ -139,6 +131,20 @@
         </div>
       </section>
     </main>
+  </div>
+
+  <!-- 录入弹窗 -->
+  <div class="modal-backdrop blur" id="composer-modal" hidden>
+    <div class="modal card composer" role="dialog" aria-label="记录">
+      <textarea id="composer-text" rows="3" placeholder="记下这一条工作内容…（Ctrl+Enter 保存）"></textarea>
+      <div class="composer-foot">
+        <div class="composer-ts">
+          <input type="datetime-local" id="composer-ts" title="默认自动跟随当前时间，可手动修改">
+          <button class="link-btn" id="btn-now" title="恢复为当前时间">此刻</button>
+        </div>
+        <button class="btn primary" id="btn-save">保存</button>
+      </div>
+    </div>
   </div>
 
   <!-- 导出模态 -->
