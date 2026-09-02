@@ -32,36 +32,19 @@
         <!-- 统计条 -->
         <div class="stats-strip" id="stats-strip"></div>
 
-        <!-- 录入区 -->
-        <section class="card composer">
-          <textarea id="composer-text" rows="2" placeholder="记下这一条工作内容…（Ctrl+Enter 保存）"></textarea>
-          <div class="composer-foot">
-            <div class="composer-ts">
-              <input type="datetime-local" id="composer-ts" title="默认自动跟随当前时间，可手动修改">
-              <button class="link-btn" id="btn-now" title="恢复为当前时间">此刻</button>
-            </div>
-            <button class="btn primary" id="btn-save">保存</button>
-          </div>
-        </section>
-
-        <!-- 导出区 -->
-        <section class="card export">
-          <div class="export-title">导出日报</div>
-          <div class="export-row">
-            <label>开始日期 <input type="date" id="exp-start"></label>
-            <span class="export-sep">→</span>
-            <label>结束日期 <input type="date" id="exp-end"></label>
-            <label>格式
-              <select id="exp-format">
-                <option value="md">Markdown</option>
-                <option value="txt">纯文本</option>
-              </select>
-            </label>
-            <div class="export-spacer"></div>
-            <span class="export-preview" id="exp-preview"></span>
-            <button class="btn" id="btn-export">导出文件</button>
-          </div>
-        </section>
+        <!-- 录入弹窗 -->
+  <div class="modal-backdrop blur" id="composer-modal" hidden>
+    <div class="modal card composer" role="dialog" aria-label="记录">
+      <textarea id="composer-text" rows="3" placeholder="记下这一条工作内容…（Ctrl+Enter 保存）"></textarea>
+      <div class="composer-foot">
+        <div class="composer-ts">
+          <input type="datetime-local" id="composer-ts" title="默认自动跟随当前时间，可手动修改">
+          <button class="link-btn" id="btn-now" title="恢复为当前时间">此刻</button>
+        </div>
+        <button class="btn primary" id="btn-save">保存</button>
+      </div>
+    </div>
+  </div>
 
         <!-- 列表筛选栏 -->
         <div class="list-toolbar" id="list-toolbar">
@@ -74,6 +57,8 @@
             <input type="search" id="f-text" placeholder="搜索内容…">
           </div>
           <span class="f-count" id="f-count"></span>
+          <button class="btn small primary" id="btn-composer" title="新记录（Ctrl+N）">记录</button>
+          <button class="btn small" id="btn-export-open">导出</button>
           <button class="btn small" id="btn-manage">管理</button>
         </div>
 
@@ -154,6 +139,35 @@
         </div>
       </section>
     </main>
+  </div>
+
+  <!-- 导出模态 -->
+  <div class="modal-backdrop" id="export-modal" hidden>
+    <div class="modal card" role="dialog" aria-label="导出日报">
+      <div class="modal-head">
+        <span class="modal-title">导出日报</span>
+        <button class="icon-btn" id="export-close" title="关闭">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
+      </div>
+      <div class="export-row">
+        <label>开始日期 <input type="date" id="exp-start"></label>
+        <span class="export-sep">→</span>
+        <label>结束日期 <input type="date" id="exp-end"></label>
+        <label>格式
+          <select id="exp-format">
+            <option value="md">Markdown</option>
+            <option value="txt">纯文本</option>
+          </select>
+        </label>
+      </div>
+      <div class="export-row modal-foot">
+        <span class="export-preview" id="exp-preview"></span>
+        <div class="export-spacer"></div>
+        <button class="btn" id="export-cancel">取消</button>
+        <button class="btn primary" id="btn-export">导出文件</button>
+      </div>
+    </div>
   </div>
 
   <div id="toast"></div>

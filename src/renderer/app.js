@@ -184,9 +184,44 @@ composerText.addEventListener('input', () => growTextarea(composerText));
 
 composerText.addEventListener('keydown', e => {
   if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) saveComposer();
+  if (e.key === 'Escape') setComposerOpen(false);
 });
 
 $('#btn-save').addEventListener('click', saveComposer);
+
+/* ---------- 录入开合（窄屏收纳） ---------- */
+
+const composerModal = $('#composer-modal');
+const btnComposer = $('#btn-composer');
+
+function setComposerOpen(open) {
+  composerModal.hidden = !open;
+  if (open) {
+    composerText.focus();
+    tsTouched = false;      // 打开时校准时间，避免久置后带旧时刻
+    syncComposerTime();
+  }
+}
+
+function toggleComposer() {
+  setComposerOpen(composerModal.hidden);
+}
+
+btnComposer.addEventListener('click', toggleComposer);
+
+// 失焦自动关闭（快速条同款行为）；系统保存对话框等场景不涉及录入弹窗
+window.addEventListener('blur', () => {
+  if (!composerModal.hidden) setComposerOpen(false);
+});
+
+document.addEventListener('keydown', e => {
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'n') {
+    if (!viewMain.hidden && !state.recording) {
+      e.preventDefault();
+      setComposerOpen(true);
+    }
+  }
+});
 
 async function saveComposer() {
   const text = composerText.value.trim();
@@ -198,10 +233,32 @@ async function saveComposer() {
     growTextarea(composerText);
     tsTouched = false;
     syncComposerTime();
+    setComposerOpen(false);   // 保存后收起（宽屏下 CSS 强制常驻，不受影响）
     toast('已记录 ✓');
     refresh();
   }
 }
+
+/* ---------- 导出模态 ---------- */
+
+const exportModal = $('#export-modal');
+
+function openExportModal() {
+  exportModal.hidden = false;
+  renderExportPreview();
+}
+
+function closeExportModal() {
+  exportModal.hidden = true;
+}
+
+$('#btn-export-open').addEventListener('click', openExportModal);
+$('#export-close').addEventListener('click', closeExportModal);
+$('#export-cancel').addEventListener('click', closeExportModal);
+exportModal.addEventListener('click', e => { if (e.target === exportModal) closeExportModal(); });
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape' && !exportModal.hidden) closeExportModal();
+});
 
 /* ---------- 导出 ---------- */
 
@@ -237,7 +294,7 @@ $('#btn-export').addEventListener('click', async () => {
   if (!s || !e) { toast('请先选择开始和结束日期'); return; }
   if (s > e) { toast('开始日期不能晚于结束日期'); return; }
   const res = await window.api.exportRange(s, e, expFormat.value);
-  if (res.ok) toast('已导出到 ' + res.filePath);
+  if (res.ok) { closeExportModal(); toast('已导出到 ' + res.filePath); }
   else if (res.error) toast(res.error);
 });
 
