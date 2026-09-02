@@ -196,6 +196,7 @@ const btnComposer = $('#btn-composer');
 
 function setComposerOpen(open) {
   composerModal.hidden = !open;
+  syncModalCover();
   if (open) {
     composerText.focus();
     tsTouched = false;      // 打开时校准时间，避免久置后带旧时刻
@@ -209,9 +210,9 @@ function toggleComposer() {
 
 btnComposer.addEventListener('click', toggleComposer);
 
-// 失焦自动关闭（快速条同款行为）；系统保存对话框等场景不涉及录入弹窗
-window.addEventListener('blur', () => {
-  if (!composerModal.hidden) setComposerOpen(false);
+// 点击弹窗外的遮罩区域即关闭（用户定义的"失焦"），不绑定整个窗口的失焦
+composerModal.addEventListener('click', e => {
+  if (e.target === composerModal) setComposerOpen(false);
 });
 
 document.addEventListener('keydown', e => {
@@ -245,11 +246,18 @@ const exportModal = $('#export-modal');
 
 function openExportModal() {
   exportModal.hidden = false;
+  syncModalCover();
   renderExportPreview();
 }
 
 function closeExportModal() {
   exportModal.hidden = true;
+  syncModalCover();
+}
+
+// 任一模窗打开时，请主进程把标题栏控制按钮区染成遮罩色（视觉遮盖）
+function syncModalCover() {
+  window.api.setModalCover(!composerModal.hidden || !exportModal.hidden);
 }
 
 $('#btn-export-open').addEventListener('click', openExportModal);

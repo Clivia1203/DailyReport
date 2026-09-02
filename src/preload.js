@@ -23,6 +23,7 @@ contextBridge.exposeInMainWorld('api', {
 
   // 快速记录条
   hideQuick: () => ipcRenderer.send('quick:hide'),
+  setModalCover: on => ipcRenderer.send('window:modal-cover', on),
 
   // 主题（主进程统一管理，多窗口同步）
   getTheme: () => ipcRenderer.invoke('theme:get'),

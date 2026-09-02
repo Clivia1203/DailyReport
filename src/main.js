@@ -67,14 +67,31 @@ const TITLEBAR_COLORS = {
 
 const THEMED_BG = { light: '#f5f6fa', dark: '#21252b' };
 
+// 模态打开时把标题栏覆盖层染成遮罩色，原生控制按钮无法被 CSS 盖住，只能同色隐没
+let modalCoverActive = false;
+
+function chromeOverlayColors() {
+  if (modalCoverActive) {
+    // 与 backdrop 遮罩(rgba(15,17,23,.35) 叠加主题底色)近似的实色
+    return resolvedTheme() === 'dark'
+      ? { color: '#1a1c22', symbolColor: '#1a1c22' }
+      : { color: '#a8a6ab', symbolColor: '#a8a6ab' };
+  }
+  return TITLEBAR_COLORS[resolvedTheme()];
+}
+
+function applyChromeOverlay() {
+  if (process.platform === 'win32' && mainWindow && !mainWindow.isDestroyed()) {
+    try { mainWindow.setTitleBarOverlay(chromeOverlayColors()); } catch { /* 窗口未就绪时忽略 */ }
+  }
+}
+
 function broadcastTheme() {
   const t = resolvedTheme();
   for (const w of [mainWindow, quickWindow]) {
     if (w && !w.isDestroyed()) w.webContents.send('theme:changed', t);
   }
-  if (process.platform === 'win32' && mainWindow && !mainWindow.isDestroyed()) {
-    try { mainWindow.setTitleBarOverlay(TITLEBAR_COLORS[t]); } catch { /* 窗口未就绪时忽略 */ }
-  }
+  applyChromeOverlay();
 }
 
 /* ---------------- 存储层：本地 JSON 文件 ---------------- */
@@ -222,6 +239,11 @@ ipcMain.handle('export:run', async (_e, { start, end, format }) => {
 });
 
 ipcMain.on('quick:hide', () => quickWindow && quickWindow.hide());
+
+ipcMain.on('window:modal-cover', (_e, on) => {
+  modalCoverActive = !!on;
+  applyChromeOverlay();
+});
 
 ipcMain.handle('theme:get', () => resolvedTheme());
 
