@@ -529,3 +529,44 @@ input::placeholder { color: var(--text-3); }
 
 .stat-card.clickable { cursor: pointer; transition: border-color .15s; }
 .stat-card.clickable:hover { border-color: var(--border-strong); }
+
+/* ---------- 活动图（票03） ---------- */
+
+.activity-chart {
+  flex: none;
+  padding: 12px 14px 10px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+}
+
+.activity-title { font-size: 11.5px; font-weight: 650; color: var(--text-3); margin-bottom: 10px; }
+
+.activity-bars {
+  display: flex; align-items: flex-end; gap: 6px;
+  height: 84px;
+}
+
+.activity-col {
+  flex: 1; height: 100%;
+  display: flex; flex-direction: column; align-items: center; justify-content: flex-end; gap: 4px;
+  border: none; background: none; padding: 0;
+  cursor: pointer;
+}
+
+.activity-bar {
+  width: 100%; max-width: 22px;
+  border-radius: 6px 6px 3px 3px;
+  background: var(--accent);
+  opacity: .55;
+  min-height: 4px;
+  transition: opacity .15s;
+}
+.activity-bar.zero { background: var(--input-bg); opacity: 1; min-height: 4px; }
+.activity-col:hover .activity-bar { opacity: .85; }
+.activity-col.today .activity-bar { opacity: 1; }
+
+.activity-count { font-size: 10px; color: var(--text-3); line-height: 1; }
+
+.activity-date { font-size: 10px; color: var(--text-3); line-height: 1; }
+.activity-col.today .activity-date { color: var(--accent); font-weight: 650; }

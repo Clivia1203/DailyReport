@@ -339,9 +339,53 @@ function bindStatCardClicks() {
   });
 }
 
+/* ---------- 活动图（近 14 天柱状，票03） ---------- */
+
+const activityChart = $('#activity-chart');
+
+function renderActivity() {
+  const days = DR.dayCounts(state.entries, Date.now(), 14);
+  const max = Math.max(1, ...days.map(d => d.count));
+  const today = dateStr(Date.now());
+
+  activityChart.innerHTML = '';
+  const title = document.createElement('div');
+  title.className = 'activity-title';
+  title.textContent = '近 14 天';
+
+  const bars = document.createElement('div');
+  bars.className = 'activity-bars';
+
+  days.forEach(d => {
+    const col = document.createElement('button');
+    col.className = 'activity-col';
+    col.title = `${d.date} · ${d.count} 条`;
+    if (d.date === today) col.classList.add('today');
+
+    const bar = document.createElement('span');
+    bar.className = 'activity-bar';
+    bar.style.height = d.count === 0 ? '' : `${Math.round((d.count / max) * 100)}%`;
+    if (d.count === 0) bar.classList.add('zero');
+
+    const n = document.createElement('span');
+    n.className = 'activity-count';
+    n.textContent = d.count ? String(d.count) : '';
+
+    const lbl = document.createElement('span');
+    lbl.className = 'activity-date';
+    lbl.textContent = String(Number(d.date.slice(8)));
+
+    col.append(n, bar, lbl);
+    col.addEventListener('click', () => setRangeFocus({ type: 'day', day: d.date }));
+    bars.appendChild(col);
+  });
+
+  activityChart.append(title, bars);
+}
+
 /* ---------- 历史列表 ---------- */
 
-const listEl = $('#list');
+const listEl = $('#list-items');
 
 function renderList() {
   const list = filteredEntries();
@@ -689,6 +733,7 @@ document.addEventListener('keydown', async e => {
 async function refresh() {
   state.entries = await window.api.list();
   renderStats();
+  renderActivity();
   populateYearOptions();
   renderList();
   renderExportPreview();

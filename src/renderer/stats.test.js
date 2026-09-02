@@ -1,6 +1,6 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { statsFor, weekStart, filterByRange, rangeLabel } = require('./stats.js');
+const { statsFor, weekStart, filterByRange, rangeLabel, dayCounts } = require('./stats.js');
 
 /* 时间口径说明：全部用本地时间构造，与产品口径一致（用户所在时区）。
    2026-09-01 是周二；2026-08-31 是周一；2026-08-30 是周日。 */
@@ -65,6 +65,36 @@ test('rangeLabel: day 聚焦显示具体日期，week 显示"本周"，all 为�
   assert.equal(rangeLabel({ type: 'day', day: '2026-09-01' }), '9 月 1 日');
   assert.equal(rangeLabel({ type: 'week' }), '本周');
   assert.equal(rangeLabel({ type: 'all' }), '');
+});
+
+/* ---------- dayCounts：近 N 天逐日计数（活动图） ---------- */
+
+/* 返回 [{ date: 'YYYY-MM-DD', count: n }, ...]，旧→新，最后一项是今天 */
+
+test('dayCounts: 14 天窗口、旧到新、末位是今天', () => {
+  const now = day(2026, 9, 2, 12);
+  const days = dayCounts([], now, 14);
+  assert.equal(days.length, 14);
+  assert.equal(days[0].date, '2026-08-20');
+  assert.equal(days[13].date, '2026-09-02');
+  assert.ok(days.every(d => d.count === 0));
+});
+
+test('dayCounts: 同日多条合并、窗口外不计、跨月正确', () => {
+  const now = day(2026, 9, 2, 20);
+  const entries = [
+    entry(day(2026, 9, 2, 9)),
+    entry(day(2026, 9, 2, 21)),   // 同日第二条
+    entry(day(2026, 9, 1, 12)),
+    entry(day(2026, 8, 20, 8)),   // 窗口首日(8/20) -> 计入
+    entry(day(2026, 8, 19, 8))    // 窗口前一天 -> 排除
+  ];
+  const days = dayCounts(entries, now, 14);
+  const byDate = Object.fromEntries(days.map(d => [d.date, d.count]));
+  assert.equal(byDate['2026-09-02'], 2);
+  assert.equal(byDate['2026-09-01'], 1);
+  assert.equal(byDate['2026-08-20'], 1);
+  assert.equal(days[0].date, '2026-08-20');
 });
 
 /* ---------- statsFor：今日 / 本周 / 累计 ---------- */

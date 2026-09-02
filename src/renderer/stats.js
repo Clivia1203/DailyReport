@@ -62,5 +62,24 @@
     return '';
   }
 
-  return { weekStart, statsFor, filterByRange, rangeLabel };
+  // 近 days 天逐日计数（活动图）。返回旧→新，末项为今天。
+  function dayCounts(entries, now, days) {
+    const today0 = startOfDay(now);
+    const counts = [];
+    const index = new Map();
+    for (let i = 0; i < days; i++) {
+      const day0 = today0 - (days - 1 - i) * DAY_MS;
+      const date = new Date(day0);
+      const key = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+      counts.push({ date: key, count: 0 });
+      index.set(day0, i);
+    }
+    for (const e of entries) {
+      const i = index.get(startOfDay(e.ts));
+      if (i !== undefined) counts[i].count++;
+    }
+    return counts;
+  }
+
+  return { weekStart, statsFor, filterByRange, rangeLabel, dayCounts };
 });
