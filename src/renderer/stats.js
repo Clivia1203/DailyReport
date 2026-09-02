@@ -81,5 +81,15 @@
     return counts;
   }
 
-  return { weekStart, statsFor, filterByRange, rangeLabel, dayCounts };
+  // 五段时段问候（今日面板）
+  function greeting(ts) {
+    const h = new Date(ts).getHours();
+    if (h >= 5 && h < 11) return '早上好';
+    if (h >= 11 && h < 13) return '中午好';
+    if (h >= 13 && h < 18) return '下午好';
+    if (h >= 18 && h < 23) return '晚上好';
+    return '夜深了';
+  }
+
+  return { weekStart, statsFor, filterByRange, rangeLabel, dayCounts, greeting };
 });

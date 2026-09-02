@@ -570,3 +570,15 @@ input::placeholder { color: var(--text-3); }
 
 .activity-date { font-size: 10px; color: var(--text-3); line-height: 1; }
 .activity-col.today .activity-date { color: var(--accent); font-weight: 650; }
+
+/* ---------- 今日面板（票04） ---------- */
+
+.today-panel {
+  flex: none;
+  display: flex; align-items: baseline; gap: 12px;
+  padding: 2px 4px;
+}
+
+.today-greet { font-size: 17px; font-weight: 700; }
+
+.today-date { font-size: 12.5px; color: var(--text-3); }

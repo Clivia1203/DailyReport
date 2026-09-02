@@ -99,6 +99,25 @@ $('#btn-theme').addEventListener('click', async () => {
 
 window.api.onThemeChanged(t => { applyTheme(t); syncThemeSeg(); });
 
+/* ---------- 今日面板 ---------- */
+
+const todayPanel = $('#today-panel');
+
+const WEEKDAY_NAMES = '日一二三四五六';
+
+function renderTodayPanel() {
+  const now = Date.now();
+  todayPanel.innerHTML = '';
+  const hi = document.createElement('span');
+  hi.className = 'today-greet';
+  hi.textContent = DR.greeting(now);
+  const date = document.createElement('span');
+  date.className = 'today-date';
+  const d = new Date(now);
+  date.textContent = `${d.getMonth() + 1} 月 ${d.getDate()} 日 星期${WEEKDAY_NAMES[d.getDay()]}`;
+  todayPanel.append(hi, date);
+}
+
 /* ---------- 统计条 ---------- */
 
 const statsStrip = $('#stats-strip');
@@ -149,6 +168,7 @@ $('#btn-now').addEventListener('click', () => { tsTouched = false; syncComposerT
 // 周期/焦点恢复时的公共校准：录入时间跟随 + 统计数字（跨零点翻卡）
 function recalibrate() {
   syncComposerTime();
+  renderTodayPanel();
   renderStats();
 }
 setInterval(recalibrate, 30000);
@@ -732,6 +752,7 @@ document.addEventListener('keydown', async e => {
 
 async function refresh() {
   state.entries = await window.api.list();
+  renderTodayPanel();
   renderStats();
   renderActivity();
   populateYearOptions();

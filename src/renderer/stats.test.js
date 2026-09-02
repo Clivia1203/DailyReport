@@ -1,6 +1,6 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { statsFor, weekStart, filterByRange, rangeLabel, dayCounts } = require('./stats.js');
+const { statsFor, weekStart, filterByRange, rangeLabel, dayCounts, greeting } = require('./stats.js');
 
 /* 时间口径说明：全部用本地时间构造，与产品口径一致（用户所在时区）。
    2026-09-01 是周二；2026-08-31 是周一；2026-08-30 是周日。 */
@@ -65,6 +65,22 @@ test('rangeLabel: day 聚焦显示具体日期，week 显示"本周"，all 为�
   assert.equal(rangeLabel({ type: 'day', day: '2026-09-01' }), '9 月 1 日');
   assert.equal(rangeLabel({ type: 'week' }), '本周');
   assert.equal(rangeLabel({ type: 'all' }), '');
+});
+
+/* ---------- greeting：五段时段问候 ---------- */
+
+test('greeting: 五段时段切分', () => {
+  const g = (h, m = 0) => greeting(new Date(2026, 8, 2, h, m).getTime());
+  assert.equal(g(5, 0), '早上好');    // 5 点起
+  assert.equal(g(10, 59), '早上好');
+  assert.equal(g(11, 0), '中午好');   // 11 点起
+  assert.equal(g(12, 59), '中午好');
+  assert.equal(g(13, 0), '下午好');   // 13 点起
+  assert.equal(g(17, 59), '下午好');
+  assert.equal(g(18, 0), '晚上好');   // 18 点起
+  assert.equal(g(22, 59), '晚上好');
+  assert.equal(g(23, 0), '夜深了');   // 23 点起
+  assert.equal(g(4, 59), '夜深了');   // 到凌晨 4:59
 });
 
 /* ---------- dayCounts：近 N 天逐日计数（活动图） ---------- */
