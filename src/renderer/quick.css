@@ -79,3 +79,15 @@ body {
 .status.show { opacity: 1; }
 
 .hint { text-align: right; font-size: 10.5px; color: var(--text-3); }
+
+/* ---------- 出入动画 ---------- */
+
+.quickbar.in { animation: quick-in .18s cubic-bezier(.2, .8, .3, 1); }
+@keyframes quick-in {
+  from { opacity: 0; transform: translateY(14px) scale(.98); }
+}
+
+.quickbar.out { animation: quick-out .15s ease-in forwards; }
+@keyframes quick-out {
+  to { opacity: 0; transform: translateY(14px) scale(.98); }
+}

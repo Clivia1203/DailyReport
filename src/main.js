@@ -238,7 +238,7 @@ ipcMain.handle('export:run', async (_e, { start, end, format }) => {
   return { ok: true, filePath };
 });
 
-ipcMain.on('quick:hide', () => quickWindow && quickWindow.hide());
+ipcMain.on('quick:hide', () => hideQuickNow());
 
 ipcMain.on('window:modal-cover', (_e, on) => {
   modalCoverActive = !!on;
@@ -293,8 +293,25 @@ ipcMain.handle('data:openFolder', () => shell.openPath(path.dirname(dataFile()))
 /* ---------------- 全局快捷键：注册 / 冲突检测 / 热更新 ---------------- */
 
 function toggleQuick() {
-  if (quickWindow && quickWindow.isVisible()) quickWindow.hide();
+  if (quickWindow && quickWindow.isVisible()) hideQuickAnimated();
   else showQuick();
+}
+
+let quickHideTimer = null;
+
+function hideQuickNow() {
+  if (quickWindow && !quickWindow.isDestroyed() && quickWindow.isVisible()) quickWindow.hide();
+}
+
+// 先播 CSS 退出动画，动画结束再真正隐藏窗口
+function hideQuickAnimated() {
+  if (!quickWindow || quickWindow.isDestroyed() || !quickWindow.isVisible()) return;
+  if (quickHideTimer) return; // 退出动画已在进行
+  quickWindow.webContents.send('quick:out');
+  quickHideTimer = setTimeout(() => {
+    quickHideTimer = null;
+    hideQuickNow();
+  }, 150);
 }
 
 function initHotkey() {
@@ -396,12 +413,13 @@ function createQuickWindow() {
     }
   });
   quickWindow.loadFile(path.join(__dirname, 'renderer', 'quick.html'));
-  quickWindow.on('blur', () => quickWindow.hide());
+  quickWindow.on('blur', () => hideQuickAnimated());
   quickWindow.on('closed', () => { quickWindow = null; });
 }
 
 function showQuick() {
   if (!quickWindow || quickWindow.isDestroyed()) createQuickWindow();
+  if (quickHideTimer) { clearTimeout(quickHideTimer); quickHideTimer = null; } // 取消进行中的退出
   const { workArea } = screen.getPrimaryDisplay();
   const x = Math.round(workArea.x + (workArea.width - QUICK_SIZE.width) / 2);
   // 视觉上输入条底边距工作区底部约 80px（高度中含 56px 透明阴影区）

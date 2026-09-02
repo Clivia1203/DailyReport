@@ -17,24 +17,42 @@ function renderNow() {
     ` 星期${weekdays[d.getDay()]} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
+let hiding = false;
+
+// 先播 CSS 退出动画，动画结束后再隐藏窗口（主进程 quick:hide）
+function requestHide() {
+  if (hiding) return;
+  hiding = true;
+  document.querySelector('.quickbar').classList.add('out');
+  setTimeout(() => {
+    hiding = false;
+    window.api.hideQuick();
+  }, 150);
+}
+
 async function commit() {
   const text = input.value.trim();
-  if (!text) { window.api.hideQuick(); return; }
+  if (!text) { requestHide(); return; }
   await window.api.add(text, Date.now());
   input.value = '';
   status.classList.add('show');
   setTimeout(() => {
     status.classList.remove('show');
-    window.api.hideQuick();
+    requestHide();
   }, 550);
 }
 
 input.addEventListener('keydown', e => {
   if (e.key === 'Enter' && !e.isComposing) commit();
-  if (e.key === 'Escape') window.api.hideQuick();
+  if (e.key === 'Escape') requestHide();
 });
 
 window.api.onQuickReset(() => {
+  const bar = document.querySelector('.quickbar');
+  bar.classList.remove('out');
+  bar.classList.remove('in');      // 重触发入场动画
+  void bar.offsetWidth;
+  bar.classList.add('in');
   input.value = '';
   status.classList.remove('show');
   renderNow();
