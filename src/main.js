@@ -12,6 +12,9 @@ const DEFAULT_HOTKEY = 'Alt+Shift+D';
 // 多出的透明区域用来容纳 CSS 阴影，避免阴影被窗口边界切成方形
 const QUICK_SIZE = { width: 736, height: 176 };
 
+// 覆盖式滚动条：不占布局空间，滚动/悬停时浮于内容右缘，杜绝滚动条出现引起的跳动
+app.commandLine.appendSwitch('enable-features', 'OverlayScrollbar');
+
 const gotLock = app.requestSingleInstanceLock();
 if (!gotLock) {
   app.quit();
