@@ -5,6 +5,7 @@ const {
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
+const buildXlsxBuffer = require('./lib/xlsx-export');
 
 const ASSETS = path.join(__dirname, 'assets');
 const DEFAULT_HOTKEY = 'Alt+Shift+D';
@@ -226,6 +227,26 @@ ipcMain.handle('entries:deleteMany', (_e, { ids }) => {
 
 ipcMain.handle('export:run', async (_e, { start, end, format }) => {
   if (!start || !end || start > end) return { ok: false, error: '日期范围无效' };
+
+  if (format === 'xlsx') {
+    const rows = loadDB().entries
+      .filter(e => { const d = localDateStr(e.ts); return d >= start && d <= end; })
+      .sort((a, b) => a.ts - b.ts)
+      .map(e => {
+        const d = localDateStr(e.ts);
+        return { date: d, week: `星期${weekdayOf(d)}`, time: localTimeStr(e.ts), text: e.text.replace(/\r?\n/g, ' ') };
+      });
+    const buf = await buildXlsxBuffer(rows);
+    const { canceled, filePath } = await dialog.showSaveDialog(mainWindow, {
+      title: '导出日报',
+      defaultPath: `日报_${start}_${end}.xlsx`,
+      filters: [{ name: 'Excel 工作表', extensions: ['xlsx'] }]
+    });
+    if (canceled || !filePath) return { ok: false, canceled: true };
+    fs.writeFileSync(filePath, buf);
+    return { ok: true, filePath };
+  }
+
   const content = buildExport(loadDB().entries, start, end, format);
   const ext = format === 'md' ? 'md' : 'txt';
   const { canceled, filePath } = await dialog.showSaveDialog(mainWindow, {

@@ -7,9 +7,12 @@
   "author": "ddup5",
   "scripts": {
     "start": "electron .",
-    "test": "node --test \"src/renderer/*.test.js\""
+    "test": "node --test \"src/**/*.test.js\""
   },
   "devDependencies": {
     "electron": "^37.0.0"
+  },
+  "dependencies": {
+    "exceljs": "^4.4.0"
   }
 }
