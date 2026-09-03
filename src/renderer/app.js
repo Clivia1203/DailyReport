@@ -94,6 +94,7 @@ $('#btn-theme').addEventListener('click', async () => {
   const next = cur === 'dark' ? 'light' : 'dark';
   applyTheme(next);
   await window.api.setTheme(next);
+  if (state.settings) state.settings.theme = next; // 同步偏好缓存，设置页分段控件才能跟上
   syncThemeSeg();
 });
 
