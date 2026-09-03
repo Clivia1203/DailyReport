@@ -832,7 +832,7 @@ function attachOverlayScrollbar(scroller, thumb) {
     // 24px 容差吸收容器底部留白：视觉上一屏放得下就不显示
     if (scrollHeight <= clientHeight + 24) {
       thumb.classList.remove('show');
-      return;
+      return false;
     }
     const rect = scroller.getBoundingClientRect();
     const trackH = rect.height - 8;
@@ -843,11 +843,26 @@ function attachOverlayScrollbar(scroller, thumb) {
     thumb.style.left = Math.round(rect.right + 5) + 'px';
     thumb.style.top = Math.round(y) + 'px';
     thumb.style.height = Math.round(h) + 'px';
-    thumb.classList.add('show');
-    scheduleHide();
+    return true;
   }
 
-  scroller.addEventListener('scroll', () => { if (!dragging) update(); });
+  // 滚动/悬停可滚动区域时显示，静止或移开后隐去
+  function reveal() {
+    if (update()) {
+      thumb.classList.add('show');
+      scheduleHide();
+    }
+  }
+
+  scroller.addEventListener('scroll', () => { if (!dragging) reveal(); });
+  scroller.addEventListener('mouseenter', () => {
+    if (dragging) return;
+    clearTimeout(hideTimer);            // 悬停期间保持可见
+    if (update()) thumb.classList.add('show');
+  });
+  scroller.addEventListener('mouseleave', () => {
+    if (!dragging) scheduleHide();
+  });
   window.addEventListener('resize', update);
   thumb.addEventListener('mousedown', e => {
     e.preventDefault();
