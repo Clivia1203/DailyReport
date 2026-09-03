@@ -46,5 +46,12 @@ contextBridge.exposeInMainWorld('api', {
     const h = () => cb();
     ipcRenderer.on('quick:reset', h);
     return () => ipcRenderer.removeListener('quick:reset', h);
+  },
+
+  // 主进程发起的退出（失焦/热键切换）：页面播退出动画，隐藏时机由主进程计时
+  onQuickOut: cb => {
+    const h = () => cb();
+    ipcRenderer.on('quick:out', h);
+    return () => ipcRenderer.removeListener('quick:out', h);
   }
 });

@@ -19,16 +19,23 @@ function renderNow() {
 
 let hiding = false;
 
-// 先播 CSS 退出动画，动画结束后再隐藏窗口（主进程 quick:hide）
-function requestHide() {
+// 播放退出动画。隐藏窗口由两条路径各自负责：
+// Esc/保存走 requestHide（页面计时后调 api.hideQuick）；
+// 失焦/热键切换走主进程 hideQuickAnimated（主进程计时后自行 hide）。
+function playOut() {
   if (hiding) return;
   hiding = true;
   document.querySelector('.quickbar').classList.add('out');
-  setTimeout(() => {
-    hiding = false;
-    window.api.hideQuick();
-  }, 150);
 }
+
+function requestHide() {
+  if (hiding) return;
+  playOut();
+  setTimeout(() => window.api.hideQuick(), 150);
+}
+
+// 主进程发起的退出：只播动画
+window.api.onQuickOut(playOut);
 
 async function commit() {
   const text = input.value.trim();
@@ -49,8 +56,9 @@ input.addEventListener('keydown', e => {
 
 window.api.onQuickReset(() => {
   const bar = document.querySelector('.quickbar');
+  hiding = false;             // 新一轮唤起，退出态复位
   bar.classList.remove('out');
-  bar.classList.remove('in');      // 重触发入场动画
+  bar.classList.remove('in'); // 重触发入场动画
   void bar.offsetWidth;
   bar.classList.add('in');
   input.value = '';
