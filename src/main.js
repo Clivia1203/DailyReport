@@ -420,6 +420,8 @@ function createQuickWindow() {
 function showQuick() {
   if (!quickWindow || quickWindow.isDestroyed()) createQuickWindow();
   if (quickHideTimer) { clearTimeout(quickHideTimer); quickHideTimer = null; } // 取消进行中的退出
+  // 每次唤起都重申尺寸：DPI/分辨率变化后旧窗口尺寸会失真，这里兜底自愈
+  quickWindow.setSize(QUICK_SIZE.width, QUICK_SIZE.height, false);
   const { workArea } = screen.getPrimaryDisplay();
   const x = Math.round(workArea.x + (workArea.width - QUICK_SIZE.width) / 2);
   // 视觉上输入条底边距工作区底部约 80px（高度中含 56px 透明阴影区）
@@ -428,6 +430,20 @@ function showQuick() {
   quickWindow.show();
   quickWindow.focus();
   quickWindow.webContents.send('quick:reset');
+}
+
+// 系统缩放/分辨率变化时，透明固定尺寸窗口不会自动按新 DPI 重算，
+// 直接销毁小窗，下次唤起按新环境重建（display-metrics-changed 根治）
+function watchDisplayMetrics() {
+  screen.on('display-metrics-changed', (_e, display, changed) => {
+    if (!changed.includes('scaleFactor') && !changed.includes('bounds')) return;
+    if (display.id !== screen.getPrimaryDisplay().id) return;
+    if (quickHideTimer) { clearTimeout(quickHideTimer); quickHideTimer = null; }
+    if (quickWindow && !quickWindow.isDestroyed()) {
+      quickWindow.destroy();
+      quickWindow = null;
+    }
+  });
 }
 
 function trayMenuTemplate() {
@@ -473,6 +489,7 @@ app.whenReady().then(() => {
   createQuickWindow();
   createTray();
   initHotkey();
+  watchDisplayMetrics();
   if (settings.openAtLogin) app.setLoginItemSettings({ openAtLogin: true });
 
   if (Notification.isSupported() && settings.hotkey) {
