@@ -62,10 +62,13 @@
         </div>
 
         <!-- 历史记录（含活动图，随列表滚动） -->
-        <section class="list" id="list">
-          <div class="activity-chart" id="activity-chart"></div>
-          <div id="list-items"></div>
-        </section>
+        <div class="scroll-wrap">
+          <section class="list" id="list">
+            <div class="activity-chart" id="activity-chart"></div>
+            <div id="list-items"></div>
+          </section>
+          <div class="ov-thumb" id="list-thumb" hidden></div>
+        </div>
           </div><!-- /main-col -->
         </div><!-- /cols -->
       </section>
@@ -79,7 +82,8 @@
           <span class="settings-title">设置</span>
         </div>
 
-        <div class="settings-scroll">
+        <div class="scroll-wrap settings-wrap">
+          <div class="settings-scroll">
           <div class="card set-group">
           <div class="set-title">快捷键</div>
           <div class="set-row">
@@ -127,7 +131,8 @@
             </div>
             <button class="btn small" id="set-openfolder">打开所在文件夹</button>
           </div>
-        </div>
+          </div>
+          <div class="ov-thumb" id="settings-thumb" hidden></div>
         </div>
       </section>
     </main>

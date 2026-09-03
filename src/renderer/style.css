@@ -643,3 +643,35 @@ input::placeholder { color: var(--text-3); }
   }
   .stat-value { font-size: 22px; }
 }
+
+/* ---------- 自定义覆盖式滚动条（原生滚动条隐藏，永不占位） ---------- */
+
+/* 隐藏两个主滚动容器的原生滚动条 */
+.list, .settings-scroll {
+  scrollbar-width: none;               /* 标准属性 */
+}
+.list::-webkit-scrollbar, .settings-scroll::-webkit-scrollbar {
+  display: none;                       /* Chromium */
+}
+
+.scroll-wrap {
+  flex: 1; min-height: 0;
+  position: relative;
+  display: flex;
+}
+.scroll-wrap > .list,
+.scroll-wrap > .settings-scroll { flex: 1; min-width: 0; }
+
+.ov-thumb {
+  position: absolute;
+  right: 1px; top: 0;
+  width: 6px;
+  border-radius: 3px;
+  background: var(--text-3);
+  opacity: .55;
+  cursor: default;
+  transition: opacity .25s;
+  z-index: 5;
+}
+.ov-thumb:hover, .ov-thumb.dragging { opacity: .9; background: var(--text-2); }
+.ov-thumb[hidden] { display: none; }

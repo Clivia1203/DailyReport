@@ -813,6 +813,67 @@ document.addEventListener('keydown', async e => {
   }
 }, true);
 
+/* ---------- 自定义覆盖式滚动条 ---------- */
+
+// 给滚动容器装一个自绘 thumb：滚动时浮现于内容右缘，静止 0.7s 隐去，可拖拽。
+// 原生滚动条已隐藏（CSS），任何状态下都不占布局空间。
+function attachOverlayScrollbar(scroller, thumb) {
+  let hideTimer = null;
+  let dragging = false;
+
+  function scheduleHide() {
+    clearTimeout(hideTimer);
+    hideTimer = setTimeout(() => { thumb.style.opacity = ''; }, 700);
+  }
+
+  function update() {
+    const { scrollTop, scrollHeight, clientHeight } = scroller;
+    if (scrollHeight <= clientHeight + 1) {
+      thumb.hidden = true;
+      return;
+    }
+    const track = clientHeight;
+    const h = Math.max(28, Math.round(clientHeight / scrollHeight * track));
+    const maxTop = scrollHeight - clientHeight;
+    const y = Math.round(scrollTop / maxTop * (track - h));
+    thumb.hidden = false;
+    thumb.style.height = h + 'px';
+    thumb.style.transform = `translateY(${y}px)`;
+    thumb.style.opacity = '.55';
+    scheduleHide();
+  }
+
+  scroller.addEventListener('scroll', () => { if (!dragging) update(); });
+  thumb.addEventListener('mousedown', e => {
+    e.preventDefault();
+    dragging = true;
+    thumb.classList.add('dragging');
+    const startY = e.clientY;
+    const startScrollTop = scroller.scrollTop;
+    const track = scroller.clientHeight;
+    const ratio = scroller.scrollHeight / track;
+    const onMove = ev => {
+      scroller.scrollTop = startScrollTop + (ev.clientY - startY) * ratio;
+      update();
+    };
+    const onUp = () => {
+      dragging = false;
+      thumb.classList.remove('dragging');
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+      scheduleHide();
+    };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+  });
+
+  update();
+  return update;
+}
+
+const updateListThumb = attachOverlayScrollbar($('#list'), $('#list-thumb'));
+attachOverlayScrollbar($('.settings-scroll'), $('#settings-thumb'));
+
 /* ---------- 初始化 ---------- */
 
 async function refresh() {
@@ -823,6 +884,7 @@ async function refresh() {
   populateYearOptions();
   renderList();
   renderExportPreview();
+  if (typeof updateListThumb === 'function') updateListThumb();
 }
 
 (function init() {
