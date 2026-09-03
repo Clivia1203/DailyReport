@@ -663,15 +663,15 @@ input::placeholder { color: var(--text-3); }
 .scroll-wrap > .settings-scroll { flex: 1; min-width: 0; }
 
 .ov-thumb {
-  position: absolute;
-  right: 1px; top: 0;
-  width: 6px;
-  border-radius: 3px;
+  position: fixed;               /* 游离于布局外：水平位置由 JS 贴内容列右缘外侧 */
+  width: 7px;
+  border-radius: 4px;
   background: var(--text-3);
-  opacity: .55;
+  opacity: 0;                    /* 默认隐藏，.show 才显示 */
   cursor: default;
   transition: opacity .25s;
-  z-index: 5;
+  z-index: 60;
+  pointer-events: none;          /* 未显示时不挡鼠标 */
 }
+.ov-thumb.show { opacity: .55; pointer-events: auto; }
 .ov-thumb:hover, .ov-thumb.dragging { opacity: .9; background: var(--text-2); }
-.ov-thumb[hidden] { display: none; }

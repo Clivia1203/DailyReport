@@ -823,35 +823,38 @@ function attachOverlayScrollbar(scroller, thumb) {
 
   function scheduleHide() {
     clearTimeout(hideTimer);
-    hideTimer = setTimeout(() => { thumb.style.opacity = ''; }, 700);
+    hideTimer = setTimeout(() => thumb.classList.remove('show'), 700);
   }
 
   function update() {
     const { scrollTop, scrollHeight, clientHeight } = scroller;
-    if (scrollHeight <= clientHeight + 1) {
-      thumb.hidden = true;
+    // 24px 容差吸收容器底部留白：视觉上一屏放得下就不显示
+    if (scrollHeight <= clientHeight + 24) {
+      thumb.classList.remove('show');
       return;
     }
-    const track = clientHeight;
-    const h = Math.max(28, Math.round(clientHeight / scrollHeight * track));
+    const rect = scroller.getBoundingClientRect();
+    const trackH = rect.height - 8;
+    const h = Math.max(28, clientHeight / scrollHeight * trackH);
     const maxTop = scrollHeight - clientHeight;
-    const y = Math.round(scrollTop / maxTop * (track - h));
-    thumb.hidden = false;
-    thumb.style.height = h + 'px';
-    thumb.style.transform = `translateY(${y}px)`;
-    thumb.style.opacity = '.55';
+    const y = rect.top + 4 + (maxTop ? scrollTop / maxTop : 0) * (trackH - h);
+    // 水平位置：贴内容列右缘外侧，不与内容重叠
+    thumb.style.left = Math.round(rect.right + 5) + 'px';
+    thumb.style.top = Math.round(y) + 'px';
+    thumb.style.height = Math.round(h) + 'px';
+    thumb.classList.add('show');
     scheduleHide();
   }
 
   scroller.addEventListener('scroll', () => { if (!dragging) update(); });
+  window.addEventListener('resize', update);
   thumb.addEventListener('mousedown', e => {
     e.preventDefault();
     dragging = true;
     thumb.classList.add('dragging');
     const startY = e.clientY;
     const startScrollTop = scroller.scrollTop;
-    const track = scroller.clientHeight;
-    const ratio = scroller.scrollHeight / track;
+    const ratio = scroller.scrollHeight / scroller.clientHeight;
     const onMove = ev => {
       scroller.scrollTop = startScrollTop + (ev.clientY - startY) * ratio;
       update();
