@@ -34,8 +34,10 @@ function requestHide() {
   setTimeout(() => window.api.hideQuick(), 150);
 }
 
-// 主进程发起的退出：只播动画
-window.api.onQuickOut(playOut);
+// 主进程发起的退出（失焦/热键切换）：同样走完整动画后回执隐藏
+window.api.onQuickOut(() => {
+  if (!hiding) requestHide();
+});
 
 async function commit() {
   const text = input.value.trim();

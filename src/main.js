@@ -241,7 +241,10 @@ ipcMain.handle('export:run', async (_e, { start, end, format }) => {
   return { ok: true, filePath };
 });
 
-ipcMain.on('quick:hide', () => hideQuickNow());
+ipcMain.on('quick:hide', () => {
+  if (quickHideTimer) { clearTimeout(quickHideTimer); quickHideTimer = null; }
+  hideQuickNow();
+});
 
 ipcMain.on('window:modal-cover', (_e, on) => {
   modalCoverActive = !!on;
@@ -306,15 +309,17 @@ function hideQuickNow() {
   if (quickWindow && !quickWindow.isDestroyed() && quickWindow.isVisible()) quickWindow.hide();
 }
 
-// 先播 CSS 退出动画，动画结束再真正隐藏窗口
+// 发起退出：页面播完动画会回 quick:hide，主进程再隐藏。
+// 不可由主进程按固定时长隐藏——IPC 延迟会把动画截断在非透明帧，
+// 该陈旧帧就是下次弹出闪烁的来源。兜底计时仅防渲染层失联。
 function hideQuickAnimated() {
   if (!quickWindow || quickWindow.isDestroyed() || !quickWindow.isVisible()) return;
-  if (quickHideTimer) return; // 退出动画已在进行
+  if (quickHideTimer) return; // 退出已在进行
   quickWindow.webContents.send('quick:out');
   quickHideTimer = setTimeout(() => {
     quickHideTimer = null;
     hideQuickNow();
-  }, 150);
+  }, 400);
 }
 
 function initHotkey() {
