@@ -10,9 +10,44 @@
     "test": "node --test \"src/**/*.test.js\""
   },
   "devDependencies": {
-    "electron": "^37.0.0"
+    "electron": "^37.0.0",
+    "electron-builder": "^26.15.3"
   },
   "dependencies": {
     "exceljs": "^4.4.0"
+  },
+  "build": {
+    "appId": "com.ddup5.dailyreport",
+    "productName": "日报随手记",
+    "directories": {
+      "output": "dist"
+    },
+    "electronDist": "node_modules/electron/dist",
+    "files": [
+      "src/**/*",
+      "package.json",
+      "!**/*.test.js"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis"
+        },
+        {
+          "target": "zip"
+        }
+      ],
+      "icon": "src/assets/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "日报随手记",
+      "language": "2052",
+      "unicode": true
+    }
   }
 }
