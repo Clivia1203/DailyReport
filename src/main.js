@@ -428,16 +428,22 @@ function createQuickWindow() {
 function showQuick() {
   if (!quickWindow || quickWindow.isDestroyed()) createQuickWindow();
   if (quickHideTimer) { clearTimeout(quickHideTimer); quickHideTimer = null; } // 取消进行中的退出
-  // 每次唤起都重申尺寸：DPI/分辨率变化后旧窗口尺寸会失真，这里兜底自愈
-  quickWindow.setSize(QUICK_SIZE.width, QUICK_SIZE.height, false);
   const { workArea } = screen.getPrimaryDisplay();
   const x = Math.round(workArea.x + (workArea.width - QUICK_SIZE.width) / 2);
   // 视觉上输入条底边距工作区底部约 80px（高度中含 56px 透明阴影区）
   const y = Math.round(workArea.y + workArea.height - QUICK_SIZE.height - 24);
-  quickWindow.setPosition(x, y, false);
+  // DPI/分辨率变化的兜底自愈：仅在尺寸/位置实际偏离时才设置，
+  // 无条件的 setSize/setPosition 会让透明窗口重建表面，正是残余闪烁来源之一
+  const [w, h] = quickWindow.getSize();
+  if (w !== QUICK_SIZE.width || h !== QUICK_SIZE.height) {
+    quickWindow.setSize(QUICK_SIZE.width, QUICK_SIZE.height, false);
+  }
+  const [px, py] = quickWindow.getPosition();
+  if (px !== x || py !== y) quickWindow.setPosition(x, y, false);
+  // 先让页面重启入场动画（从全透明起），再显示窗口，消灭"可见但未重置"的空窗帧
+  quickWindow.webContents.send('quick:reset');
   quickWindow.show();
   quickWindow.focus();
-  quickWindow.webContents.send('quick:reset');
 }
 
 // 系统缩放/分辨率变化时，透明固定尺寸窗口不会自动按新 DPI 重算，
