@@ -33,8 +33,12 @@ function settingsFile() {
 const DEFAULT_SETTINGS = {
   theme: 'auto',          // 'auto' | 'light' | 'dark'
   hotkey: DEFAULT_HOTKEY, // 唤起快速记录条的全局快捷键
-  openAtLogin: false      // 开机自启（写入系统启动项，默认关闭）
+  openAtLogin: false,     // 开机自启（写入系统启动项，默认关闭）
+  silentStart: false      // 静默启动：开机后仅驻留托盘，不显示主窗口
 };
+
+// 开机自启带 --hidden 参数（由 applyLoginItem 写入启动项），启动时据此静默驻留
+const startHidden = process.argv.includes('--hidden');
 
 let settings = { ...DEFAULT_SETTINGS };
 
@@ -45,6 +49,7 @@ function loadSettings() {
       if (['auto', 'light', 'dark'].includes(s.theme)) settings.theme = s.theme;
       if (typeof s.hotkey === 'string' && s.hotkey) settings.hotkey = s.hotkey;
       if (typeof s.openAtLogin === 'boolean') settings.openAtLogin = s.openAtLogin;
+      if (typeof s.silentStart === 'boolean') settings.silentStart = s.silentStart;
     }
   } catch { /* 首次运行，使用默认设置 */ }
 }
@@ -280,12 +285,21 @@ ipcMain.handle('theme:set', (_e, pref) => {
 
 /* ---------------- 设置 ---------------- */
 
+// 把自启 + 静默偏好写入系统启动项；静默时附带 --hidden 参数供启动时识别
+function applyLoginItem() {
+  app.setLoginItemSettings({
+    openAtLogin: settings.openAtLogin,
+    args: settings.openAtLogin && settings.silentStart ? ['--hidden'] : []
+  });
+}
+
 ipcMain.handle('settings:get', () => ({
   theme: settings.theme,
   resolvedTheme: resolvedTheme(),
   hotkey: settings.hotkey,
   defaultHotkey: DEFAULT_HOTKEY,
   openAtLogin: settings.openAtLogin,
+  silentStart: settings.silentStart,
   dataFile: dataFile()
 }));
 
@@ -301,14 +315,22 @@ ipcMain.handle('settings:set', (_e, patch) => {
       const r = applyHotkey(patch.hotkey);
       if (!r.ok) { result.ok = false; result.error = r.error; }
     }
+    let loginChanged = false;
     if (typeof patch.openAtLogin === 'boolean') {
       settings.openAtLogin = patch.openAtLogin;
-      // 唯一的系统级设置项：仅当用户在设置页打开/关闭时写入
-      app.setLoginItemSettings({ openAtLogin: settings.openAtLogin });
+      loginChanged = true;
+    }
+    if (typeof patch.silentStart === 'boolean') {
+      settings.silentStart = patch.silentStart;
+      loginChanged = true;
+    }
+    if (loginChanged) {
+      // 系统级设置项：仅当用户在设置页修改时写入启动项
+      applyLoginItem();
       saveSettings();
     }
   }
-  result.settings = { theme: settings.theme, hotkey: settings.hotkey, openAtLogin: settings.openAtLogin };
+  result.settings = { theme: settings.theme, hotkey: settings.hotkey, openAtLogin: settings.openAtLogin, silentStart: settings.silentStart };
   return result;
 });
 
@@ -404,7 +426,10 @@ function createMainWindow() {
   });
   mainWindow.loadFile(path.join(__dirname, 'renderer', 'index.html'));
   mainWindow.once('ready-to-show', () => {
-    mainWindow.show();
+    // 静默启动（开机自启 + 静默）时驻留托盘不显示窗口；--open-settings 调试例外
+    if (!startHidden || process.argv.includes('--open-settings')) {
+      mainWindow.show();
+    }
     // 调试/演示用途：electron . --open-settings 直接进入设置页
     if (process.argv.includes('--open-settings')) {
       mainWindow.webContents.send('ui:navigate', 'settings');
@@ -522,9 +547,9 @@ app.whenReady().then(() => {
   createTray();
   initHotkey();
   watchDisplayMetrics();
-  if (settings.openAtLogin) app.setLoginItemSettings({ openAtLogin: true });
+  applyLoginItem();
 
-  if (Notification.isSupported() && settings.hotkey) {
+  if (Notification.isSupported() && settings.hotkey && !startHidden) {
     const n = new Notification({
       title: '日报随手记已启动',
       body: `按 ${settings.hotkey} 随时记录一条，点击托盘图标也可以`,

@@ -427,6 +427,23 @@ input::placeholder { color: var(--text-3); }
 .segmented button:hover { color: var(--text); }
 .segmented button.active { background: var(--accent); color: #fff; font-weight: 600; }
 
+/* 二级子选项（如静默启动之于开机自启） */
+.set-row.sub { padding-left: 16px; }
+.set-row.sub .set-info::before {
+  content: '└';
+  color: var(--text-3);
+  margin-right: 8px;
+  font-size: 12px;
+}
+.set-row.sub.disabled {
+  opacity: .45;
+  pointer-events: none;   /* 未开启自启时不可操作 */
+}
+.set-row.sub.disabled .set-sub::after {
+  content: '（需先开启"开机自动启动"）';
+  color: var(--text-3);
+}
+
 /* 开关 */
 .switch { position: relative; width: 40px; height: 22px; flex: none; display: inline-block; }
 .switch input { opacity: 0; width: 0; height: 0; }

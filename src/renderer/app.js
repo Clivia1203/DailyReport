@@ -707,6 +707,13 @@ const hkDisplay = $('#hk-display');
 const hkMsg = $('#hk-msg');
 const themeSeg = $('#theme-seg');
 const autoStart = $('#set-autostart');
+const silentStart = $('#set-silent');
+const rowSilent = $('#row-silentstart');
+
+function syncSilentRow() {
+  // 常显 + 未开自启时置灰（避免"选项藏起来找不到"）
+  rowSilent.classList.toggle('disabled', !autoStart.checked);
+}
 
 async function loadSettingsUI() {
   const s = await window.api.getSettings();
@@ -715,6 +722,8 @@ async function loadSettingsUI() {
   $('#hotkey-tip').textContent = s.hotkey || '--';
   $('#set-datapath').textContent = s.dataFile;
   autoStart.checked = s.openAtLogin;
+  silentStart.checked = !!s.silentStart;
+  syncSilentRow();
   hkMsg.textContent = '';
   syncThemeSeg();
 }
@@ -737,7 +746,16 @@ themeSeg.addEventListener('click', async ev => {
 autoStart.addEventListener('change', async () => {
   const res = await window.api.setSettings({ openAtLogin: autoStart.checked });
   if (!res.ok) { autoStart.checked = !autoStart.checked; toast(res.error || '设置失败'); }
-  else toast(autoStart.checked ? '将在开机时自动启动' : '已关闭开机自启');
+  else {
+    toast(autoStart.checked ? '将在开机时自动启动' : '已关闭开机自启');
+    syncSilentRow();
+  }
+});
+
+silentStart.addEventListener('change', async () => {
+  const res = await window.api.setSettings({ silentStart: silentStart.checked });
+  if (!res.ok) { silentStart.checked = !silentStart.checked; toast(res.error || '设置失败'); }
+  else toast(silentStart.checked ? '开机将静默驻留托盘' : '开机将显示主窗口');
 });
 
 $('#set-openfolder').addEventListener('click', () => window.api.openDataFolder());
