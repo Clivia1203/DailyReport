@@ -7,7 +7,8 @@ const {
   coveredRefs,
   auditSourceRecords,
   appendRawRecords,
-  markdownToText
+  markdownToText,
+  sourceHash
 } = require('./report-utils');
 
 const entries = [
@@ -90,4 +91,15 @@ test('auditSourceRecords: 分别检查 AI 引用和原始明细保留', () => {
 
 test('markdownToText: 纯文本显示去除 Markdown 标记但保留内容', () => {
   assert.equal(markdownToText('# 标题\n\n- **完成**接口\n\n---'), '标题\n\n• 完成接口\n\n────────────────');
+});
+
+test('sourceHash: 同一批记录稳定，内容变化即使条数不变也会失效', () => {
+  const first = sourceHash(sourceBundle(entries));
+  const reversed = sourceHash(sourceBundle([...entries].reverse()));
+  const changed = sourceHash(sourceBundle(entries.map(entry => (
+    entry.id === 'a' ? { ...entry, text: '完成新的接口联调' } : entry
+  ))));
+  assert.match(first, /^[a-f0-9]{64}$/);
+  assert.equal(first, reversed);
+  assert.notEqual(first, changed);
 });

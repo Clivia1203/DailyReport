@@ -15,6 +15,7 @@ const state = {
     periodLabel: '',
     format: 'md',
     data: null,
+    cacheStatus: 'missing',
     editing: false,
     loading: false,
     thinking: {
@@ -426,6 +427,33 @@ function setReportPeriod(type, start, end) {
   reportPrev.disabled = type === 'custom';
   reportNext.disabled = type === 'custom';
   reportTitle.textContent = reportPeriodLabel();
+  rememberReportPeriod();
+}
+
+const REPORT_PERIOD_STORAGE_KEY = 'report-period-selection';
+
+function readReportPeriod() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(REPORT_PERIOD_STORAGE_KEY) || 'null');
+    const validType = ['day', 'week', 'month', 'custom'].includes(saved?.type);
+    const validDates = /^\d{4}-\d{2}-\d{2}$/.test(saved?.start || '')
+      && /^\d{4}-\d{2}-\d{2}$/.test(saved?.end || '')
+      && saved.start <= saved.end;
+    return validType && validDates ? saved : null;
+  } catch {
+    return null;
+  }
+}
+
+function rememberReportPeriod() {
+  if (!state.report.start || !state.report.end) return;
+  try {
+    localStorage.setItem(REPORT_PERIOD_STORAGE_KEY, JSON.stringify({
+      type: state.report.type,
+      start: state.report.start,
+      end: state.report.end
+    }));
+  } catch { /* 忽略 */ }
 }
 
 function setReportBusy(busy) {
@@ -665,7 +693,14 @@ function renderReportState(message) {
     missingRawRefs.length ? `原始明细未完整保留：${missingRawRefs.join('、')}` : ''
   ].filter(Boolean).join('；');
   const auditIncomplete = !!auditMessage;
-  const incomplete = incompleteOutput || incompleteCoverage || auditIncomplete;
+  const staleCache = !!data && !['fresh', 'missing'].includes(state.report.cacheStatus);
+  const cacheStatusMessage = {
+    'source-changed': '原始记录已变化，当前显示上一次生成的报告；点击“重新生成”即可更新。',
+    'template-changed': '报告模板已变化，当前显示上一次生成的报告；点击“重新生成”即可更新。',
+    'source-and-template-changed': '原始记录和报告模板都已变化，当前显示上一次生成的报告；点击“重新生成”即可更新。',
+    unknown: '当前显示历史报告，无法确认其原始记录版本；建议重新生成。'
+  }[state.report.cacheStatus] || '当前显示历史报告，建议重新生成。';
+  const incomplete = incompleteOutput || incompleteCoverage || auditIncomplete || staleCache;
   const incompleteOutputMessage = data?.finishReason === 'stream_error'
     ? '本次流式连接中断，已保存已经收到的部分结果；全部原始记录仍已附在文末，可重新生成。'
     : '本次总结已保存为部分结果，可能触及单次输出上限；全部原始记录仍已附在文末，可重新生成或缩短周期。';
@@ -684,9 +719,12 @@ function renderReportState(message) {
     ? auditMessage
     : incompleteCoverage
     ? 'AI 正文未逐条引用全部来源；完整原始记录明细已附在文末，请核对后再提交。'
-    : data ? '总结正文与原始记录明细均已保留，可继续编辑或导出。' : '选择周期后点击“生成总结”。');
+    : staleCache
+    ? cacheStatusMessage
+    : data ? '已读取已保存的总结；当前周期记录和模板未变化，无需重新生成。' : '选择周期后点击“生成总结”。');
   reportStatus.className = `report-status${message ? ' active' : ''}${incomplete ? ' incomplete' : ''}`;
   reportEdit.hidden = !data;
+  reportGenerate.textContent = data ? '重新生成' : '生成总结';
   reportContent.hidden = state.report.editing;
   reportEditor.hidden = !data || !state.report.editing;
   reportEditFoot.hidden = !data || !state.report.editing;
@@ -713,7 +751,11 @@ function syncAiEntry() {
   }
 }
 
+let reportCacheRequestId = 0;
+
 async function loadCachedReport() {
+  const requestId = ++reportCacheRequestId;
+  state.report.cacheStatus = 'missing';
   renderReportState();
   if (!state.settings?.ai?.configured) return;
   const res = await window.api.getCachedReport({
@@ -722,7 +764,14 @@ async function loadCachedReport() {
     periodType: state.report.type,
     template: state.settings.reportTemplates[state.report.type]
   });
-  if (res.ok) state.report.data = res.report;
+  if (requestId !== reportCacheRequestId) return;
+  if (res.ok) {
+    state.report.data = res.report;
+    state.report.cacheStatus = res.cacheStatus || (res.report ? 'unknown' : 'missing');
+  } else {
+    state.report.data = null;
+    state.report.cacheStatus = 'missing';
+  }
   renderReportState();
 }
 
@@ -735,9 +784,12 @@ async function openReportView() {
   }
   showView('report');
   state.report.data = null;
+  state.report.cacheStatus = 'missing';
   state.report.editing = false;
   hideReportThinking();
-  setReportPeriod('week');
+  const savedPeriod = readReportPeriod();
+  if (savedPeriod) setReportPeriod(savedPeriod.type, savedPeriod.start, savedPeriod.end);
+  else setReportPeriod('week');
   await loadCachedReport();
 }
 
@@ -769,6 +821,7 @@ async function generateReport(force = false) {
     return;
   }
   state.report.data = res.report;
+  state.report.cacheStatus = res.cacheStatus || 'fresh';
   if (state.settings?.ai) {
     state.settings.ai.model = res.report.model;
     state.settings.ai.lastTestOk = true;
@@ -807,6 +860,7 @@ function shiftReportPeriod(delta) {
     setReportPeriod('month', start, dateStringFromDate(endDate));
   }
   state.report.data = null;
+  state.report.cacheStatus = 'missing';
   loadCachedReport();
 }
 
@@ -814,6 +868,7 @@ $('#btn-report').addEventListener('click', openReportView);
 reportType.addEventListener('change', () => {
   setReportPeriod(reportType.value);
   state.report.data = null;
+  state.report.cacheStatus = 'missing';
   loadCachedReport();
 });
 reportStart.addEventListener('change', () => {
@@ -822,7 +877,9 @@ reportStart.addEventListener('change', () => {
   if (state.report.start > state.report.end) reportEnd.value = reportStart.value;
   state.report.end = reportEnd.value;
   state.report.periodLabel = reportPeriodLabel();
+  rememberReportPeriod();
   state.report.data = null;
+  state.report.cacheStatus = 'missing';
   loadCachedReport();
 });
 reportEnd.addEventListener('change', () => {
@@ -831,7 +888,9 @@ reportEnd.addEventListener('change', () => {
   state.report.start = reportStart.value;
   state.report.end = reportEnd.value;
   state.report.periodLabel = reportPeriodLabel();
+  rememberReportPeriod();
   state.report.data = null;
+  state.report.cacheStatus = 'missing';
   loadCachedReport();
 });
 reportPrev.addEventListener('click', () => shiftReportPeriod(-1));

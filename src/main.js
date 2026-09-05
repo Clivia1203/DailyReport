@@ -19,6 +19,12 @@ const {
   templateHash,
   reportId
 } = require('./lib/report-utils');
+const {
+  reportCacheKey,
+  findCachedReport,
+  findLatestReport,
+  reportCacheStatus
+} = require('./lib/report-cache');
 
 const ASSETS = path.join(__dirname, 'assets');
 const DEFAULT_HOTKEY = 'Alt+Shift+D';
@@ -610,15 +616,6 @@ function reportEntries(start, end) {
   });
 }
 
-function reportCacheKey({ start, end, periodType, model, sourceHashValue, templateHashValue }) {
-  return [periodType, start, end, model, sourceHashValue, templateHashValue].join('|');
-}
-
-function findCachedReport(db, params) {
-  const key = reportCacheKey(params);
-  return db.reports.find(report => report.cacheKey === key) || null;
-}
-
 function reportTypeOrCustom(type) {
   return REPORT_TYPES.has(type) ? type : 'custom';
 }
@@ -805,16 +802,23 @@ ipcMain.handle('report:getCached', (_e, { start, end, periodType, template } = {
   if (!start || !end || start > end) return { ok: false, error: '日期范围无效' };
   const type = reportTypeOrCustom(periodType);
   const sources = sourceBundle(reportEntries(start, end));
-  const templateText = String(template || settings.reportTemplates[type] || DEFAULT_REPORT_TEMPLATES.custom);
-  const report = findCachedReport(loadDB(), {
+  const templateText = String(template || settings.reportTemplates[type] || DEFAULT_REPORT_TEMPLATES.custom).trim();
+  const cacheParams = {
     start,
     end,
     periodType: type,
-    model: settings.ai.model,
     sourceHashValue: sourceHash(sources),
     templateHashValue: templateHash(templateText)
-  });
-  return { ok: true, report: reportForClient(report) };
+  };
+  const reports = loadDB().reports;
+  const cached = findCachedReport(reports, cacheParams);
+  const report = cached || findLatestReport(reports, cacheParams);
+  return {
+    ok: true,
+    cached: !!cached,
+    cacheStatus: reportCacheStatus(report, cacheParams),
+    report: reportForClient(report)
+  };
 });
 
 ipcMain.handle('report:generate', async (event, payload = {}) => {
@@ -826,6 +830,22 @@ ipcMain.handle('report:generate', async (event, payload = {}) => {
   const sources = sourceBundle(entries);
   const sourceHashValue = sourceHash(sources);
   const templateHashValue = templateHash(template);
+  // 缓存是否有效只由周期、原始记录指纹和模板指纹决定；模型变化不应让旧报告消失。
+  const cacheParams = { start, end, periodType, sourceHashValue, templateHashValue };
+  if (!force) {
+    const cached = findCachedReport(loadDB().reports, cacheParams);
+    if (cached) {
+      return {
+        ok: true,
+        cached: true,
+        cacheStatus: 'fresh',
+        report: reportForClient(cached),
+        models: Array.isArray(settings.ai.models) ? settings.ai.models : [],
+        modelChanged: false
+      };
+    }
+  }
+
   const key = apiKeyFromStorage();
   if (!key) return { ok: false, error: '尚未配置 DeepSeek API Key，请先到设置中连接 AI' };
 
@@ -850,12 +870,6 @@ ipcMain.handle('report:generate', async (event, payload = {}) => {
     settings.ai.lastError = '';
     saveSettings();
   }
-  const cacheParams = { start, end, periodType, model, sourceHashValue, templateHashValue };
-  if (!force) {
-    const cached = findCachedReport(loadDB(), cacheParams);
-    if (cached) return { ok: true, cached: true, report: reportForClient(cached), models, modelChanged: previousModel !== model };
-  }
-
   try {
     const notify = progress => {
       if (event.sender && !event.sender.isDestroyed()) event.sender.send('report:progress', progress);
@@ -928,13 +942,15 @@ ipcMain.handle('report:generate', async (event, payload = {}) => {
     const db = loadDB();
     const report = {
       id: reportId(),
-      cacheKey: reportCacheKey({ ...cacheParams, model }),
+      cacheKey: reportCacheKey(cacheParams),
       periodType,
       periodLabel: periodLabel || `${start} 至 ${end}`,
       start,
       end,
       model,
       template,
+      sourceHash: sourceHashValue,
+      templateHash: templateHashValue,
       sourceCount: sources.length,
       coveredCount,
       rawRecordCount,
