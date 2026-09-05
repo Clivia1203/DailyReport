@@ -9,6 +9,7 @@ const buildXlsxBuffer = require('./lib/xlsx-export');
 const {
   DEFAULT_REPORT_TEMPLATES,
   sourceBundle,
+  splitSources,
   buildPrompt,
   coveredRefs,
   appendRawRecords,
@@ -174,6 +175,68 @@ function saveDB(db) {
   fs.renameSync(tmp, file);
 }
 
+function reportContentDir() {
+  return path.join(app.getPath('userData'), 'reports');
+}
+
+function reportContentFileName(id) {
+  return `${String(id || '').replace(/[^a-zA-Z0-9_-]/g, '_')}.md`;
+}
+
+function reportContentPath(report) {
+  if (!report?.id) return '';
+  const fileName = report.contentFile || reportContentFileName(report.id);
+  return path.join(reportContentDir(), fileName);
+}
+
+function readReportContent(report) {
+  if (!report) return '';
+  if (report.contentFile) {
+    try { return fs.readFileSync(reportContentPath(report), 'utf8').replace(/^\ufeff/, ''); }
+    catch { return String(report.content || ''); }
+  }
+  return String(report.content || '');
+}
+
+function reportForClient(report) {
+  if (!report) return null;
+  return { ...report, content: readReportContent(report) };
+}
+
+function persistReportContent(report) {
+  if (!report?.id) return;
+  const content = String(report.content || '');
+  if (content.length <= REPORT_INLINE_CONTENT_LIMIT) {
+    if (report.contentFile) {
+      try { fs.unlinkSync(reportContentPath(report)); } catch { /* 文件已不存在 */ }
+      delete report.contentFile;
+    }
+    report.content = content;
+    return;
+  }
+
+  const dir = reportContentDir();
+  fs.mkdirSync(dir, { recursive: true });
+  const fileName = reportContentFileName(report.id);
+  const file = path.join(dir, fileName);
+  const tmp = file + '.tmp';
+  fs.writeFileSync(tmp, content, 'utf8');
+  try {
+    fs.renameSync(tmp, file);
+  } catch (error) {
+    if (!['EEXIST', 'EPERM'].includes(error?.code)) throw error;
+    try {
+      fs.unlinkSync(file);
+      fs.renameSync(tmp, file);
+    } catch (replaceError) {
+      try { fs.unlinkSync(tmp); } catch { /* 忽略临时文件清理失败 */ }
+      throw replaceError;
+    }
+  }
+  report.contentFile = fileName;
+  delete report.content;
+}
+
 /* ---------------- 时间与导出 ---------------- */
 
 const WEEKDAYS = ['日', '一', '二', '三', '四', '五', '六'];
@@ -199,6 +262,16 @@ function weekdayOf(dateStr) {
 // v4-pro 的完整总结可能需要几十秒；保留足够的服务端推理时间，避免客户端 45 秒提前中断。
 const AI_TIMEOUT_MS = 150000;
 const REPORT_TYPES = new Set(['day', 'week', 'month', 'custom']);
+// 流式传输不会突破单次 completion 的输出上限；先给一次请求较大的预算，
+// 仍然由自动续写和长周期分段负责承接更大的报告。
+const REPORT_MAX_OUTPUT_TOKENS = 32768;
+const REPORT_LEGACY_MAX_OUTPUT_TOKENS = 8192;
+const REPORT_MAX_CONTINUATIONS = 2;
+const REPORT_SEGMENT_MAX_SOURCES = 40;
+const REPORT_SEGMENT_MAX_CHARS = 20000;
+// 普通报告仍内嵌在 data.json；真正较大的正文落到独立 Markdown 文件，
+// 避免每次保存一条记录都重写几 MB 的 JSON。
+const REPORT_INLINE_CONTENT_LIMIT = 128 * 1024;
 
 function apiKeyFromStorage() {
   if (!settings.ai.encryptedApiKey) return '';
@@ -356,6 +429,171 @@ function chooseModel(models, current) {
   // 周期总结优先选择响应更快的 Flash；用户已选中的模型仍然保留。
   const preferred = ['deepseek-v4-flash', 'deepseek-v4-pro'];
   return preferred.find(x => models.includes(x)) || models[0];
+}
+
+function reportMaxOutputTokens(model) {
+  // 旧版 deepseek-chat / deepseek-reasoner 的兼容上限更保守；
+  // V4 使用更大的预算，遇到供应商拒绝时仍会在分段模块中回退。
+  if (model === 'deepseek-chat' || model === 'deepseek-reasoner') {
+    return REPORT_LEGACY_MAX_OUTPUT_TOKENS;
+  }
+  return REPORT_MAX_OUTPUT_TOKENS;
+}
+
+function canRetryWithSmallerOutput(error, receivedContent) {
+  if (receivedContent) return false;
+  const message = String(error?.message || '').toLowerCase();
+  return /max[_ -]?tokens|maximum.{0,24}tokens|output.{0,24}tokens|token limit/.test(message);
+}
+
+function reportSystemPrompt() {
+  return '你是一个严谨的工作总结整理助手。你只能基于用户提供的原始记录进行归纳和语言润色，不能编造、扩写或删除事实。总结正文必须覆盖每一条来源记录；如果多条记录属于同一事项，可以合并表达，但必须保留所有任务细节、结果、问题和时间线。';
+}
+
+function reportSegmentLabel(sources, index) {
+  const first = sources[0]?.date;
+  const last = sources[sources.length - 1]?.date;
+  if (!first) return `分段 ${index + 1}`;
+  return first === last ? first : `${first} 至 ${last}`;
+}
+
+function combineReportSegments(segments) {
+  if (segments.length <= 1) return String(segments[0]?.content || '').trim();
+  return segments.map((segment, index) => {
+    const title = segment.label || `分段 ${index + 1}`;
+    const content = String(segment.content || '').trim() || '本段未生成正文。';
+    return `## ${title}\n\n${content}`;
+  }).join('\n\n');
+}
+
+async function generateReportSegment({ key, model, prompt, segmentIndex, segmentCount, notify }) {
+  const system = reportSystemPrompt();
+  let content = '';
+  let reasoningLength = 0;
+  let continuationCount = 0;
+  let finishReason = '';
+  let usage = null;
+  let maxTokens = reportMaxOutputTokens(model);
+  let messages = [
+    { role: 'system', content: system },
+    { role: 'user', content: prompt }
+  ];
+  const continuationMessages = () => [
+    { role: 'system', content: system },
+    { role: 'user', content: prompt },
+    { role: 'assistant', content: content.trimEnd() },
+    {
+      role: 'user',
+      content: '上一次输出达到了单次长度上限或流式连接中断。请从上一次正文的最后一个完整位置继续，不要重复已经输出的标题、句子或事实；优先补齐本段尚未引用的来源编号。只输出 Markdown 正文，不要解释。'
+    }
+  ];
+
+  while (true) {
+    notify({
+      phase: continuationCount ? 'continuing' : 'segment',
+      model,
+      segment: segmentIndex + 1,
+      totalSegments: segmentCount,
+      continuation: continuationCount,
+      maxContinuations: REPORT_MAX_CONTINUATIONS
+    });
+
+    let receivedContent = false;
+    const thinkingEnabled = continuationCount === 0 || content.length > 0;
+    try {
+      const streamResult = await deepSeekStream('/chat/completions', key, {
+        method: 'POST',
+        body: JSON.stringify({
+          model,
+          messages,
+          ...(thinkingEnabled
+            ? { thinking: { type: 'enabled' }, reasoning_effort: continuationCount === 0 ? 'high' : 'low' }
+            : { thinking: { type: 'disabled' } }),
+          stream: true,
+          stream_options: { include_usage: true },
+          max_tokens: maxTokens
+        })
+      }, delta => {
+        if (delta.reasoning) {
+          reasoningLength += delta.reasoning.length;
+          notify({
+            phase: 'thinking',
+            text: delta.reasoning,
+            segment: segmentIndex + 1,
+            totalSegments: segmentCount,
+            continuation: continuationCount
+          });
+        }
+        if (delta.content) {
+          receivedContent = true;
+          content += delta.content;
+          notify({
+            phase: 'writing',
+            text: delta.content,
+            segment: segmentIndex + 1,
+            totalSegments: segmentCount,
+            continuation: continuationCount
+          });
+        }
+      });
+      finishReason = streamResult.finishReason || '';
+      usage = streamResult.usage || usage;
+    } catch (error) {
+      if (receivedContent) {
+        if (continuationCount < REPORT_MAX_CONTINUATIONS) {
+          continuationCount += 1;
+          finishReason = 'length';
+          messages = continuationMessages();
+          notify({
+            phase: 'recovering',
+            model,
+            segment: segmentIndex + 1,
+            totalSegments: segmentCount,
+            continuation: continuationCount,
+            maxContinuations: REPORT_MAX_CONTINUATIONS,
+            text: '流式连接暂时中断，正在续写已经收到的正文。'
+          });
+          continue;
+        }
+        finishReason = 'stream_error';
+        notify({
+          phase: 'recovering',
+          model,
+          segment: segmentIndex + 1,
+          totalSegments: segmentCount,
+          continuation: continuationCount,
+          maxContinuations: REPORT_MAX_CONTINUATIONS,
+          text: `流式连接多次中断，已保留已经收到的正文。${error?.message ? `（${error.message}）` : ''}`
+        });
+        break;
+      }
+      if (maxTokens > REPORT_LEGACY_MAX_OUTPUT_TOKENS && canRetryWithSmallerOutput(error, receivedContent)) {
+        maxTokens = REPORT_LEGACY_MAX_OUTPUT_TOKENS;
+        notify({
+          phase: 'fallback',
+          model,
+          segment: segmentIndex + 1,
+          totalSegments: segmentCount,
+          text: '当前模型不接受较大的输出预算，已切换兼容模式继续生成。'
+        });
+        continue;
+      }
+      throw error;
+    }
+
+    if (finishReason !== 'length' || continuationCount >= REPORT_MAX_CONTINUATIONS) break;
+
+    continuationCount += 1;
+    messages = continuationMessages();
+  }
+
+  return {
+    content: content.trim(),
+    reasoningLength,
+    continuationCount,
+    finishReason,
+    usage
+  };
 }
 
 function reportEntries(start, end) {
@@ -569,7 +807,7 @@ ipcMain.handle('report:getCached', (_e, { start, end, periodType, template } = {
     sourceHashValue: sourceHash(sources),
     templateHashValue: templateHash(templateText)
   });
-  return { ok: true, report: report || null };
+  return { ok: true, report: reportForClient(report) };
 });
 
 ipcMain.handle('report:generate', async (event, payload = {}) => {
@@ -608,51 +846,66 @@ ipcMain.handle('report:generate', async (event, payload = {}) => {
   const cacheParams = { start, end, periodType, model, sourceHashValue, templateHashValue };
   if (!force) {
     const cached = findCachedReport(loadDB(), cacheParams);
-    if (cached) return { ok: true, cached: true, report: cached, models, modelChanged: previousModel !== model };
+    if (cached) return { ok: true, cached: true, report: reportForClient(cached), models, modelChanged: previousModel !== model };
   }
 
   try {
     const notify = progress => {
       if (event.sender && !event.sender.isDestroyed()) event.sender.send('report:progress', progress);
     };
-    let reasoningContent = '';
-    let aiContent = '';
-    notify({ phase: 'thinking', model });
-    const streamResult = await deepSeekStream('/chat/completions', key, {
-      method: 'POST',
-      body: JSON.stringify({
-        model,
-        messages: [
-          {
-            role: 'system',
-            content: '你是一个严谨的工作总结整理助手。你只能基于用户提供的原始记录进行归纳和语言润色，不能编造、扩写或删除事实。总结正文必须覆盖每一条来源记录；如果多条记录属于同一事项，可以合并表达，但必须保留所有任务细节、结果、问题和时间线。'
-          },
-          { role: 'user', content: buildPrompt({ start, end, periodLabel, template, sources }) }
-        ],
-        thinking: { type: 'enabled' },
-        reasoning_effort: 'high',
-        stream: true,
-        stream_options: { include_usage: true },
-        max_tokens: 8192
-      })
-    }, delta => {
-      if (delta.reasoning) {
-        reasoningContent += delta.reasoning;
-        notify({ phase: 'thinking', text: delta.reasoning });
-      }
-      if (delta.content) {
-        aiContent += delta.content;
-        notify({ phase: 'writing', text: delta.content });
-      }
+    const sourceChunks = splitSources(sources, {
+      maxSources: REPORT_SEGMENT_MAX_SOURCES,
+      maxChars: REPORT_SEGMENT_MAX_CHARS
     });
-    aiContent = aiContent.trim();
-    if (!aiContent) {
-      const reason = streamResult.finishReason === 'length' ? 'AI 输出达到上限，没有形成完整总结' : 'AI 没有返回总结正文';
-      throw new Error(reason);
+    const segments = [];
+    for (let index = 0; index < sourceChunks.length; index += 1) {
+      const chunk = sourceChunks[index];
+      const segmentResult = await generateReportSegment({
+        key,
+        model,
+        segmentIndex: index,
+        segmentCount: sourceChunks.length,
+        prompt: buildPrompt({
+          start,
+          end,
+          periodLabel,
+          template,
+          sources: chunk,
+          segmentIndex: index,
+          segmentCount: sourceChunks.length
+        }),
+        notify
+      });
+      const chunkCovered = coveredRefs(segmentResult.content, chunk);
+      segments.push({
+        label: reportSegmentLabel(chunk, index),
+        content: segmentResult.content,
+        sourceCount: chunk.length,
+        coveredCount: chunkCovered.length,
+        continuationCount: segmentResult.continuationCount,
+        finishReason: segmentResult.finishReason,
+        reasoningLength: segmentResult.reasoningLength,
+        usage: segmentResult.usage
+      });
     }
-    notify({ phase: 'done', reasoningLength: reasoningContent.length, contentLength: aiContent.length });
 
+    const aiContent = combineReportSegments(segments);
+    if (!aiContent) throw new Error('AI 没有返回总结正文');
     const covered = coveredRefs(aiContent, sources);
+    const truncated = segments.some(segment => segment.finishReason === 'length');
+    const naturallyCompleted = segments.every(segment => segment.finishReason === 'stop');
+    const complete = naturallyCompleted && !truncated && covered.length === sources.length;
+    const finishReason = truncated ? 'length' : (naturallyCompleted ? 'stop' : segments[segments.length - 1]?.finishReason || 'unknown');
+    notify({
+      phase: 'done',
+      reasoningLength: segments.reduce((sum, segment) => sum + segment.reasoningLength, 0),
+      contentLength: aiContent.length,
+      segmentCount: segments.length,
+      continuationCount: segments.reduce((sum, segment) => sum + segment.continuationCount, 0),
+      finishReason,
+      complete
+    });
+
     const db = loadDB();
     const report = {
       id: reportId(),
@@ -665,13 +918,25 @@ ipcMain.handle('report:generate', async (event, payload = {}) => {
       template,
       sourceCount: sources.length,
       coveredCount: covered.length,
+      complete,
+      finishReason,
+      segmentCount: segments.length,
+      continuationCount: segments.reduce((sum, segment) => sum + segment.continuationCount, 0),
+      segments: segments.map(segment => ({
+        label: segment.label,
+        sourceCount: segment.sourceCount,
+        coveredCount: segment.coveredCount,
+        continuationCount: segment.continuationCount,
+        finishReason: segment.finishReason
+      })),
       content: appendRawRecords(aiContent, sources),
       createdAt: Date.now(),
       updatedAt: Date.now()
     };
+    persistReportContent(report);
     db.reports.push(report);
     saveDB(db);
-    return { ok: true, cached: false, report, models, modelChanged: previousModel !== model };
+    return { ok: true, cached: false, report: reportForClient(report), models, modelChanged: previousModel !== model };
   } catch (error) {
     settings.ai.lastTestOk = false;
     settings.ai.lastError = error?.message || '生成总结失败';
@@ -689,9 +954,12 @@ ipcMain.handle('report:save', (_e, { id, content } = {}) => {
   const report = db.reports.find(x => x.id === id);
   if (!report) return { ok: false, error: '总结不存在或已被清理' };
   report.content = content;
+  report.complete = true;
+  report.finishReason = 'edited';
   report.updatedAt = Date.now();
+  persistReportContent(report);
   saveDB(db);
-  return { ok: true, report };
+  return { ok: true, report: reportForClient(report) };
 });
 
 ipcMain.handle('report:export', async (_e, { id, format } = {}) => {
@@ -699,7 +967,8 @@ ipcMain.handle('report:export', async (_e, { id, format } = {}) => {
   if (!report) return { ok: false, error: '总结不存在或已被清理' };
   const isText = format === 'txt';
   const ext = isText ? 'txt' : 'md';
-  const content = isText ? markdownToText(report.content) : report.content;
+  const reportContentText = readReportContent(report);
+  const content = isText ? markdownToText(reportContentText) : reportContentText;
   const { canceled, filePath } = await dialog.showSaveDialog(mainWindow, {
     title: '导出周期总结',
     defaultPath: `总结_${report.start}_${report.end}.${ext}`,

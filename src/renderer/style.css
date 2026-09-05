@@ -717,6 +717,7 @@ input::placeholder { color: var(--text-3); }
   flex:none; min-height:18px; font-size:12px; color:var(--text-3);
 }
 .report-status.active { color:var(--accent); }
+.report-status.incomplete { color:#b7791f; }
 
 .report-thinking {
   flex:none; padding:13px 16px 12px;

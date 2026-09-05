@@ -34,18 +34,59 @@ function sourceBundle(entries) {
     }));
 }
 
-function buildPrompt({ start, end, periodLabel, template, sources }) {
+function sourceLine(source) {
+  return `[${source.ref}] ${source.date} ${source.time}  ${source.text}`;
+}
+
+/**
+ * 把过长周期拆成多个不可分割的记录组。
+ * 记录永远不会在组之间被拆开，调用方可以对每组单独生成并最终合并。
+ */
+function splitSources(sources, { maxSources = 40, maxChars = 20000 } = {}) {
+  const list = Array.isArray(sources) ? sources : [];
+  if (!list.length) return [[]];
+
+  const chunks = [];
+  let chunk = [];
+  let chars = 0;
+  for (const source of list) {
+    const lineLength = sourceLine(source).length + 1;
+    const wouldOverflow = chunk.length > 0 && (
+      chunk.length >= maxSources || chars + lineLength > maxChars
+    );
+    if (wouldOverflow) {
+      chunks.push(chunk);
+      chunk = [];
+      chars = 0;
+    }
+    chunk.push(source);
+    chars += lineLength;
+  }
+  if (chunk.length) chunks.push(chunk);
+  return chunks;
+}
+
+function buildPrompt({ start, end, periodLabel, template, sources, segmentIndex = 0, segmentCount = 1 }) {
   const sourceText = sources.length
-    ? sources.map(s => `[${s.ref}] ${s.date} ${s.time}  ${s.text}`).join('\n')
+    ? sources.map(sourceLine).join('\n')
     : '（本周期没有原始记录）';
+  const segmentInstruction = segmentCount > 1
+    ? [
+      `这是一个长周期报告的第 ${segmentIndex + 1}/${segmentCount} 个分段。`,
+      '只整理本段提供的原始记录，不要猜测其他分段的内容。',
+      '只输出本段 Markdown 正文，不要输出整个报告的总标题、解释或免责声明。'
+    ]
+    : ['这是一个完整周期报告，请输出完整的 Markdown 正文。'];
   return [
     `报告周期：${periodLabel || `${start} 至 ${end}`}`,
     '',
     '用户模板与要求：',
     template || DEFAULT_REPORT_TEMPLATES.custom,
     '',
+    ...segmentInstruction,
+    '',
     '完整性要求（必须遵守）：',
-    '1. 原始记录按 [R001]、[R002] 的形式提供；每一个来源编号都必须至少在总结正文中被引用一次。',
+    `1. 原始记录按 [R001]、[R002] 的形式提供；本${segmentCount > 1 ? '段' : '周期'}每一个来源编号都必须至少在总结正文中被引用一次。`,
     '2. 可以合并相近内容、调整语序和润色表达，但不能删除任务细节、结果、问题、时间线或事实。',
     '3. 不能根据常识推测原始记录没有提到的完成结果、原因、计划或风险。',
     '4. 输出 Markdown 正文，不要输出解释、免责声明或“作为 AI”的话。',
@@ -116,6 +157,7 @@ module.exports = {
   localDateStr,
   localTimeStr,
   sourceBundle,
+  splitSources,
   buildPrompt,
   coveredRefs,
   stripSourceRefs,
