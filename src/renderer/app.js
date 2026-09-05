@@ -16,7 +16,15 @@ const state = {
     format: 'md',
     data: null,
     editing: false,
-    loading: false
+    loading: false,
+    thinking: {
+      visible: false,
+      open: false,
+      phase: 'thinking',
+      text: '',
+      content: '',
+      startedAt: 0
+    }
   }
 };
 
@@ -335,9 +343,14 @@ const reportEnd = $('#report-end');
 const reportDates = $('#report-dates');
 const reportFormat = $('#report-format');
 const reportStatus = $('#report-status');
+const reportThinking = $('#report-thinking');
+const reportThinkingStatus = $('#report-thinking-status');
+const reportThinkingToggle = $('#report-thinking-toggle');
+const reportThinkingContent = $('#report-thinking-content');
 const reportTitle = $('#report-title');
 const reportMeta = $('#report-meta');
 const reportContent = $('#report-content');
+const reportGenerate = $('#report-generate');
 const reportEditor = $('#report-editor');
 const reportEdit = $('#report-edit');
 const reportEditFoot = $('#report-edit-foot');
@@ -350,6 +363,8 @@ const reportCoverage = $('#report-coverage');
 const reportModel = $('#report-model');
 const reportSourceList = $('#report-source-list');
 const reportConnection = $('#report-connection');
+const reportLayout = $('#report-layout');
+const reportResizer = $('#report-resizer');
 
 function localDateFromString(value) { return new Date(value + 'T00:00:00'); }
 
@@ -404,6 +419,15 @@ function setReportPeriod(type, start, end) {
   reportPrev.disabled = type === 'custom';
   reportNext.disabled = type === 'custom';
   reportTitle.textContent = reportPeriodLabel();
+}
+
+function setReportBusy(busy) {
+  reportType.disabled = busy;
+  reportPrev.disabled = busy || state.report.type === 'custom';
+  reportNext.disabled = busy || state.report.type === 'custom';
+  reportStart.disabled = busy;
+  reportEnd.disabled = busy;
+  reportGenerate.disabled = busy;
 }
 
 function reportEntries() {
@@ -490,6 +514,67 @@ function renderReportSources() {
   }
 }
 
+let reportThinkingTimer = null;
+
+function renderReportThinking() {
+  const thinking = state.report.thinking;
+  reportThinking.hidden = !thinking.visible;
+  reportThinkingContent.hidden = !thinking.open;
+  reportThinkingToggle.textContent = thinking.open ? '收起' : '查看思考过程';
+  reportThinkingToggle.setAttribute('aria-expanded', String(thinking.open));
+  const elapsed = thinking.startedAt ? Math.max(0, Math.floor((Date.now() - thinking.startedAt) / 1000)) : 0;
+  if (thinking.phase === 'writing') reportThinkingStatus.textContent = `正在输出总结 · ${elapsed}s`;
+  else if (thinking.phase === 'done') reportThinkingStatus.textContent = `已完成 · ${elapsed}s`;
+  else if (thinking.phase === 'error') reportThinkingStatus.textContent = '生成失败';
+  else reportThinkingStatus.textContent = `AI 正在思考 · ${elapsed}s`;
+  const blocks = [];
+  if (thinking.text) blocks.push(`思考过程：\n${thinking.text}`);
+  if (thinking.content) blocks.push(`总结输出：\n${thinking.content}`);
+  reportThinkingContent.textContent = blocks.join('\n\n');
+  if (thinking.open) reportThinkingContent.scrollTop = reportThinkingContent.scrollHeight;
+}
+
+function beginReportThinking() {
+  clearInterval(reportThinkingTimer);
+  state.report.thinking = {
+    visible: true,
+    open: true,
+    phase: 'thinking',
+    text: '',
+    content: '',
+    startedAt: Date.now()
+  };
+  renderReportThinking();
+  reportThinkingTimer = setInterval(renderReportThinking, 1000);
+}
+
+function finishReportThinking(phase = 'done') {
+  clearInterval(reportThinkingTimer);
+  reportThinkingTimer = null;
+  state.report.thinking.phase = phase;
+  state.report.thinking.open = phase === 'error';
+  renderReportThinking();
+}
+
+function hideReportThinking() {
+  clearInterval(reportThinkingTimer);
+  reportThinkingTimer = null;
+  state.report.thinking.visible = false;
+  state.report.thinking.open = false;
+  reportThinking.hidden = true;
+}
+
+window.api.onReportProgress(progress => {
+  if (!state.report.thinking.visible || !progress) return;
+  if (progress.phase === 'thinking' || progress.phase === 'writing') state.report.thinking.phase = progress.phase;
+  if (progress.text) {
+    if (progress.phase === 'writing') state.report.thinking.content += progress.text;
+    else state.report.thinking.text += progress.text;
+  }
+  if (progress.phase === 'error') state.report.thinking.phase = 'error';
+  renderReportThinking();
+});
+
 function renderReportState(message) {
   const data = state.report.data;
   const incompleteCoverage = data && data.sourceCount > 0 && data.coveredCount < data.sourceCount;
@@ -560,6 +645,7 @@ async function openReportView() {
   showView('report');
   state.report.data = null;
   state.report.editing = false;
+  hideReportThinking();
   setReportPeriod('week');
   await loadCachedReport();
 }
@@ -567,19 +653,26 @@ async function openReportView() {
 async function generateReport(force = false) {
   if (state.report.loading) return;
   state.report.loading = true;
-  reportGenerate.disabled = true;
+  setReportBusy(true);
+  beginReportThinking();
   renderReportState('正在连接 DeepSeek 并生成总结，请稍候…');
-  const res = await window.api.generateReport({
-    start: state.report.start,
-    end: state.report.end,
-    periodType: state.report.type,
-    periodLabel: reportPeriodLabel(),
-    template: state.settings?.reportTemplates?.[state.report.type],
-    force
-  });
+  let res;
+  try {
+    res = await window.api.generateReport({
+      start: state.report.start,
+      end: state.report.end,
+      periodType: state.report.type,
+      periodLabel: reportPeriodLabel(),
+      template: state.settings?.reportTemplates?.[state.report.type],
+      force
+    });
+  } catch (error) {
+    res = { ok: false, error: error?.message || '生成总结失败' };
+  }
   state.report.loading = false;
-  reportGenerate.disabled = false;
+  setReportBusy(false);
   if (!res.ok) {
+    finishReportThinking('error');
     renderReportState(res.error || '生成总结失败');
     toast(res.error || '生成总结失败');
     return;
@@ -590,6 +683,7 @@ async function generateReport(force = false) {
     state.settings.ai.lastTestOk = true;
     syncAiEntry();
   }
+  finishReportThinking('done');
   const coverageNote = res.report.sourceCount > 0 && res.report.coveredCount < res.report.sourceCount
     ? 'AI 正文覆盖不完整，但全部原始记录已自动附在文末，请核对。'
     : '总结已生成，已保留全部原始记录。';
@@ -642,7 +736,6 @@ reportEnd.addEventListener('change', () => {
 reportPrev.addEventListener('click', () => shiftReportPeriod(-1));
 reportNext.addEventListener('click', () => shiftReportPeriod(1));
 reportFormat.addEventListener('change', () => { state.report.format = reportFormat.value; renderReportState(); });
-const reportGenerate = $('#report-generate');
 reportGenerate.addEventListener('click', () => generateReport(!!state.report.data));
 $('#report-copy').addEventListener('click', async () => {
   if (!state.report.data) { toast('请先生成总结'); return; }
@@ -675,6 +768,43 @@ reportEditSave.addEventListener('click', async () => {
 $('#report-open-modal').addEventListener('click', () => { reportModal.hidden = false; syncModalCover(); });
 $('#report-modal-close').addEventListener('click', () => { reportModal.hidden = true; syncModalCover(); });
 reportModal.addEventListener('click', e => { if (e.target === reportModal) { reportModal.hidden = true; syncModalCover(); } });
+reportThinkingToggle.addEventListener('click', () => {
+  state.report.thinking.open = !state.report.thinking.open;
+  renderReportThinking();
+});
+
+function setReportSideWidth(width) {
+  const value = Math.max(220, Math.min(520, Math.round(Number(width) || 280)));
+  reportLayout.style.setProperty('--report-side-width', `${value}px`);
+  try { localStorage.setItem('report-side-width', String(value)); } catch { /* 忽略 */ }
+}
+
+try {
+  const savedSideWidth = Number(localStorage.getItem('report-side-width'));
+  if (savedSideWidth) setReportSideWidth(savedSideWidth);
+} catch { /* 忽略 */ }
+
+reportResizer.addEventListener('pointerdown', event => {
+  if (window.innerWidth < 1200) return;
+  event.preventDefault();
+  reportResizer.classList.add('dragging');
+  reportResizer.setPointerCapture?.(event.pointerId);
+  const startX = event.clientX;
+  const startWidth = parseFloat(getComputedStyle(reportLayout).getPropertyValue('--report-side-width')) || 280;
+  const onMove = moveEvent => setReportSideWidth(startWidth + startX - moveEvent.clientX);
+  const onUp = upEvent => {
+    reportResizer.classList.remove('dragging');
+    reportResizer.releasePointerCapture?.(upEvent.pointerId);
+    reportResizer.removeEventListener('pointermove', onMove);
+    reportResizer.removeEventListener('pointerup', onUp);
+    reportResizer.removeEventListener('pointercancel', onUp);
+  };
+  reportResizer.addEventListener('pointermove', onMove);
+  reportResizer.addEventListener('pointerup', onUp);
+  reportResizer.addEventListener('pointercancel', onUp);
+});
+
+reportResizer.addEventListener('dblclick', () => setReportSideWidth(280));
 
 /* ---------- 列表筛选 ---------- */
 
@@ -1079,6 +1209,7 @@ const autoStart = $('#set-autostart');
 const silentStart = $('#set-silent');
 const rowSilent = $('#row-silentstart');
 const aiKey = $('#ai-key');
+const aiKeyToggle = $('#ai-key-toggle');
 const aiModel = $('#ai-model');
 const aiStateBadge = $('#ai-state-badge');
 const aiModelSub = $('#ai-model-sub');
@@ -1095,6 +1226,57 @@ const DEFAULT_TEMPLATES = {
   custom: '请按照用户指定的周期和模板生成工作总结。可以调整语言和结构，但必须保留所有原始记录中的事实、任务细节和时间线。'
 };
 
+const EYE_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6S2 12 2 12z"/><circle cx="12" cy="12" r="2.5"/></svg>';
+const EYE_OFF_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3l18 18"/><path d="M10.6 5.1A10.9 10.9 0 0 1 12 5c6.5 0 10 7 10 7a18.3 18.3 0 0 1-3.1 3.8"/><path d="M6.2 6.2C3.5 8.1 2 12 2 12s3.5 7 10 7a9.8 9.8 0 0 0 3.4-.6"/></svg>';
+
+function renderAiKeyToggle(visible) {
+  aiKeyToggle.innerHTML = visible ? EYE_OFF_ICON : EYE_ICON;
+  aiKeyToggle.title = visible ? '隐藏 API Key' : '显示 API Key';
+  aiKeyToggle.setAttribute('aria-label', aiKeyToggle.title);
+}
+
+function setMaskedAiKey(ai) {
+  const configured = !!ai?.configured && !!ai?.maskedApiKey;
+  aiKey.type = 'password';
+  aiKey.value = configured ? ai.maskedApiKey : '';
+  aiKey.dataset.masked = String(configured);
+  aiKey.dataset.saved = String(configured);
+  renderAiKeyToggle(false);
+}
+
+aiKey.addEventListener('focus', () => {
+  if (aiKey.dataset.masked !== 'true') return;
+  aiKey.value = '';
+  aiKey.dataset.masked = 'false';
+  aiKey.dataset.saved = 'true';
+  renderAiKeyToggle(false);
+});
+
+aiKey.addEventListener('input', () => {
+  aiKey.dataset.masked = 'false';
+  aiKey.dataset.saved = 'false';
+});
+
+aiKey.addEventListener('blur', () => {
+  if (!aiKey.value.trim() && state.settings?.ai?.configured) setMaskedAiKey(state.settings.ai);
+});
+
+aiKeyToggle.addEventListener('click', async () => {
+  if (aiKey.dataset.masked === 'true' || (!aiKey.value && state.settings?.ai?.configured)) {
+    const res = await window.api.revealAiKey();
+    if (!res.ok) { toast(res.error || '无法读取 API Key'); return; }
+    aiKey.value = res.apiKey;
+    aiKey.type = 'text';
+    aiKey.dataset.masked = 'false';
+    aiKey.dataset.saved = 'true';
+    renderAiKeyToggle(true);
+    return;
+  }
+  const visible = aiKey.type !== 'password';
+  aiKey.type = visible ? 'password' : 'text';
+  renderAiKeyToggle(!visible);
+});
+
 function syncSilentRow() {
   // 常显 + 未开自启时置灰（避免"选项藏起来找不到"）
   rowSilent.classList.toggle('disabled', !autoStart.checked);
@@ -1108,7 +1290,7 @@ async function loadSettingsUI() {
   $('#set-datapath').textContent = s.dataFile;
   autoStart.checked = s.openAtLogin;
   silentStart.checked = !!s.silentStart;
-  aiKey.value = '';
+  setMaskedAiKey(s.ai);
   syncAiSettingsUI(s.ai);
   syncTemplateUI();
   syncAiEntry();
@@ -1190,17 +1372,19 @@ $('#ai-test').addEventListener('click', async () => {
   button.disabled = true;
   aiMsg.className = 'set-msg';
   aiMsg.textContent = '正在测试连接并读取模型…';
-  const res = await window.api.testAi(aiKey.value.trim());
+  const enteredKey = aiKey.dataset.masked === 'true' ? '' : aiKey.value.trim();
+  const res = await window.api.testAi(enteredKey);
   button.disabled = false;
   if (!res.ok) {
     aiMsg.textContent = res.error || '连接失败';
     if (state.settings?.ai) state.settings.ai = res.ai || state.settings.ai;
     syncAiSettingsUI(state.settings?.ai);
+    if (!aiKey.value.trim() || aiKey.dataset.masked === 'true') setMaskedAiKey(state.settings?.ai);
     syncAiEntry();
     return;
   }
   state.settings.ai = res.ai;
-  aiKey.value = '';
+  setMaskedAiKey(res.ai);
   syncAiSettingsUI(res.ai);
   syncAiEntry();
   aiMsg.className = 'set-msg success';
@@ -1225,6 +1409,7 @@ $('#ai-clear').addEventListener('click', async () => {
   if (res.ok) {
     state.settings.ai = res.ai;
     syncAiSettingsUI(res.ai);
+    setMaskedAiKey(res.ai);
     syncAiEntry();
     toast('AI 配置已清除');
   }

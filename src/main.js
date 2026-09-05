@@ -54,6 +54,7 @@ const DEFAULT_SETTINGS = {
   ai: {
     baseUrl: 'https://api.deepseek.com',
     model: '',
+    models: [],
     encryptedApiKey: '',
     lastTestAt: 0,
     lastTestOk: false,
@@ -82,6 +83,7 @@ function loadSettings() {
       if (s.ai && typeof s.ai === 'object') {
         if (typeof s.ai.baseUrl === 'string' && s.ai.baseUrl) settings.ai.baseUrl = s.ai.baseUrl;
         if (typeof s.ai.model === 'string') settings.ai.model = s.ai.model;
+        if (Array.isArray(s.ai.models)) settings.ai.models = [...new Set(s.ai.models.filter(x => typeof x === 'string' && x.trim()))];
         if (typeof s.ai.encryptedApiKey === 'string') settings.ai.encryptedApiKey = s.ai.encryptedApiKey;
         if (Number.isFinite(s.ai.lastTestAt)) settings.ai.lastTestAt = s.ai.lastTestAt;
         if (typeof s.ai.lastTestOk === 'boolean') settings.ai.lastTestOk = s.ai.lastTestOk;
@@ -194,7 +196,8 @@ function weekdayOf(dateStr) {
 
 /* ---------------- DeepSeek 与周期总结 ---------------- */
 
-const AI_TIMEOUT_MS = 45000;
+// v4-pro 的完整总结可能需要几十秒；保留足够的服务端推理时间，避免客户端 45 秒提前中断。
+const AI_TIMEOUT_MS = 150000;
 const REPORT_TYPES = new Set(['day', 'week', 'month', 'custom']);
 
 function apiKeyFromStorage() {
@@ -205,6 +208,13 @@ function apiKeyFromStorage() {
   } catch { return ''; }
 }
 
+function maskedApiKey() {
+  const key = apiKeyFromStorage();
+  if (!key) return '';
+  if (key.length <= 8) return '••••••••';
+  return `${key.slice(0, 3)}${'•'.repeat(Math.min(16, Math.max(8, key.length - 7)))}${key.slice(-4)}`;
+}
+
 function encryptApiKey(value) {
   if (!safeStorage.isEncryptionAvailable()) {
     throw new Error('Windows 安全存储暂不可用，请稍后重试');
@@ -212,12 +222,13 @@ function encryptApiKey(value) {
   return safeStorage.encryptString(value).toString('base64');
 }
 
-function aiPublicState(models = []) {
+function aiPublicState(models = settings.ai.models) {
   return {
     configured: !!settings.ai.encryptedApiKey,
+    maskedApiKey: maskedApiKey(),
     baseUrl: settings.ai.baseUrl,
     model: settings.ai.model,
-    models,
+    models: Array.isArray(models) ? models : [],
     lastTestAt: settings.ai.lastTestAt,
     lastTestOk: settings.ai.lastTestOk,
     lastError: settings.ai.lastError
@@ -255,6 +266,81 @@ async function deepSeekRequest(endpoint, apiKey, init = {}) {
   }
 }
 
+async function deepSeekStream(endpoint, apiKey, init = {}, onDelta = () => {}) {
+  if (typeof fetch !== 'function') throw new Error('当前运行环境不支持网络请求');
+  const base = String(settings.ai.baseUrl || 'https://api.deepseek.com').replace(/\/+$/, '');
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), AI_TIMEOUT_MS);
+  try {
+    const response = await fetch(base + endpoint, {
+      ...init,
+      signal: controller.signal,
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${apiKey}`,
+        ...(init.headers || {})
+      }
+    });
+    if (!response.ok) {
+      const raw = await response.text();
+      let data = null;
+      try { data = raw ? JSON.parse(raw) : null; } catch { /* 非 JSON 错误交给统一提示 */ }
+      const message = data?.error?.message || data?.message || `请求失败（HTTP ${response.status}）`;
+      throw new Error(message);
+    }
+    if (!response.body?.getReader) throw new Error('服务未返回可读取的流式响应');
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let finishReason = '';
+    let usage = null;
+
+    const handleEvent = block => {
+      const dataLine = block.split(/\r?\n/).find(line => line.startsWith('data:'));
+      if (!dataLine) return false;
+      const payload = dataLine.slice(5).trim();
+      if (payload === '[DONE]') return true;
+      let data;
+      try { data = JSON.parse(payload); } catch { return false; }
+      const choice = data?.choices?.[0];
+      const delta = choice?.delta || {};
+      if (choice?.finish_reason) finishReason = choice.finish_reason;
+      if (data?.usage) usage = data.usage;
+      const textOf = value => {
+        if (typeof value === 'string') return value;
+        if (Array.isArray(value)) return value.map(item => typeof item === 'string' ? item : item?.text || '').join('');
+        return '';
+      };
+      const reasoning = textOf(delta.reasoning_content || delta.reasoning);
+      const content = textOf(delta.content);
+      if (reasoning || content) onDelta({ reasoning, content });
+      return false;
+    };
+
+    let done = false;
+    while (!done) {
+      const result = await reader.read();
+      buffer += decoder.decode(result.value || new Uint8Array(), { stream: !result.done });
+      const events = buffer.split(/\r?\n\r?\n/);
+      buffer = events.pop() || '';
+      for (const event of events) {
+        if (handleEvent(event)) { done = true; break; }
+      }
+      if (result.done) {
+        if (buffer.trim()) handleEvent(buffer);
+        done = true;
+      }
+    }
+    return { finishReason, usage };
+  } catch (error) {
+    if (error?.name === 'AbortError') throw new Error('请求超时，请检查网络或稍后重试');
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function fetchAvailableModels(apiKey) {
   const data = await deepSeekRequest('/models', apiKey);
   const models = Array.isArray(data?.data)
@@ -267,7 +353,8 @@ async function fetchAvailableModels(apiKey) {
 function chooseModel(models, current) {
   if (current && models.includes(current)) return current;
   // 仅作为新模型列表中的偏好排序；实际可用模型永远以 /models 返回为准。
-  const preferred = ['deepseek-v4-pro', 'deepseek-v4-flash'];
+  // 周期总结优先选择响应更快的 Flash；用户已选中的模型仍然保留。
+  const preferred = ['deepseek-v4-flash', 'deepseek-v4-pro'];
   return preferred.find(x => models.includes(x)) || models[0];
 }
 
@@ -415,6 +502,11 @@ ipcMain.handle('export:run', async (_e, { start, end, format }) => {
 
 ipcMain.handle('ai:status', () => aiPublicState());
 
+ipcMain.handle('ai:reveal', () => {
+  const key = apiKeyFromStorage();
+  return key ? { ok: true, apiKey: key } : { ok: false, error: '本机安全存储中没有可读取的 API Key' };
+});
+
 ipcMain.handle('ai:test', async (_e, { apiKey } = {}) => {
   const suppliedKey = String(apiKey || '').trim();
   const key = suppliedKey || apiKeyFromStorage();
@@ -423,6 +515,7 @@ ipcMain.handle('ai:test', async (_e, { apiKey } = {}) => {
     const models = await fetchAvailableModels(key);
     const selected = chooseModel(models, settings.ai.model);
     const modelChanged = selected !== settings.ai.model;
+    settings.ai.models = models;
     if (suppliedKey) settings.ai.encryptedApiKey = encryptApiKey(suppliedKey);
     settings.ai.model = selected;
     settings.ai.lastTestAt = Date.now();
@@ -442,6 +535,7 @@ ipcMain.handle('ai:test', async (_e, { apiKey } = {}) => {
 ipcMain.handle('ai:clear', () => {
   settings.ai.encryptedApiKey = '';
   settings.ai.model = '';
+  settings.ai.models = [];
   settings.ai.lastTestAt = 0;
   settings.ai.lastTestOk = false;
   settings.ai.lastError = '';
@@ -452,6 +546,9 @@ ipcMain.handle('ai:clear', () => {
 ipcMain.handle('ai:setModel', (_e, { model } = {}) => {
   const value = String(model || '').trim();
   if (!value) return { ok: false, error: '模型名称不能为空' };
+  if (settings.ai.models.length && !settings.ai.models.includes(value)) {
+    return { ok: false, error: '该模型不在最近读取的可用列表中，请重新测试连接' };
+  }
   settings.ai.model = value;
   settings.ai.lastTestOk = false;
   settings.ai.lastError = '模型已更换，请重新测试连接';
@@ -475,7 +572,7 @@ ipcMain.handle('report:getCached', (_e, { start, end, periodType, template } = {
   return { ok: true, report: report || null };
 });
 
-ipcMain.handle('report:generate', async (_e, payload = {}) => {
+ipcMain.handle('report:generate', async (event, payload = {}) => {
   const { start, end, periodLabel, force } = payload;
   if (!start || !end || start > end) return { ok: false, error: '日期范围无效' };
   const periodType = reportTypeOrCustom(payload.periodType);
@@ -499,22 +596,29 @@ ipcMain.handle('report:generate', async (_e, payload = {}) => {
 
   const previousModel = settings.ai.model;
   const model = chooseModel(models, previousModel);
-  const cacheParams = { start, end, periodType, model, sourceHashValue, templateHashValue };
-  if (!force) {
-    const cached = findCachedReport(loadDB(), cacheParams);
-    if (cached) return { ok: true, cached: true, report: cached, models, modelChanged: previousModel !== model };
-  }
-
-  if (settings.ai.model !== model || !settings.ai.lastTestOk) {
+  const catalogChanged = JSON.stringify(settings.ai.models) !== JSON.stringify(models);
+  settings.ai.models = models;
+  if (settings.ai.model !== model || !settings.ai.lastTestOk || catalogChanged) {
     settings.ai.model = model;
     settings.ai.lastTestAt = Date.now();
     settings.ai.lastTestOk = true;
     settings.ai.lastError = '';
     saveSettings();
   }
+  const cacheParams = { start, end, periodType, model, sourceHashValue, templateHashValue };
+  if (!force) {
+    const cached = findCachedReport(loadDB(), cacheParams);
+    if (cached) return { ok: true, cached: true, report: cached, models, modelChanged: previousModel !== model };
+  }
 
   try {
-    const response = await deepSeekRequest('/chat/completions', key, {
+    const notify = progress => {
+      if (event.sender && !event.sender.isDestroyed()) event.sender.send('report:progress', progress);
+    };
+    let reasoningContent = '';
+    let aiContent = '';
+    notify({ phase: 'thinking', model });
+    const streamResult = await deepSeekStream('/chat/completions', key, {
       method: 'POST',
       body: JSON.stringify({
         model,
@@ -525,15 +629,28 @@ ipcMain.handle('report:generate', async (_e, payload = {}) => {
           },
           { role: 'user', content: buildPrompt({ start, end, periodLabel, template, sources }) }
         ],
-        stream: false,
+        thinking: { type: 'enabled' },
+        reasoning_effort: 'high',
+        stream: true,
+        stream_options: { include_usage: true },
         max_tokens: 8192
       })
+    }, delta => {
+      if (delta.reasoning) {
+        reasoningContent += delta.reasoning;
+        notify({ phase: 'thinking', text: delta.reasoning });
+      }
+      if (delta.content) {
+        aiContent += delta.content;
+        notify({ phase: 'writing', text: delta.content });
+      }
     });
-    const generated = response?.choices?.[0]?.message?.content;
-    const aiContent = Array.isArray(generated)
-      ? generated.map(x => typeof x === 'string' ? x : x?.text || '').join('')
-      : String(generated || '').trim();
-    if (!aiContent) throw new Error('AI 没有返回总结内容');
+    aiContent = aiContent.trim();
+    if (!aiContent) {
+      const reason = streamResult.finishReason === 'length' ? 'AI 输出达到上限，没有形成完整总结' : 'AI 没有返回总结正文';
+      throw new Error(reason);
+    }
+    notify({ phase: 'done', reasoningLength: reasoningContent.length, contentLength: aiContent.length });
 
     const covered = coveredRefs(aiContent, sources);
     const db = loadDB();
@@ -559,6 +676,9 @@ ipcMain.handle('report:generate', async (_e, payload = {}) => {
     settings.ai.lastTestOk = false;
     settings.ai.lastError = error?.message || '生成总结失败';
     saveSettings();
+    if (event.sender && !event.sender.isDestroyed()) {
+      event.sender.send('report:progress', { phase: 'error', error: settings.ai.lastError });
+    }
     return { ok: false, error: settings.ai.lastError };
   }
 });

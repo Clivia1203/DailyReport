@@ -111,7 +111,19 @@
 
         <div class="report-status" id="report-status"></div>
 
-        <div class="report-layout">
+        <section class="card report-thinking" id="report-thinking" hidden>
+          <div class="report-thinking-head">
+            <div>
+              <span class="report-thinking-title">AI 工作过程</span>
+              <span class="report-thinking-status" id="report-thinking-status">正在连接…</span>
+            </div>
+            <button class="link-btn" id="report-thinking-toggle">收起</button>
+          </div>
+          <div class="report-thinking-note">以下内容是模型返回的思考过程，仅用于显示生成进度，不会写入总结或导出文件。</div>
+          <pre class="report-thinking-content" id="report-thinking-content"></pre>
+        </section>
+
+        <div class="report-layout" id="report-layout">
           <section class="card report-card report-full" id="report-full">
             <div class="report-card-head">
               <div>
@@ -135,6 +147,8 @@
             <div class="report-compact-meta" id="report-compact-meta">尚未生成</div>
             <button class="btn primary" id="report-open-modal">打开完整总结</button>
           </section>
+
+          <div class="report-resizer" id="report-resizer" role="separator" aria-orientation="vertical" aria-label="调整原始记录栏宽度" title="拖动调整原始记录栏宽度"></div>
 
           <aside class="report-side">
             <div class="card report-side-card">
@@ -166,15 +180,20 @@
           <div class="set-title">AI 服务</div>
           <div class="set-row">
             <div class="set-info">DeepSeek API
-              <div class="set-sub">使用你自己的 API Key。Key 只保存在本机 Windows 安全存储中，不会显示在页面里。</div>
+              <div class="set-sub">使用你自己的 API Key。Key 保存在本机 Windows 安全存储中，页面默认只显示掩码。</div>
             </div>
             <span class="ai-state-badge" id="ai-state-badge">未配置</span>
           </div>
           <div class="set-row ai-key-row">
             <div class="set-info">API Key
-              <div class="set-sub">首次配置或更换 Key 时填写；已配置时可以留空。</div>
+              <div class="set-sub">已保存的 Key 默认掩码显示；点击眼睛可临时查看，输入新 Key 可替换。</div>
             </div>
-            <input type="password" id="ai-key" class="ai-key-input" placeholder="sk-…" autocomplete="off">
+            <div class="ai-key-control">
+              <input type="password" id="ai-key" class="ai-key-input" placeholder="sk-…" autocomplete="off">
+              <button type="button" class="icon-btn ai-key-toggle" id="ai-key-toggle" title="显示 API Key" aria-label="显示 API Key">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6S2 12 2 12z"/><circle cx="12" cy="12" r="2.5"/></svg>
+              </button>
+            </div>
           </div>
           <div class="set-row">
             <div class="set-info">可用模型
