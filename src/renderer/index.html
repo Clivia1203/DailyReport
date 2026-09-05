@@ -99,14 +99,15 @@
             <span>→</span>
             <input type="date" id="report-end" title="结束日期">
           </div>
-          <span class="export-spacer"></span>
-          <select id="report-format" title="显示格式">
-            <option value="md">Markdown</option>
-            <option value="txt">纯文本</option>
-          </select>
-          <button class="btn small" id="report-copy">复制</button>
-          <button class="btn small" id="report-export">导出总结</button>
-          <button class="btn small primary" id="report-generate">生成总结</button>
+          <div class="report-actions">
+            <select id="report-format" title="显示格式">
+              <option value="md">Markdown</option>
+              <option value="txt">纯文本</option>
+            </select>
+            <button class="btn small" id="report-copy">复制</button>
+            <button class="btn small" id="report-export">导出总结</button>
+            <button class="btn small primary" id="report-generate">生成总结</button>
+          </div>
         </div>
 
         <div class="report-status" id="report-status"></div>
@@ -140,12 +141,6 @@
               <button class="btn small" id="report-edit-cancel">取消</button>
               <button class="btn small primary" id="report-edit-save">保存修改</button>
             </div>
-          </section>
-
-          <section class="card report-compact" id="report-compact">
-            <div class="report-compact-title">本周期工作总结</div>
-            <div class="report-compact-meta" id="report-compact-meta">尚未生成</div>
-            <button class="btn primary" id="report-open-modal">打开完整总结</button>
           </section>
 
           <div class="report-resizer" id="report-resizer" role="separator" aria-orientation="vertical" aria-label="调整原始记录栏宽度" title="拖动调整原始记录栏宽度"></div>
@@ -325,21 +320,6 @@
         <button class="btn" id="export-cancel">取消</button>
         <button class="btn primary" id="btn-export">导出文件</button>
       </div>
-    </div>
-  </div>
-
-  <!-- 周期总结窄窗口查看弹窗 -->
-  <div class="modal-backdrop" id="report-modal" hidden>
-    <div class="modal card report-modal" role="dialog" aria-label="周期总结">
-      <div class="modal-head">
-        <span class="modal-title">周期总结</span>
-        <button class="icon-btn" id="report-modal-close" title="关闭">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-        </button>
-      </div>
-      <div class="report-meta" id="report-modal-meta"></div>
-      <div class="report-content" id="report-modal-content"></div>
-      <textarea class="report-editor" id="report-modal-editor" hidden></textarea>
     </div>
   </div>
 

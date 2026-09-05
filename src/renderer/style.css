@@ -710,6 +710,7 @@ input::placeholder { color: var(--text-3); }
 .report-period select { min-width: 92px; }
 .report-dates { color: var(--text-3); }
 .report-dates[hidden] { display:none; }
+.report-actions { display:flex; align-items:center; gap:10px; margin-left:auto; }
 .small-icon { width:32px; height:32px; font-size:16px; }
 .small-icon:disabled { opacity:.35; cursor:not-allowed; }
 
@@ -747,8 +748,8 @@ input::placeholder { color: var(--text-3); }
   padding:18px 20px 14px; border-bottom:1px solid var(--border);
 }
 .report-title { font-size:20px; font-weight:700; line-height:1.35; }
-.report-meta, .report-compact-meta { margin-top:6px; color:var(--text-3); font-size:12px; line-height:1.6; }
-.report-content { padding:20px; line-height:1.75; }
+.report-meta { margin-top:6px; color:var(--text-3); font-size:12px; line-height:1.6; overflow-wrap:anywhere; }
+.report-content { padding:20px; line-height:1.75; overflow-wrap:anywhere; word-break:break-word; }
 .report-content h1, .report-content h2, .report-content h3,
 .report-content h4, .report-content h5, .report-content h6 { margin:18px 0 7px; line-height:1.4; }
 .report-content h1:first-child, .report-content h2:first-child { margin-top:0; }
@@ -769,10 +770,8 @@ input::placeholder { color: var(--text-3); }
 .report-side-head { display:flex; align-items:center; justify-content:space-between; }
 .report-source-entry { display:flex; align-items:flex-start; gap:8px; padding:10px 0; border-top:1px solid var(--border); line-height:1.55; }
 .report-source-entry .entry-time { font-size:10px; padding:2px 5px; margin-top:2px; }
+.report-source-entry > span:last-child { min-width:0; overflow-wrap:anywhere; word-break:break-word; }
 .report-source-empty { color:var(--text-3); font-size:12px; padding:10px 0; }
-.report-compact { display:none; padding:20px; flex-direction:column; justify-content:center; gap:12px; }
-.report-compact-title { font-size:18px; font-weight:700; }
-.report-compact .btn { align-self:flex-start; }
 .report-resizer {
   width:8px; min-height:80px; border-radius:8px;
   cursor:col-resize; background:transparent;
@@ -784,8 +783,6 @@ input::placeholder { color: var(--text-3); }
 }
 .report-resizer:hover, .report-resizer.dragging { background:var(--accent-soft); }
 .report-resizer:hover::after, .report-resizer.dragging::after { background:var(--accent); }
-.report-modal { max-height:min(760px, calc(100vh - 48px)); overflow:auto; }
-.report-modal .report-content { padding-top:4px; }
 
 /* ---------- AI 设置与总结模板 ---------- */
 
@@ -809,24 +806,26 @@ input::placeholder { color: var(--text-3); }
 .template-foot .set-sub { flex:1; margin-top:0; }
 
 @media (max-width: 1199px) {
-  .report-layout { display:block; }
-  .report-full { display:none; }
-  .report-compact { display:flex; min-height:180px; }
-  .report-resizer { display:none; }
-  .report-side { display:none; }
-}
-
-@media (min-width: 1200px) {
-  .report-compact { display:none !important; }
+  #view-report { overflow-y:auto; overflow-x:hidden; padding-bottom:20px; }
+  #view-report .report-layout {
+    flex:none; min-height:auto; display:flex; flex-direction:column; gap:14px;
+  }
+  #view-report .report-card { display:block; overflow:visible; }
+  #view-report .report-resizer { display:none; }
+  #view-report .report-side { display:flex; overflow:visible; }
+  #view-report .report-side-card { flex:none; width:100%; }
 }
 
 @media (max-width: 760px) {
   .report-toolbar { gap:7px; }
-  .report-toolbar .export-spacer { display:none; }
+  .report-actions { width:100%; margin-left:0; gap:7px; }
+  .report-actions select { flex:1; min-width:0; }
+  .report-actions .btn { flex:1; min-width:0; padding-left:9px; padding-right:9px; }
   .report-dates { order:3; width:100%; }
   .report-dates input { flex:1; min-width:0; }
+  #view-report .settings-head { flex-wrap:wrap; }
+  #view-report .report-connection { max-width:calc(100% - 52px); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .report-title { font-size:18px; }
-  .report-modal { width:calc(100vw - 32px); padding:14px; }
   .report-card-head { padding:16px; }
   .report-content { padding:16px; }
   .report-editor { padding:16px; }

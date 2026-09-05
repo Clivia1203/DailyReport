@@ -278,9 +278,6 @@ async function saveComposer() {
 /* ---------- 导出模态 ---------- */
 
 const exportModal = $('#export-modal');
-const reportModal = $('#report-modal');
-const reportModalContent = $('#report-modal-content');
-const reportModalMeta = $('#report-modal-meta');
 
 function openExportModal() {
   exportModal.hidden = false;
@@ -295,7 +292,7 @@ function closeExportModal() {
 
 // 任一模窗打开时，请主进程把标题栏控制按钮区染成遮罩色（视觉遮盖）
 function syncModalCover() {
-  window.api.setModalCover(!composerModal.hidden || !exportModal.hidden || !reportModal.hidden);
+  window.api.setModalCover(!composerModal.hidden || !exportModal.hidden);
 }
 
 $('#btn-export-open').addEventListener('click', openExportModal);
@@ -368,8 +365,6 @@ const reportEdit = $('#report-edit');
 const reportEditFoot = $('#report-edit-foot');
 const reportEditCancel = $('#report-edit-cancel');
 const reportEditSave = $('#report-edit-save');
-const reportCompact = $('#report-compact');
-const reportCompactMeta = $('#report-compact-meta');
 const reportCount = $('#report-count');
 const reportCoverage = $('#report-coverage');
 const reportModel = $('#report-model');
@@ -695,15 +690,8 @@ function renderReportState(message) {
   reportContent.hidden = state.report.editing;
   reportEditor.hidden = !data || !state.report.editing;
   reportEditFoot.hidden = !data || !state.report.editing;
-  reportCompact.hidden = window.innerWidth >= 1200;
-  $('#report-open-modal').disabled = !data;
-  reportCompactMeta.textContent = data
-    ? `${incomplete ? '部分完成' : '已生成'} · AI ${data.coveredCount}/${data.sourceCount} · 明细 ${rawRecordLabel}`
-    : '尚未生成';
   if (data && !state.report.editing) {
     renderReportContent(reportContent, data.content);
-    renderReportContent(reportModalContent, data.content);
-    reportModalMeta.textContent = reportMeta.textContent;
   } else if (!data && !state.report.editing) {
     reportContent.innerHTML = '';
     const empty = document.createElement('div');
@@ -878,9 +866,6 @@ reportEditSave.addEventListener('click', async () => {
   state.report.editing = false;
   renderReportState('总结修改已保存。');
 });
-$('#report-open-modal').addEventListener('click', () => { reportModal.hidden = false; syncModalCover(); });
-$('#report-modal-close').addEventListener('click', () => { reportModal.hidden = true; syncModalCover(); });
-reportModal.addEventListener('click', e => { if (e.target === reportModal) { reportModal.hidden = true; syncModalCover(); } });
 reportThinkingToggle.addEventListener('click', () => {
   state.report.thinking.open = !state.report.thinking.open;
   renderReportThinking();
