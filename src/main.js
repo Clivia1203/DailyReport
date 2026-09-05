@@ -13,6 +13,10 @@ const DEFAULT_HOTKEY = 'Alt+Shift+D';
 // 多出的透明区域用来容纳 CSS 阴影，避免阴影被窗口边界切成方形
 const QUICK_SIZE = { width: 736, height: 176 };
 
+// 关闭 GPU 加速：透明小窗在部分机器上偶发 DWM 合成闪烁（弹出瞬间黑/白块）。
+// 本应用界面简单，软件渲染完全够用，以此换取透明窗口的显示稳定性。
+app.disableHardwareAcceleration();
+
 const gotLock = app.requestSingleInstanceLock();
 if (!gotLock) {
   app.quit();
@@ -359,7 +363,7 @@ function hideQuickAnimated() {
   quickHideTimer = setTimeout(() => {
     quickHideTimer = null;
     hideQuickNow();
-  }, 400);
+  }, 1200);  // 页面正常会在 150ms 回执；此兜底仅防渲染层失联，宁长勿短
 }
 
 function initHotkey() {
@@ -460,7 +464,8 @@ function createQuickWindow() {
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
-      nodeIntegration: false
+      nodeIntegration: false,
+      backgroundThrottling: false  // 隐藏时不节流渲染：保证退场动画播完、末帧恒为透明
     }
   });
   quickWindow.loadFile(path.join(__dirname, 'renderer', 'quick.html'));
