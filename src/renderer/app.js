@@ -28,6 +28,12 @@ const state = {
       continuation: 0,
       maxContinuations: 0,
       progressNote: '',
+      reasoningLength: 0,
+      contentLength: 0,
+      sourceCount: 0,
+      coveredCount: 0,
+      rawRecordCount: 0,
+      finishReason: '',
       startedAt: 0
     }
   }
@@ -352,6 +358,7 @@ const reportThinking = $('#report-thinking');
 const reportThinkingStatus = $('#report-thinking-status');
 const reportThinkingToggle = $('#report-thinking-toggle');
 const reportThinkingContent = $('#report-thinking-content');
+const reportThinkingNote = $('#report-thinking-note');
 const reportTitle = $('#report-title');
 const reportMeta = $('#report-meta');
 const reportContent = $('#report-content');
@@ -525,18 +532,26 @@ function renderReportThinking() {
   const thinking = state.report.thinking;
   reportThinking.hidden = !thinking.visible;
   reportThinkingContent.hidden = !thinking.open;
-  reportThinkingToggle.textContent = thinking.open ? '收起' : '查看思考过程';
+  reportThinkingToggle.textContent = thinking.open ? '收起详细过程' : '查看详细过程';
   reportThinkingToggle.setAttribute('aria-expanded', String(thinking.open));
+  if (reportThinkingNote) {
+    reportThinkingNote.textContent = thinking.progressNote || '实时状态代表实际生成进度；详细过程仅用于查看，不会写入总结或导出文件。';
+  }
   const elapsed = thinking.startedAt ? Math.max(0, Math.floor((Date.now() - thinking.startedAt) / 1000)) : 0;
   const segmentLabel = thinking.totalSegments > 1 && thinking.segment
     ? ` · 第 ${thinking.segment}/${thinking.totalSegments} 段`
     : '';
+  const outputLength = thinking.contentLength || thinking.content.length;
+  const outputLabel = outputLength > 0 ? ` · 已收到 ${outputLength} 字` : '';
   if (thinking.phase === 'segment') reportThinkingStatus.textContent = `准备生成总结${segmentLabel} · ${elapsed}s`;
   else if (thinking.phase === 'thinking') reportThinkingStatus.textContent = `AI 正在思考${segmentLabel} · ${elapsed}s`;
-  else if (thinking.phase === 'writing') reportThinkingStatus.textContent = `正在输出总结${segmentLabel} · ${elapsed}s`;
+  else if (thinking.phase === 'writing') reportThinkingStatus.textContent = `正在输出总结${segmentLabel}${outputLabel} · ${elapsed}s`;
   else if (thinking.phase === 'continuing') reportThinkingStatus.textContent = `正在续写第 ${thinking.continuation}/${thinking.maxContinuations} 次${segmentLabel} · ${elapsed}s`;
   else if (thinking.phase === 'recovering') reportThinkingStatus.textContent = `正在恢复流式输出${segmentLabel} · ${elapsed}s`;
   else if (thinking.phase === 'fallback') reportThinkingStatus.textContent = `正在切换兼容输出模式${segmentLabel} · ${elapsed}s`;
+  else if (thinking.phase === 'stream-done') reportThinkingStatus.textContent = `正文输出完成，准备保存 · ${elapsed}s`;
+  else if (thinking.phase === 'saving') reportThinkingStatus.textContent = `正在保存完整报告 · ${elapsed}s`;
+  else if (thinking.phase === 'saved') reportThinkingStatus.textContent = `报告已保存 · ${elapsed}s`;
   else if (thinking.phase === 'done') reportThinkingStatus.textContent = `已完成 · ${elapsed}s`;
   else if (thinking.phase === 'incomplete') reportThinkingStatus.textContent = `已保存部分结果 · ${elapsed}s`;
   else if (thinking.phase === 'error') reportThinkingStatus.textContent = '生成失败';
@@ -553,7 +568,7 @@ function beginReportThinking() {
   clearInterval(reportThinkingTimer);
   state.report.thinking = {
     visible: true,
-    open: true,
+    open: false,
     phase: 'thinking',
     text: '',
     content: '',
@@ -561,7 +576,13 @@ function beginReportThinking() {
     totalSegments: 0,
     continuation: 0,
     maxContinuations: 0,
-    progressNote: '',
+    progressNote: '正在连接 DeepSeek，准备分析原始记录…',
+    reasoningLength: 0,
+    contentLength: 0,
+    sourceCount: 0,
+    coveredCount: 0,
+    rawRecordCount: 0,
+    finishReason: '',
     startedAt: Date.now()
   };
   renderReportThinking();
@@ -591,7 +612,14 @@ window.api.onReportProgress(progress => {
   if (Number.isFinite(progress.totalSegments)) thinking.totalSegments = progress.totalSegments;
   if (Number.isFinite(progress.continuation)) thinking.continuation = progress.continuation;
   if (Number.isFinite(progress.maxContinuations)) thinking.maxContinuations = progress.maxContinuations;
-  if (progress.phase === 'thinking' || progress.phase === 'writing' || progress.phase === 'segment' || progress.phase === 'continuing' || progress.phase === 'recovering' || progress.phase === 'fallback') {
+  if (Number.isFinite(progress.reasoningLength)) thinking.reasoningLength = progress.reasoningLength;
+  if (Number.isFinite(progress.contentLength)) thinking.contentLength = progress.contentLength;
+  if (Number.isFinite(progress.sourceCount)) thinking.sourceCount = progress.sourceCount;
+  if (Number.isFinite(progress.coveredCount)) thinking.coveredCount = progress.coveredCount;
+  if (Number.isFinite(progress.rawRecordCount)) thinking.rawRecordCount = progress.rawRecordCount;
+  if (progress.finishReason) thinking.finishReason = progress.finishReason;
+  const livePhases = ['thinking', 'writing', 'segment', 'continuing', 'recovering', 'fallback', 'stream-done', 'saving', 'saved'];
+  if (livePhases.includes(progress.phase)) {
     thinking.phase = progress.phase;
   }
   if (progress.text) {
@@ -599,7 +627,23 @@ window.api.onReportProgress(progress => {
     else if (progress.phase === 'thinking') thinking.text += progress.text;
     else thinking.progressNote = progress.text;
   }
+  if (progress.phase === 'segment') {
+    thinking.progressNote = `正在分析第 ${progress.segment || 1}/${progress.totalSegments || 1} 段原始记录…`;
+  } else if (progress.phase === 'thinking') {
+    thinking.progressNote = `AI 正在分析第 ${progress.segment || 1}/${progress.totalSegments || 1} 段记录…`;
+  } else if (progress.phase === 'writing') {
+    thinking.progressNote = `正在接收总结正文，已收到 ${thinking.content.length} 字…`;
+  } else if (progress.phase === 'continuing') {
+    thinking.progressNote = `单次输出达到上限，正在续写第 ${progress.continuation || 1}/${progress.maxContinuations || 1} 次…`;
+  } else if (progress.phase === 'stream-done') {
+    thinking.progressNote = '正文流式输出完成，准备保存完整报告…';
+  } else if (progress.phase === 'saving') {
+    thinking.progressNote = '正在保存报告正文、完整性清单和原始记录明细…';
+  } else if (progress.phase === 'saved') {
+    thinking.progressNote = '报告已保存，可以查看、编辑或导出。';
+  }
   if (progress.phase === 'done') {
+    // 兼容旧版主进程发送的 done 事件；新版会继续发送 saved。
     thinking.phase = 'done';
     thinking.progressNote = progress.complete === false
       ? (progress.finishReason === 'stream_error'
@@ -618,18 +662,31 @@ function renderReportState(message) {
   const data = state.report.data;
   const incompleteCoverage = data && data.sourceCount > 0 && data.coveredCount < data.sourceCount;
   const incompleteOutput = data?.complete === false;
-  const incomplete = incompleteOutput || incompleteCoverage;
+  const audit = Array.isArray(data?.sourceAudit) ? data.sourceAudit : null;
+  const missingRefs = audit ? audit.filter(item => !item.cited).map(item => item.ref) : [];
+  const missingRawRefs = audit ? audit.filter(item => !item.rawPreserved).map(item => item.ref) : [];
+  const auditMessage = [
+    missingRefs.length ? `AI 正文未引用：${missingRefs.join('、')}` : '',
+    missingRawRefs.length ? `原始明细未完整保留：${missingRawRefs.join('、')}` : ''
+  ].filter(Boolean).join('；');
+  const auditIncomplete = !!auditMessage;
+  const incomplete = incompleteOutput || incompleteCoverage || auditIncomplete;
   const incompleteOutputMessage = data?.finishReason === 'stream_error'
     ? '本次流式连接中断，已保存已经收到的部分结果；全部原始记录仍已附在文末，可重新生成。'
     : '本次总结已保存为部分结果，可能触及单次输出上限；全部原始记录仍已附在文末，可重新生成或缩短周期。';
+  const rawRecordLabel = data
+    ? (Number.isFinite(data.rawRecordCount) ? `${data.rawRecordCount} / ${data.sourceCount}` : '已附加')
+    : '--';
   reportTitle.textContent = reportPeriodLabel();
   reportMeta.textContent = data
-    ? `周期：${data.start} 至 ${data.end}　·　来源：${data.sourceCount} 条　·　AI 归纳覆盖：${data.coveredCount} / ${data.sourceCount}　·　模型：${data.model}`
+    ? `周期：${data.start} 至 ${data.end}　·　来源：${data.sourceCount} 条　·　AI 归纳覆盖：${data.coveredCount} / ${data.sourceCount}　·　原始明细：${rawRecordLabel}　·　模型：${data.model}`
     : '尚未生成本周期总结';
   reportCoverage.textContent = data ? `${data.coveredCount} / ${data.sourceCount}` : '--';
   reportModel.textContent = data?.model || state.settings?.ai?.model || '--';
   reportStatus.textContent = message || (incompleteOutput
     ? incompleteOutputMessage
+    : auditMessage
+    ? auditMessage
     : incompleteCoverage
     ? 'AI 正文未逐条引用全部来源；完整原始记录明细已附在文末，请核对后再提交。'
     : data ? '总结正文与原始记录明细均已保留，可继续编辑或导出。' : '选择周期后点击“生成总结”。');
@@ -641,7 +698,7 @@ function renderReportState(message) {
   reportCompact.hidden = window.innerWidth >= 1200;
   $('#report-open-modal').disabled = !data;
   reportCompactMeta.textContent = data
-    ? `${incomplete ? '部分完成' : '已生成'} · ${data.coveredCount} / ${data.sourceCount} 条记录已覆盖`
+    ? `${incomplete ? '部分完成' : '已生成'} · AI ${data.coveredCount}/${data.sourceCount} · 明细 ${rawRecordLabel}`
     : '尚未生成';
   if (data && !state.report.editing) {
     renderReportContent(reportContent, data.content);
@@ -731,11 +788,15 @@ async function generateReport(force = false) {
   }
   const incompleteOutput = res.report.complete === false;
   const incompleteCoverage = res.report.sourceCount > 0 && res.report.coveredCount < res.report.sourceCount;
-  finishReportThinking(incompleteOutput || incompleteCoverage ? 'incomplete' : 'done');
+  const auditIncomplete = Array.isArray(res.report.sourceAudit)
+    && res.report.sourceAudit.some(item => !item.cited || !item.rawPreserved);
+  finishReportThinking(incompleteOutput || incompleteCoverage || auditIncomplete ? 'incomplete' : 'done');
   const coverageNote = incompleteOutput
     ? (res.report.finishReason === 'stream_error'
       ? '总结已保存为部分结果，流式连接曾中断；全部原始记录已保留，可重新生成。'
       : '总结已保存为部分结果，可能触及单次输出上限；全部原始记录已保留，可重新生成或缩短周期。')
+    : auditIncomplete
+    ? '完整性检查发现部分来源需要核对；原始记录明细已保留，可编辑后再导出。'
     : incompleteCoverage
     ? 'AI 正文覆盖不完整，但全部原始记录已自动附在文末，请核对。'
     : '总结已生成，已保留全部原始记录。';

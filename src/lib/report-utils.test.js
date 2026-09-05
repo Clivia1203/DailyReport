@@ -5,6 +5,7 @@ const {
   splitSources,
   buildPrompt,
   coveredRefs,
+  auditSourceRecords,
   appendRawRecords,
   markdownToText
 } = require('./report-utils');
@@ -49,6 +50,8 @@ test('buildPrompt: 包含模板、周期和全部原始记录编号', () => {
   assert.match(prompt, /按完成\/问题\/计划分组/);
   assert.match(prompt, /\[R001\].*完成接口联调/);
   assert.match(prompt, /\[R002\].*修复导出问题/);
+  assert.match(prompt, /原始记录未明确/);
+  assert.match(prompt, /只输出一个最终版本/);
 });
 
 test('buildPrompt: 长周期分段明确只整理当前记录组', () => {
@@ -74,6 +77,15 @@ test('appendRawRecords: 无论 AI 正文如何改写都附带完整原始记录'
   assert.match(output, /## 原始记录明细/);
   assert.match(output, /09:12  完成接口联调/);
   assert.match(output, /13:40  修复导出问题/);
+});
+
+test('auditSourceRecords: 分别检查 AI 引用和原始明细保留', () => {
+  const sources = sourceBundle(entries);
+  const output = appendRawRecords('## 本周完成\n- 已完成接口工作 [R001]', sources);
+  assert.deepEqual(auditSourceRecords('已完成接口工作 [R001]', output, sources), [
+    { ref: 'R001', cited: true, rawPreserved: true },
+    { ref: 'R002', cited: false, rawPreserved: true }
+  ]);
 });
 
 test('markdownToText: 纯文本显示去除 Markdown 标记但保留内容', () => {

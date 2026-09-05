@@ -12,6 +12,7 @@ const {
   splitSources,
   buildPrompt,
   coveredRefs,
+  auditSourceRecords,
   appendRawRecords,
   markdownToText,
   sourceHash,
@@ -440,6 +441,11 @@ function reportMaxOutputTokens(model) {
   return REPORT_MAX_OUTPUT_TOKENS;
 }
 
+function reportReasoningEffort(segmentCount) {
+  // 普通日报/周报以较低思考强度换取更快、更稳定的正文输出；长周期分段才提高到中等。
+  return segmentCount > 1 ? 'medium' : 'low';
+}
+
 function canRetryWithSmallerOutput(error, receivedContent) {
   if (receivedContent) return false;
   const message = String(error?.message || '').toLowerCase();
@@ -447,7 +453,7 @@ function canRetryWithSmallerOutput(error, receivedContent) {
 }
 
 function reportSystemPrompt() {
-  return '你是一个严谨的工作总结整理助手。你只能基于用户提供的原始记录进行归纳和语言润色，不能编造、扩写或删除事实。总结正文必须覆盖每一条来源记录；如果多条记录属于同一事项，可以合并表达，但必须保留所有任务细节、结果、问题和时间线。';
+  return '你是一个严谨的工作总结整理助手。你只能基于用户提供的原始记录进行归纳和语言润色，不能编造、扩写或删除事实。总结正文必须覆盖每一条来源记录；如果多条记录属于同一事项，可以合并表达，但必须保留所有任务细节、结果、问题和时间线。最终正文只能输出一个版本，不要把分析过程、候选稿、自我检查或选择理由写进正文。';
 }
 
 function reportSegmentLabel(sources, index) {
@@ -474,6 +480,7 @@ async function generateReportSegment({ key, model, prompt, segmentIndex, segment
   let finishReason = '';
   let usage = null;
   let maxTokens = reportMaxOutputTokens(model);
+  const reasoningEffort = reportReasoningEffort(segmentCount);
   let messages = [
     { role: 'system', content: system },
     { role: 'user', content: prompt }
@@ -507,7 +514,7 @@ async function generateReportSegment({ key, model, prompt, segmentIndex, segment
           model,
           messages,
           ...(thinkingEnabled
-            ? { thinking: { type: 'enabled' }, reasoning_effort: continuationCount === 0 ? 'high' : 'low' }
+            ? { thinking: { type: 'enabled' }, reasoning_effort: continuationCount === 0 ? reasoningEffort : 'low' }
             : { thinking: { type: 'disabled' } }),
           stream: true,
           stream_options: { include_usage: true },
@@ -891,19 +898,31 @@ ipcMain.handle('report:generate', async (event, payload = {}) => {
 
     const aiContent = combineReportSegments(segments);
     if (!aiContent) throw new Error('AI 没有返回总结正文');
-    const covered = coveredRefs(aiContent, sources);
+    const finalContent = appendRawRecords(aiContent, sources);
+    const sourceAudit = auditSourceRecords(aiContent, finalContent, sources);
+    const coveredCount = sourceAudit.filter(item => item.cited).length;
+    const rawRecordCount = sourceAudit.filter(item => item.rawPreserved).length;
     const truncated = segments.some(segment => segment.finishReason === 'length');
     const naturallyCompleted = segments.every(segment => segment.finishReason === 'stop');
-    const complete = naturallyCompleted && !truncated && covered.length === sources.length;
+    const complete = naturallyCompleted
+      && !truncated
+      && sourceAudit.every(item => item.cited && item.rawPreserved);
     const finishReason = truncated ? 'length' : (naturallyCompleted ? 'stop' : segments[segments.length - 1]?.finishReason || 'unknown');
-    notify({
-      phase: 'done',
+    const progressDetails = {
       reasoningLength: segments.reduce((sum, segment) => sum + segment.reasoningLength, 0),
       contentLength: aiContent.length,
       segmentCount: segments.length,
       continuationCount: segments.reduce((sum, segment) => sum + segment.continuationCount, 0),
       finishReason,
-      complete
+      complete,
+      sourceCount: sources.length,
+      coveredCount,
+      rawRecordCount,
+      missingRefs: sourceAudit.filter(item => !item.cited).map(item => item.ref)
+    };
+    notify({
+      phase: 'stream-done',
+      ...progressDetails
     });
 
     const db = loadDB();
@@ -917,7 +936,9 @@ ipcMain.handle('report:generate', async (event, payload = {}) => {
       model,
       template,
       sourceCount: sources.length,
-      coveredCount: covered.length,
+      coveredCount,
+      rawRecordCount,
+      sourceAudit,
       complete,
       finishReason,
       segmentCount: segments.length,
@@ -929,13 +950,15 @@ ipcMain.handle('report:generate', async (event, payload = {}) => {
         continuationCount: segment.continuationCount,
         finishReason: segment.finishReason
       })),
-      content: appendRawRecords(aiContent, sources),
+      content: finalContent,
       createdAt: Date.now(),
       updatedAt: Date.now()
     };
+    notify({ phase: 'saving', ...progressDetails });
     persistReportContent(report);
     db.reports.push(report);
     saveDB(db);
+    notify({ phase: 'saved', ...progressDetails });
     return { ok: true, cached: false, report: reportForClient(report), models, modelChanged: previousModel !== model };
   } catch (error) {
     settings.ai.lastTestOk = false;
@@ -953,8 +976,23 @@ ipcMain.handle('report:save', (_e, { id, content } = {}) => {
   const db = loadDB();
   const report = db.reports.find(x => x.id === id);
   if (!report) return { ok: false, error: '总结不存在或已被清理' };
+  const sources = sourceBundle(reportEntries(report.start, report.end));
+  const rawAudit = auditSourceRecords('', content, sources);
+  const previousAudit = new Map(Array.isArray(report.sourceAudit)
+    ? report.sourceAudit.map(item => [item.ref, item])
+    : []);
+  const hasLegacyCoverage = report.sourceCount > 0 && report.coveredCount >= report.sourceCount;
+  const sourceAudit = rawAudit.map(item => ({
+    ref: item.ref,
+    // 正文保存前已去除引用标记，编辑时沿用生成阶段的逐条引用结果，避免误报。
+    cited: previousAudit.get(item.ref)?.cited ?? hasLegacyCoverage,
+    rawPreserved: item.rawPreserved
+  }));
   report.content = content;
-  report.complete = true;
+  report.coveredCount = sourceAudit.filter(item => item.cited).length;
+  report.rawRecordCount = sourceAudit.filter(item => item.rawPreserved).length;
+  report.sourceAudit = sourceAudit;
+  report.complete = sourceAudit.every(item => item.cited && item.rawPreserved);
   report.finishReason = 'edited';
   report.updatedAt = Date.now();
   persistReportContent(report);

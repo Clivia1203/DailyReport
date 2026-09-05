@@ -89,7 +89,9 @@ function buildPrompt({ start, end, periodLabel, template, sources, segmentIndex 
     `1. 原始记录按 [R001]、[R002] 的形式提供；本${segmentCount > 1 ? '段' : '周期'}每一个来源编号都必须至少在总结正文中被引用一次。`,
     '2. 可以合并相近内容、调整语序和润色表达，但不能删除任务细节、结果、问题、时间线或事实。',
     '3. 不能根据常识推测原始记录没有提到的完成结果、原因、计划或风险。',
-    '4. 输出 Markdown 正文，不要输出解释、免责声明或“作为 AI”的话。',
+    '4. 如果原始记录没有明确说明完成状态、进行中状态或下一步计划，请写“原始记录未明确”，不要自行补充结论。',
+    '5. 每条来源在相关句末引用一次即可，不要为了重复覆盖而反复改写同一条记录。',
+    '6. 只输出一个最终版本的 Markdown 正文，不要输出分析过程、候选稿、选择理由或自我检查过程。',
     '',
     '原始记录：',
     sourceText
@@ -99,6 +101,20 @@ function buildPrompt({ start, end, periodLabel, template, sources, segmentIndex 
 function coveredRefs(content, sources) {
   const text = String(content || '');
   return sources.filter(s => new RegExp(`(?:\\[|【)${s.ref}(?:\\]|】)`).test(text));
+}
+
+/**
+ * 对每条来源做可解释的完整性检查：AI 正文是否引用，以及原始明细是否原样保留。
+ * 语义润色无法用字符串比较准确判断，因此这里只报告确定的事实，不伪造“语义 100% 一致”。
+ */
+function auditSourceRecords(aiContent, fullContent, sources) {
+  const citedRefs = new Set(coveredRefs(aiContent, sources).map(source => source.ref));
+  const fullText = String(fullContent || '');
+  return sources.map(source => ({
+    ref: source.ref,
+    cited: citedRefs.has(source.ref),
+    rawPreserved: fullText.includes(`- ${source.time}  ${source.text}`)
+  }));
 }
 
 function stripSourceRefs(content) {
@@ -160,6 +176,7 @@ module.exports = {
   splitSources,
   buildPrompt,
   coveredRefs,
+  auditSourceRecords,
   stripSourceRefs,
   appendRawRecords,
   markdownToText,
