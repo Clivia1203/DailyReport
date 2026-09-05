@@ -1,11 +1,22 @@
 const {
   app, BrowserWindow, Tray, Menu, globalShortcut, ipcMain, dialog,
-  nativeImage, nativeTheme, Notification, screen, shell
+  nativeImage, nativeTheme, Notification, screen, shell, safeStorage
 } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
 const buildXlsxBuffer = require('./lib/xlsx-export');
+const {
+  DEFAULT_REPORT_TEMPLATES,
+  sourceBundle,
+  buildPrompt,
+  coveredRefs,
+  appendRawRecords,
+  markdownToText,
+  sourceHash,
+  templateHash,
+  reportId
+} = require('./lib/report-utils');
 
 const ASSETS = path.join(__dirname, 'assets');
 const DEFAULT_HOTKEY = 'Alt+Shift+D';
@@ -15,6 +26,7 @@ const QUICK_SIZE = { width: 736, height: 176 };
 
 // 关闭 GPU 加速：透明小窗在部分机器上偶发 DWM 合成闪烁（弹出瞬间黑/白块）。
 // 本应用界面简单，软件渲染完全够用，以此换取透明窗口的显示稳定性。
+app.commandLine.appendSwitch('disable-gpu');
 app.disableHardwareAcceleration();
 
 const gotLock = app.requestSingleInstanceLock();
@@ -38,13 +50,26 @@ const DEFAULT_SETTINGS = {
   theme: 'auto',          // 'auto' | 'light' | 'dark'
   hotkey: DEFAULT_HOTKEY, // 唤起快速记录条的全局快捷键
   openAtLogin: false,     // 开机自启（写入系统启动项，默认关闭）
-  silentStart: false      // 静默启动：开机后仅驻留托盘，不显示主窗口
+  silentStart: false,     // 静默启动：开机后仅驻留托盘，不显示主窗口
+  ai: {
+    baseUrl: 'https://api.deepseek.com',
+    model: '',
+    encryptedApiKey: '',
+    lastTestAt: 0,
+    lastTestOk: false,
+    lastError: ''
+  },
+  reportTemplates: { ...DEFAULT_REPORT_TEMPLATES }
 };
 
 // 开机自启带 --hidden 参数（由 applyLoginItem 写入启动项），启动时据此静默驻留
 const startHidden = process.argv.includes('--hidden');
 
-let settings = { ...DEFAULT_SETTINGS };
+let settings = {
+  ...DEFAULT_SETTINGS,
+  ai: { ...DEFAULT_SETTINGS.ai },
+  reportTemplates: { ...DEFAULT_SETTINGS.reportTemplates }
+};
 
 function loadSettings() {
   try {
@@ -54,6 +79,21 @@ function loadSettings() {
       if (typeof s.hotkey === 'string' && s.hotkey) settings.hotkey = s.hotkey;
       if (typeof s.openAtLogin === 'boolean') settings.openAtLogin = s.openAtLogin;
       if (typeof s.silentStart === 'boolean') settings.silentStart = s.silentStart;
+      if (s.ai && typeof s.ai === 'object') {
+        if (typeof s.ai.baseUrl === 'string' && s.ai.baseUrl) settings.ai.baseUrl = s.ai.baseUrl;
+        if (typeof s.ai.model === 'string') settings.ai.model = s.ai.model;
+        if (typeof s.ai.encryptedApiKey === 'string') settings.ai.encryptedApiKey = s.ai.encryptedApiKey;
+        if (Number.isFinite(s.ai.lastTestAt)) settings.ai.lastTestAt = s.ai.lastTestAt;
+        if (typeof s.ai.lastTestOk === 'boolean') settings.ai.lastTestOk = s.ai.lastTestOk;
+        if (typeof s.ai.lastError === 'string') settings.ai.lastError = s.ai.lastError;
+      }
+      if (s.reportTemplates && typeof s.reportTemplates === 'object') {
+        for (const key of Object.keys(DEFAULT_REPORT_TEMPLATES)) {
+          if (typeof s.reportTemplates[key] === 'string' && s.reportTemplates[key].trim()) {
+            settings.reportTemplates[key] = s.reportTemplates[key];
+          }
+        }
+      }
     }
   } catch { /* 首次运行，使用默认设置 */ }
 }
@@ -113,9 +153,15 @@ function dataFile() {
 function loadDB() {
   try {
     const db = JSON.parse(fs.readFileSync(dataFile(), 'utf8'));
-    if (db && Array.isArray(db.entries)) return db;
+    if (db && Array.isArray(db.entries)) {
+      return {
+        version: 2,
+        entries: db.entries,
+        reports: Array.isArray(db.reports) ? db.reports : []
+      };
+    }
   } catch { /* 首次运行或文件损坏，返回空库 */ }
-  return { version: 1, entries: [] };
+  return { version: 2, entries: [], reports: [] };
 }
 
 function saveDB(db) {
@@ -144,6 +190,105 @@ function localTimeStr(ts) {
 
 function weekdayOf(dateStr) {
   return WEEKDAYS[new Date(dateStr + 'T00:00:00').getDay()];
+}
+
+/* ---------------- DeepSeek 与周期总结 ---------------- */
+
+const AI_TIMEOUT_MS = 45000;
+const REPORT_TYPES = new Set(['day', 'week', 'month', 'custom']);
+
+function apiKeyFromStorage() {
+  if (!settings.ai.encryptedApiKey) return '';
+  try {
+    if (!safeStorage.isEncryptionAvailable()) return '';
+    return safeStorage.decryptString(Buffer.from(settings.ai.encryptedApiKey, 'base64'));
+  } catch { return ''; }
+}
+
+function encryptApiKey(value) {
+  if (!safeStorage.isEncryptionAvailable()) {
+    throw new Error('Windows 安全存储暂不可用，请稍后重试');
+  }
+  return safeStorage.encryptString(value).toString('base64');
+}
+
+function aiPublicState(models = []) {
+  return {
+    configured: !!settings.ai.encryptedApiKey,
+    baseUrl: settings.ai.baseUrl,
+    model: settings.ai.model,
+    models,
+    lastTestAt: settings.ai.lastTestAt,
+    lastTestOk: settings.ai.lastTestOk,
+    lastError: settings.ai.lastError
+  };
+}
+
+async function deepSeekRequest(endpoint, apiKey, init = {}) {
+  if (typeof fetch !== 'function') throw new Error('当前运行环境不支持网络请求');
+  const base = String(settings.ai.baseUrl || 'https://api.deepseek.com').replace(/\/+$/, '');
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), AI_TIMEOUT_MS);
+  try {
+    const response = await fetch(base + endpoint, {
+      ...init,
+      signal: controller.signal,
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${apiKey}`,
+        ...(init.headers || {})
+      }
+    });
+    const raw = await response.text();
+    let data = null;
+    try { data = raw ? JSON.parse(raw) : null; } catch { /* 非 JSON 错误交给统一提示 */ }
+    if (!response.ok) {
+      const message = data?.error?.message || data?.message || `请求失败（HTTP ${response.status}）`;
+      throw new Error(message);
+    }
+    return data;
+  } catch (error) {
+    if (error?.name === 'AbortError') throw new Error('请求超时，请检查网络或稍后重试');
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function fetchAvailableModels(apiKey) {
+  const data = await deepSeekRequest('/models', apiKey);
+  const models = Array.isArray(data?.data)
+    ? data.data.map(x => typeof x === 'string' ? x : x?.id).filter(Boolean)
+    : [];
+  if (!models.length) throw new Error('接口已连接，但没有返回可用模型');
+  return [...new Set(models)];
+}
+
+function chooseModel(models, current) {
+  if (current && models.includes(current)) return current;
+  // 仅作为新模型列表中的偏好排序；实际可用模型永远以 /models 返回为准。
+  const preferred = ['deepseek-v4-pro', 'deepseek-v4-flash'];
+  return preferred.find(x => models.includes(x)) || models[0];
+}
+
+function reportEntries(start, end) {
+  return loadDB().entries.filter(entry => {
+    const day = localDateStr(entry.ts);
+    return day >= start && day <= end;
+  });
+}
+
+function reportCacheKey({ start, end, periodType, model, sourceHashValue, templateHashValue }) {
+  return [periodType, start, end, model, sourceHashValue, templateHashValue].join('|');
+}
+
+function findCachedReport(db, params) {
+  const key = reportCacheKey(params);
+  return db.reports.find(report => report.cacheKey === key) || null;
+}
+
+function reportTypeOrCustom(type) {
+  return REPORT_TYPES.has(type) ? type : 'custom';
 }
 
 function buildExport(entries, start, end, format) {
@@ -268,6 +413,183 @@ ipcMain.handle('export:run', async (_e, { start, end, format }) => {
   return { ok: true, filePath };
 });
 
+ipcMain.handle('ai:status', () => aiPublicState());
+
+ipcMain.handle('ai:test', async (_e, { apiKey } = {}) => {
+  const suppliedKey = String(apiKey || '').trim();
+  const key = suppliedKey || apiKeyFromStorage();
+  if (!key) return { ok: false, error: '请先填写 DeepSeek API Key' };
+  try {
+    const models = await fetchAvailableModels(key);
+    const selected = chooseModel(models, settings.ai.model);
+    const modelChanged = selected !== settings.ai.model;
+    if (suppliedKey) settings.ai.encryptedApiKey = encryptApiKey(suppliedKey);
+    settings.ai.model = selected;
+    settings.ai.lastTestAt = Date.now();
+    settings.ai.lastTestOk = true;
+    settings.ai.lastError = '';
+    saveSettings();
+    return { ok: true, modelChanged, ai: aiPublicState(models) };
+  } catch (error) {
+    settings.ai.lastTestAt = Date.now();
+    settings.ai.lastTestOk = false;
+    settings.ai.lastError = error?.message || '连接失败';
+    saveSettings();
+    return { ok: false, error: settings.ai.lastError, ai: aiPublicState() };
+  }
+});
+
+ipcMain.handle('ai:clear', () => {
+  settings.ai.encryptedApiKey = '';
+  settings.ai.model = '';
+  settings.ai.lastTestAt = 0;
+  settings.ai.lastTestOk = false;
+  settings.ai.lastError = '';
+  saveSettings();
+  return { ok: true, ai: aiPublicState() };
+});
+
+ipcMain.handle('ai:setModel', (_e, { model } = {}) => {
+  const value = String(model || '').trim();
+  if (!value) return { ok: false, error: '模型名称不能为空' };
+  settings.ai.model = value;
+  settings.ai.lastTestOk = false;
+  settings.ai.lastError = '模型已更换，请重新测试连接';
+  saveSettings();
+  return { ok: true, ai: aiPublicState() };
+});
+
+ipcMain.handle('report:getCached', (_e, { start, end, periodType, template } = {}) => {
+  if (!start || !end || start > end) return { ok: false, error: '日期范围无效' };
+  const type = reportTypeOrCustom(periodType);
+  const sources = sourceBundle(reportEntries(start, end));
+  const templateText = String(template || settings.reportTemplates[type] || DEFAULT_REPORT_TEMPLATES.custom);
+  const report = findCachedReport(loadDB(), {
+    start,
+    end,
+    periodType: type,
+    model: settings.ai.model,
+    sourceHashValue: sourceHash(sources),
+    templateHashValue: templateHash(templateText)
+  });
+  return { ok: true, report: report || null };
+});
+
+ipcMain.handle('report:generate', async (_e, payload = {}) => {
+  const { start, end, periodLabel, force } = payload;
+  if (!start || !end || start > end) return { ok: false, error: '日期范围无效' };
+  const periodType = reportTypeOrCustom(payload.periodType);
+  const template = String(payload.template || settings.reportTemplates[periodType] || DEFAULT_REPORT_TEMPLATES.custom).trim();
+  const entries = reportEntries(start, end);
+  const sources = sourceBundle(entries);
+  const sourceHashValue = sourceHash(sources);
+  const templateHashValue = templateHash(template);
+  const key = apiKeyFromStorage();
+  if (!key) return { ok: false, error: '尚未配置 DeepSeek API Key，请先到设置中连接 AI' };
+
+  let models;
+  try {
+    models = await fetchAvailableModels(key);
+  } catch (error) {
+    settings.ai.lastTestOk = false;
+    settings.ai.lastError = error?.message || '连接失败';
+    saveSettings();
+    return { ok: false, error: settings.ai.lastError };
+  }
+
+  const previousModel = settings.ai.model;
+  const model = chooseModel(models, previousModel);
+  const cacheParams = { start, end, periodType, model, sourceHashValue, templateHashValue };
+  if (!force) {
+    const cached = findCachedReport(loadDB(), cacheParams);
+    if (cached) return { ok: true, cached: true, report: cached, models, modelChanged: previousModel !== model };
+  }
+
+  if (settings.ai.model !== model || !settings.ai.lastTestOk) {
+    settings.ai.model = model;
+    settings.ai.lastTestAt = Date.now();
+    settings.ai.lastTestOk = true;
+    settings.ai.lastError = '';
+    saveSettings();
+  }
+
+  try {
+    const response = await deepSeekRequest('/chat/completions', key, {
+      method: 'POST',
+      body: JSON.stringify({
+        model,
+        messages: [
+          {
+            role: 'system',
+            content: '你是一个严谨的工作总结整理助手。你只能基于用户提供的原始记录进行归纳和语言润色，不能编造、扩写或删除事实。总结正文必须覆盖每一条来源记录；如果多条记录属于同一事项，可以合并表达，但必须保留所有任务细节、结果、问题和时间线。'
+          },
+          { role: 'user', content: buildPrompt({ start, end, periodLabel, template, sources }) }
+        ],
+        stream: false,
+        max_tokens: 8192
+      })
+    });
+    const generated = response?.choices?.[0]?.message?.content;
+    const aiContent = Array.isArray(generated)
+      ? generated.map(x => typeof x === 'string' ? x : x?.text || '').join('')
+      : String(generated || '').trim();
+    if (!aiContent) throw new Error('AI 没有返回总结内容');
+
+    const covered = coveredRefs(aiContent, sources);
+    const db = loadDB();
+    const report = {
+      id: reportId(),
+      cacheKey: reportCacheKey({ ...cacheParams, model }),
+      periodType,
+      periodLabel: periodLabel || `${start} 至 ${end}`,
+      start,
+      end,
+      model,
+      template,
+      sourceCount: sources.length,
+      coveredCount: covered.length,
+      content: appendRawRecords(aiContent, sources),
+      createdAt: Date.now(),
+      updatedAt: Date.now()
+    };
+    db.reports.push(report);
+    saveDB(db);
+    return { ok: true, cached: false, report, models, modelChanged: previousModel !== model };
+  } catch (error) {
+    settings.ai.lastTestOk = false;
+    settings.ai.lastError = error?.message || '生成总结失败';
+    saveSettings();
+    return { ok: false, error: settings.ai.lastError };
+  }
+});
+
+ipcMain.handle('report:save', (_e, { id, content } = {}) => {
+  if (!id || typeof content !== 'string') return { ok: false, error: '总结内容无效' };
+  const db = loadDB();
+  const report = db.reports.find(x => x.id === id);
+  if (!report) return { ok: false, error: '总结不存在或已被清理' };
+  report.content = content;
+  report.updatedAt = Date.now();
+  saveDB(db);
+  return { ok: true, report };
+});
+
+ipcMain.handle('report:export', async (_e, { id, format } = {}) => {
+  const report = loadDB().reports.find(x => x.id === id);
+  if (!report) return { ok: false, error: '总结不存在或已被清理' };
+  const isText = format === 'txt';
+  const ext = isText ? 'txt' : 'md';
+  const content = isText ? markdownToText(report.content) : report.content;
+  const { canceled, filePath } = await dialog.showSaveDialog(mainWindow, {
+    title: '导出周期总结',
+    defaultPath: `总结_${report.start}_${report.end}.${ext}`,
+    filters: [{ name: isText ? '纯文本文件' : 'Markdown 文件', extensions: [ext] }]
+  });
+  if (canceled || !filePath) return { ok: false, canceled: true };
+  fs.writeFileSync(filePath, '\ufeff' + content, 'utf8');
+  return { ok: true, filePath };
+});
+
 ipcMain.on('quick:hide', () => {
   if (quickHideTimer) { clearTimeout(quickHideTimer); quickHideTimer = null; }
   hideQuickNow();
@@ -304,7 +626,9 @@ ipcMain.handle('settings:get', () => ({
   defaultHotkey: DEFAULT_HOTKEY,
   openAtLogin: settings.openAtLogin,
   silentStart: settings.silentStart,
-  dataFile: dataFile()
+  dataFile: dataFile(),
+  ai: aiPublicState(),
+  reportTemplates: { ...settings.reportTemplates }
 }));
 
 ipcMain.handle('settings:set', (_e, patch) => {
@@ -334,8 +658,26 @@ ipcMain.handle('settings:set', (_e, patch) => {
       saveSettings();
     }
   }
-  result.settings = { theme: settings.theme, hotkey: settings.hotkey, openAtLogin: settings.openAtLogin, silentStart: settings.silentStart };
+  result.settings = {
+    theme: settings.theme,
+    hotkey: settings.hotkey,
+    openAtLogin: settings.openAtLogin,
+    silentStart: settings.silentStart,
+    ai: aiPublicState(),
+    reportTemplates: { ...settings.reportTemplates }
+  };
   return result;
+});
+
+ipcMain.handle('settings:setReportTemplate', (_e, { type, template } = {}) => {
+  if (!Object.prototype.hasOwnProperty.call(DEFAULT_REPORT_TEMPLATES, type)) {
+    return { ok: false, error: '总结周期无效' };
+  }
+  const value = String(template || '').trim();
+  if (!value) return { ok: false, error: '模板内容不能为空' };
+  settings.reportTemplates[type] = value;
+  saveSettings();
+  return { ok: true, type, template: value };
 });
 
 ipcMain.handle('data:openFolder', () => shell.openPath(path.dirname(dataFile())));

@@ -21,6 +21,17 @@ contextBridge.exposeInMainWorld('api', {
   // 导出
   exportRange: (start, end, format) => ipcRenderer.invoke('export:run', { start, end, format }),
 
+  // DeepSeek 与周期总结
+  getAiStatus: () => ipcRenderer.invoke('ai:status'),
+  testAi: apiKey => ipcRenderer.invoke('ai:test', { apiKey }),
+  clearAi: () => ipcRenderer.invoke('ai:clear'),
+  setAiModel: model => ipcRenderer.invoke('ai:setModel', { model }),
+  getCachedReport: params => ipcRenderer.invoke('report:getCached', params),
+  generateReport: params => ipcRenderer.invoke('report:generate', params),
+  saveReport: (id, content) => ipcRenderer.invoke('report:save', { id, content }),
+  exportReport: (id, format) => ipcRenderer.invoke('report:export', { id, format }),
+  setReportTemplate: (type, template) => ipcRenderer.invoke('settings:setReportTemplate', { type, template }),
+
   // 快速记录条
   hideQuick: () => ipcRenderer.send('quick:hide'),
   setModalCover: on => ipcRenderer.send('window:modal-cover', on),

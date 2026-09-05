@@ -16,7 +16,6 @@
         <span class="brand-kbd" id="hotkey-tip">Alt+Shift+D</span>
       </div>
       <div class="topbar-actions">
-        <button class="icon-btn" id="btn-theme" title="切换深浅主题"></button>
         <button class="icon-btn" id="btn-settings" title="设置">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="21" y1="4" x2="14" y2="4"/><line x1="10" y1="4" x2="3" y2="4"/><line x1="21" y1="12" x2="12" y2="12"/><line x1="8" y1="12" x2="3" y2="12"/><line x1="21" y1="20" x2="16" y2="20"/><line x1="12" y1="20" x2="3" y2="20"/><line x1="14" y1="2" x2="14" y2="6"/><line x1="8" y1="10" x2="8" y2="14"/><line x1="16" y1="18" x2="16" y2="22"/></svg>
         </button>
@@ -48,6 +47,7 @@
           </div>
           <span class="f-count" id="f-count"></span>
           <button class="btn small primary" id="btn-composer" title="新记录（Ctrl+N）">记录</button>
+          <button class="btn small ai-report-btn" id="btn-report" hidden>AI 总结</button>
           <button class="btn small" id="btn-export-open">导出</button>
           <button class="btn small" id="btn-manage">管理</button>
         </div>
@@ -73,6 +73,84 @@
         </div><!-- /cols -->
       </section>
 
+      <!-- ===== 周期总结视图 ===== -->
+      <section id="view-report" class="view" hidden>
+        <div class="settings-head report-head">
+          <button class="icon-btn" id="btn-report-back" title="返回主界面">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+          </button>
+          <span class="settings-title">周期总结</span>
+          <span class="report-connection" id="report-connection"></span>
+        </div>
+
+        <div class="report-toolbar">
+          <div class="report-period">
+            <select id="report-type" title="总结周期">
+              <option value="day">日报</option>
+              <option value="week" selected>周报</option>
+              <option value="month">月报</option>
+              <option value="custom">自定义周期</option>
+            </select>
+            <button class="icon-btn small-icon" id="report-prev" title="上一周期">‹</button>
+            <button class="icon-btn small-icon" id="report-next" title="下一周期">›</button>
+          </div>
+          <div class="report-dates" id="report-dates">
+            <input type="date" id="report-start" title="开始日期">
+            <span>→</span>
+            <input type="date" id="report-end" title="结束日期">
+          </div>
+          <span class="export-spacer"></span>
+          <select id="report-format" title="显示格式">
+            <option value="md">Markdown</option>
+            <option value="txt">纯文本</option>
+          </select>
+          <button class="btn small" id="report-copy">复制</button>
+          <button class="btn small" id="report-export">导出总结</button>
+          <button class="btn small primary" id="report-generate">生成总结</button>
+        </div>
+
+        <div class="report-status" id="report-status"></div>
+
+        <div class="report-layout">
+          <section class="card report-card report-full" id="report-full">
+            <div class="report-card-head">
+              <div>
+                <div class="report-title" id="report-title">本周工作总结</div>
+                <div class="report-meta" id="report-meta"></div>
+              </div>
+              <button class="btn small" id="report-edit">编辑</button>
+            </div>
+            <div class="report-content" id="report-content"></div>
+            <textarea class="report-editor" id="report-editor" hidden></textarea>
+            <div class="report-edit-foot" id="report-edit-foot" hidden>
+              <span class="note">保存只修改总结，不会修改原始记录。</span>
+              <span class="export-spacer"></span>
+              <button class="btn small" id="report-edit-cancel">取消</button>
+              <button class="btn small primary" id="report-edit-save">保存修改</button>
+            </div>
+          </section>
+
+          <section class="card report-compact" id="report-compact">
+            <div class="report-compact-title">本周期工作总结</div>
+            <div class="report-compact-meta" id="report-compact-meta">尚未生成</div>
+            <button class="btn primary" id="report-open-modal">打开完整总结</button>
+          </section>
+
+          <aside class="report-side">
+            <div class="card report-side-card">
+              <div class="set-title">本周期概览</div>
+              <div class="report-metric"><span>记录数</span><b id="report-count">0</b></div>
+              <div class="report-metric"><span>AI 覆盖</span><b id="report-coverage">--</b></div>
+              <div class="report-metric"><span>模型</span><b class="report-model" id="report-model">--</b></div>
+            </div>
+            <div class="card report-side-card report-source-card">
+              <div class="report-side-head"><span class="set-title">原始记录</span><span class="note">只读</span></div>
+              <div id="report-source-list"></div>
+            </div>
+          </aside>
+        </div>
+      </section>
+
       <!-- ===== 设置视图 ===== -->
       <section id="view-settings" class="view" hidden>
         <div class="settings-head">
@@ -84,6 +162,49 @@
 
         <div class="scroll-wrap settings-wrap">
           <div class="settings-scroll">
+          <div class="card set-group">
+          <div class="set-title">AI 服务</div>
+          <div class="set-row">
+            <div class="set-info">DeepSeek API
+              <div class="set-sub">使用你自己的 API Key。Key 只保存在本机 Windows 安全存储中，不会显示在页面里。</div>
+            </div>
+            <span class="ai-state-badge" id="ai-state-badge">未配置</span>
+          </div>
+          <div class="set-row ai-key-row">
+            <div class="set-info">API Key
+              <div class="set-sub">首次配置或更换 Key 时填写；已配置时可以留空。</div>
+            </div>
+            <input type="password" id="ai-key" class="ai-key-input" placeholder="sk-…" autocomplete="off">
+          </div>
+          <div class="set-row">
+            <div class="set-info">可用模型
+              <div class="set-sub" id="ai-model-sub">点击测试连接后自动读取当前可用模型</div>
+            </div>
+            <select id="ai-model" class="ai-model-select" disabled><option value="">请先测试连接</option></select>
+          </div>
+          <div class="set-row ai-actions-row">
+            <span class="set-msg" id="ai-msg"></span>
+            <div class="hk-area"><button class="btn small" id="ai-test">测试连接并保存</button><button class="link-btn" id="ai-clear">清除配置</button></div>
+          </div>
+        </div>
+
+        <div class="card set-group">
+          <div class="set-title">总结模板</div>
+          <div class="set-row template-type-row">
+            <div class="set-info">选择周期模板
+              <div class="set-sub">模板只控制结构和表达方式，系统会始终要求完整保留原始记录。</div>
+            </div>
+            <div class="segmented" id="template-seg">
+              <button data-v="day">日报</button><button data-v="week" class="active">周报</button><button data-v="month">月报</button><button data-v="custom">自定义</button>
+            </div>
+          </div>
+          <div class="template-editor-row">
+            <textarea id="template-text" class="template-textarea" rows="5" placeholder="填写这个周期的总结要求…"></textarea>
+            <div class="template-foot"><span class="set-sub">模板会与所选周期和全部原始记录一起发送，保存后影响下一次生成。</span><button class="btn small" id="template-save">保存模板</button><button class="link-btn" id="template-reset">恢复默认</button></div>
+            <div class="set-msg" id="template-msg"></div>
+          </div>
+        </div>
+
           <div class="card set-group">
           <div class="set-title">快捷键</div>
           <div class="set-row">
@@ -185,6 +306,21 @@
         <button class="btn" id="export-cancel">取消</button>
         <button class="btn primary" id="btn-export">导出文件</button>
       </div>
+    </div>
+  </div>
+
+  <!-- 周期总结窄窗口查看弹窗 -->
+  <div class="modal-backdrop" id="report-modal" hidden>
+    <div class="modal card report-modal" role="dialog" aria-label="周期总结">
+      <div class="modal-head">
+        <span class="modal-title">周期总结</span>
+        <button class="icon-btn" id="report-modal-close" title="关闭">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
+      </div>
+      <div class="report-meta" id="report-modal-meta"></div>
+      <div class="report-content" id="report-modal-content"></div>
+      <textarea class="report-editor" id="report-modal-editor" hidden></textarea>
     </div>
   </div>
 

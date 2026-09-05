@@ -7,7 +7,17 @@ const state = {
   manage: false,
   selected: new Set(),
   settings: null,
-  recording: false
+  recording: false,
+  report: {
+    type: 'week',
+    start: '',
+    end: '',
+    periodLabel: '',
+    format: 'md',
+    data: null,
+    editing: false,
+    loading: false
+  }
 };
 
 /* ---------- 工具 ---------- */
@@ -64,14 +74,17 @@ function hideToast() { $('#toast').classList.remove('show'); }
 
 const viewMain = $('#view-main');
 const viewSettings = $('#view-settings');
+const viewReport = $('#view-report');
 
 function showView(name) {
   viewMain.hidden = name !== 'main';
   viewSettings.hidden = name !== 'settings';
+  viewReport.hidden = name !== 'report';
 }
 
 $('#btn-settings').addEventListener('click', () => { showView('settings'); loadSettingsUI(); });
 $('#btn-back').addEventListener('click', () => showView('main'));
+$('#btn-report-back').addEventListener('click', () => showView('main'));
 window.api.onNavigate(v => showView(v));
 
 /* ---------- 主题 ---------- */
@@ -85,11 +98,13 @@ const ICONS = {
 
 function applyTheme(theme) {
   document.documentElement.dataset.theme = theme;
-  $('#btn-theme').innerHTML = theme === 'dark' ? ICONS.sun : ICONS.moon;
+  const themeButton = $('#btn-theme');
+  if (themeButton) themeButton.innerHTML = theme === 'dark' ? ICONS.sun : ICONS.moon;
   try { localStorage.setItem('theme:cache', theme); } catch { /* 忽略 */ }
 }
 
-$('#btn-theme').addEventListener('click', async () => {
+const themeButton = $('#btn-theme');
+if (themeButton) themeButton.addEventListener('click', async () => {
   const cur = document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light';
   const next = cur === 'dark' ? 'light' : 'dark';
   applyTheme(next);
@@ -244,6 +259,9 @@ async function saveComposer() {
 /* ---------- 导出模态 ---------- */
 
 const exportModal = $('#export-modal');
+const reportModal = $('#report-modal');
+const reportModalContent = $('#report-modal-content');
+const reportModalMeta = $('#report-modal-meta');
 
 function openExportModal() {
   exportModal.hidden = false;
@@ -258,7 +276,7 @@ function closeExportModal() {
 
 // 任一模窗打开时，请主进程把标题栏控制按钮区染成遮罩色（视觉遮盖）
 function syncModalCover() {
-  window.api.setModalCover(!composerModal.hidden || !exportModal.hidden);
+  window.api.setModalCover(!composerModal.hidden || !exportModal.hidden || !reportModal.hidden);
 }
 
 $('#btn-export-open').addEventListener('click', openExportModal);
@@ -306,6 +324,357 @@ $('#btn-export').addEventListener('click', async () => {
   if (res.ok) { closeExportModal(); toast('已导出到 ' + res.filePath); }
   else if (res.error) toast(res.error);
 });
+
+/* ---------- 周期总结 ---------- */
+
+const reportType = $('#report-type');
+const reportPrev = $('#report-prev');
+const reportNext = $('#report-next');
+const reportStart = $('#report-start');
+const reportEnd = $('#report-end');
+const reportDates = $('#report-dates');
+const reportFormat = $('#report-format');
+const reportStatus = $('#report-status');
+const reportTitle = $('#report-title');
+const reportMeta = $('#report-meta');
+const reportContent = $('#report-content');
+const reportEditor = $('#report-editor');
+const reportEdit = $('#report-edit');
+const reportEditFoot = $('#report-edit-foot');
+const reportEditCancel = $('#report-edit-cancel');
+const reportEditSave = $('#report-edit-save');
+const reportCompact = $('#report-compact');
+const reportCompactMeta = $('#report-compact-meta');
+const reportCount = $('#report-count');
+const reportCoverage = $('#report-coverage');
+const reportModel = $('#report-model');
+const reportSourceList = $('#report-source-list');
+const reportConnection = $('#report-connection');
+
+function localDateFromString(value) { return new Date(value + 'T00:00:00'); }
+
+function dateStringFromDate(date) {
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+}
+
+function shiftDateString(value, days) {
+  const d = localDateFromString(value);
+  d.setDate(d.getDate() + days);
+  return dateStringFromDate(d);
+}
+
+function periodBounds(type, anchor = Date.now()) {
+  const now = new Date(anchor);
+  if (type === 'day') {
+    const day = dateStr(anchor);
+    return { start: day, end: day, label: day };
+  }
+  if (type === 'month') {
+    const first = new Date(now.getFullYear(), now.getMonth(), 1);
+    const next = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+    return { start: dateStringFromDate(first), end: dateStringFromDate(next), label: `${now.getFullYear()} 年 ${now.getMonth() + 1} 月` };
+  }
+  if (type === 'custom') return { start: dateStr(anchor), end: dateStr(anchor), label: dateStr(anchor) };
+  const monday = new Date(DR.weekStart(anchor));
+  const sunday = new Date(monday);
+  sunday.setDate(sunday.getDate() + 6);
+  return { start: dateStringFromDate(monday), end: dateStringFromDate(sunday), label: `${dateStringFromDate(monday)} 至 ${dateStringFromDate(sunday)}` };
+}
+
+function reportPeriodLabel() {
+  const type = reportType.value;
+  if (type === 'day') return `${reportStart.value} 工作总结`;
+  if (type === 'month') {
+    const d = localDateFromString(reportStart.value);
+    return `${d.getFullYear()} 年 ${d.getMonth() + 1} 月工作总结`;
+  }
+  return `${reportStart.value} 至 ${reportEnd.value} 工作总结`;
+}
+
+function setReportPeriod(type, start, end) {
+  reportType.value = type;
+  const bounds = start && end ? { start, end } : periodBounds(type);
+  reportStart.value = bounds.start;
+  reportEnd.value = bounds.end;
+  state.report.type = type;
+  state.report.start = bounds.start;
+  state.report.end = bounds.end;
+  state.report.periodLabel = reportPeriodLabel();
+  reportDates.hidden = type !== 'custom';
+  reportPrev.disabled = type === 'custom';
+  reportNext.disabled = type === 'custom';
+  reportTitle.textContent = reportPeriodLabel();
+}
+
+function reportEntries() {
+  return state.entries.filter(entry => {
+    const day = dateStr(entry.ts);
+    return day >= state.report.start && day <= state.report.end;
+  }).sort((a, b) => a.ts - b.ts || (a.createdAt || 0) - (b.createdAt || 0));
+}
+
+function reportText(content) {
+  return String(content || '')
+    .replace(/^[ \t]*#{1,6}[ \t]+/gm, '')
+    .replace(/^[ \t]*[-*][ \t]+/gm, '• ')
+    .replace(/^[ \t]*\d+\.[ \t]+/gm, '')
+    .replace(/`([^`]+)`/g, '$1')
+    .replace(/\*\*([^*]+)\*\*/g, '$1')
+    .replace(/\*([^*]+)\*/g, '$1')
+    .replace(/^[ \t]*---[ \t]*$/gm, '────────────────')
+    .trim();
+}
+
+// 仅渲染标题、列表和段落，AI 返回内容一律使用 textContent，避免把远程内容当 HTML 执行。
+function renderMarkdown(target, markdown) {
+  target.innerHTML = '';
+  let list = null;
+  for (const raw of String(markdown || '').split(/\r?\n/)) {
+    const line = raw.trim();
+    if (!line) { list = null; continue; }
+    const heading = /^(#{1,6})\s+(.+)$/.exec(line);
+    if (heading) {
+      list = null;
+      const el = document.createElement(`h${Math.min(6, heading[1].length)}`);
+      el.textContent = heading[2];
+      target.appendChild(el);
+      continue;
+    }
+    const bullet = /^[-*]\s+(.+)$/.exec(line);
+    if (bullet) {
+      if (!list || list.tagName !== 'UL') { list = document.createElement('ul'); target.appendChild(list); }
+      const li = document.createElement('li');
+      li.textContent = bullet[1];
+      list.appendChild(li);
+      continue;
+    }
+    if (/^---+$/.test(line)) { list = null; target.appendChild(document.createElement('hr')); continue; }
+    list = null;
+    const p = document.createElement('p');
+    p.textContent = line;
+    target.appendChild(p);
+  }
+}
+
+function renderReportContent(target, content) {
+  if (state.report.format === 'txt') {
+    target.innerHTML = '';
+    const pre = document.createElement('pre');
+    pre.className = 'report-plain';
+    pre.textContent = reportText(content);
+    target.appendChild(pre);
+  } else renderMarkdown(target, content);
+}
+
+function renderReportSources() {
+  reportSourceList.innerHTML = '';
+  const entries = reportEntries();
+  reportCount.textContent = String(entries.length);
+  if (!entries.length) {
+    const empty = document.createElement('div');
+    empty.className = 'report-source-empty';
+    empty.textContent = '本周期没有记录';
+    reportSourceList.appendChild(empty);
+    return;
+  }
+  for (const entry of entries) {
+    const row = document.createElement('div');
+    row.className = 'report-source-entry';
+    const time = document.createElement('span');
+    time.className = 'entry-time';
+    time.textContent = `${dateStr(entry.ts)} ${timeStr(entry.ts)}`;
+    const text = document.createElement('span');
+    text.textContent = entry.text;
+    row.append(time, text);
+    reportSourceList.appendChild(row);
+  }
+}
+
+function renderReportState(message) {
+  const data = state.report.data;
+  const incompleteCoverage = data && data.sourceCount > 0 && data.coveredCount < data.sourceCount;
+  reportTitle.textContent = reportPeriodLabel();
+  reportMeta.textContent = data
+    ? `周期：${data.start} 至 ${data.end}　·　来源：${data.sourceCount} 条　·　AI 归纳覆盖：${data.coveredCount} / ${data.sourceCount}　·　模型：${data.model}`
+    : '尚未生成本周期总结';
+  reportCoverage.textContent = data ? `${data.coveredCount} / ${data.sourceCount}` : '--';
+  reportModel.textContent = data?.model || state.settings?.ai?.model || '--';
+  reportStatus.textContent = message || (incompleteCoverage
+    ? 'AI 正文未逐条引用全部来源；完整原始记录明细已附在文末，请核对后再提交。'
+    : data ? '总结正文与原始记录明细均已保留，可继续编辑或导出。' : '选择周期后点击“生成总结”。');
+  reportStatus.className = `report-status${message ? ' active' : ''}`;
+  reportEdit.hidden = !data;
+  reportContent.hidden = state.report.editing;
+  reportEditor.hidden = !data || !state.report.editing;
+  reportEditFoot.hidden = !data || !state.report.editing;
+  reportCompact.hidden = window.innerWidth >= 1200;
+  $('#report-open-modal').disabled = !data;
+  reportCompactMeta.textContent = data
+    ? `已生成 · ${data.coveredCount} / ${data.sourceCount} 条记录已覆盖`
+    : '尚未生成';
+  if (data && !state.report.editing) {
+    renderReportContent(reportContent, data.content);
+    renderReportContent(reportModalContent, data.content);
+    reportModalMeta.textContent = reportMeta.textContent;
+  } else if (!data && !state.report.editing) {
+    reportContent.innerHTML = '';
+    const empty = document.createElement('div');
+    empty.className = 'report-empty';
+    empty.textContent = '尚未生成本周期总结，点击右上角“生成总结”开始。';
+    reportContent.appendChild(empty);
+  }
+  renderReportSources();
+}
+
+function syncAiEntry() {
+  const configured = !!state.settings?.ai?.configured;
+  $('#btn-report').hidden = !configured;
+  if (reportConnection) {
+    reportConnection.textContent = configured
+      ? (state.settings.ai.lastTestOk ? `AI 已连接 · ${state.settings.ai.model}` : 'AI 已配置，待测试')
+      : '未配置 AI';
+    reportConnection.classList.toggle('ok', configured && state.settings.ai.lastTestOk);
+  }
+}
+
+async function loadCachedReport() {
+  renderReportState();
+  if (!state.settings?.ai?.configured) return;
+  const res = await window.api.getCachedReport({
+    start: state.report.start,
+    end: state.report.end,
+    periodType: state.report.type,
+    template: state.settings.reportTemplates[state.report.type]
+  });
+  if (res.ok) state.report.data = res.report;
+  renderReportState();
+}
+
+async function openReportView() {
+  if (!state.settings) await loadSettingsUI();
+  if (!state.settings?.ai?.configured) {
+    showView('settings');
+    toast('请先在设置中配置 DeepSeek API');
+    return;
+  }
+  showView('report');
+  state.report.data = null;
+  state.report.editing = false;
+  setReportPeriod('week');
+  await loadCachedReport();
+}
+
+async function generateReport(force = false) {
+  if (state.report.loading) return;
+  state.report.loading = true;
+  reportGenerate.disabled = true;
+  renderReportState('正在连接 DeepSeek 并生成总结，请稍候…');
+  const res = await window.api.generateReport({
+    start: state.report.start,
+    end: state.report.end,
+    periodType: state.report.type,
+    periodLabel: reportPeriodLabel(),
+    template: state.settings?.reportTemplates?.[state.report.type],
+    force
+  });
+  state.report.loading = false;
+  reportGenerate.disabled = false;
+  if (!res.ok) {
+    renderReportState(res.error || '生成总结失败');
+    toast(res.error || '生成总结失败');
+    return;
+  }
+  state.report.data = res.report;
+  if (state.settings?.ai) {
+    state.settings.ai.model = res.report.model;
+    state.settings.ai.lastTestOk = true;
+    syncAiEntry();
+  }
+  const coverageNote = res.report.sourceCount > 0 && res.report.coveredCount < res.report.sourceCount
+    ? 'AI 正文覆盖不完整，但全部原始记录已自动附在文末，请核对。'
+    : '总结已生成，已保留全部原始记录。';
+  renderReportState(res.modelChanged ? `当前模型已更新为 ${res.report.model}，${coverageNote}` : coverageNote);
+}
+
+function shiftReportPeriod(delta) {
+  if (state.report.type === 'custom') return;
+  if (state.report.type === 'day') {
+    const next = shiftDateString(state.report.start, delta);
+    setReportPeriod('day', next, next);
+  } else if (state.report.type === 'week') {
+    const nextStart = shiftDateString(state.report.start, delta * 7);
+    setReportPeriod('week', nextStart, shiftDateString(nextStart, 6));
+  } else {
+    const first = localDateFromString(state.report.start);
+    first.setMonth(first.getMonth() + delta, 1);
+    const start = dateStringFromDate(first);
+    const endDate = new Date(first.getFullYear(), first.getMonth() + 1, 0);
+    setReportPeriod('month', start, dateStringFromDate(endDate));
+  }
+  state.report.data = null;
+  loadCachedReport();
+}
+
+$('#btn-report').addEventListener('click', openReportView);
+reportType.addEventListener('change', () => {
+  setReportPeriod(reportType.value);
+  state.report.data = null;
+  loadCachedReport();
+});
+reportStart.addEventListener('change', () => {
+  if (reportType.value !== 'custom') return;
+  state.report.start = reportStart.value;
+  if (state.report.start > state.report.end) reportEnd.value = reportStart.value;
+  state.report.end = reportEnd.value;
+  state.report.periodLabel = reportPeriodLabel();
+  state.report.data = null;
+  loadCachedReport();
+});
+reportEnd.addEventListener('change', () => {
+  if (reportType.value !== 'custom') return;
+  if (reportEnd.value < reportStart.value) reportStart.value = reportEnd.value;
+  state.report.start = reportStart.value;
+  state.report.end = reportEnd.value;
+  state.report.periodLabel = reportPeriodLabel();
+  state.report.data = null;
+  loadCachedReport();
+});
+reportPrev.addEventListener('click', () => shiftReportPeriod(-1));
+reportNext.addEventListener('click', () => shiftReportPeriod(1));
+reportFormat.addEventListener('change', () => { state.report.format = reportFormat.value; renderReportState(); });
+const reportGenerate = $('#report-generate');
+reportGenerate.addEventListener('click', () => generateReport(!!state.report.data));
+$('#report-copy').addEventListener('click', async () => {
+  if (!state.report.data) { toast('请先生成总结'); return; }
+  const content = state.report.format === 'txt' ? reportText(state.report.data.content) : state.report.data.content;
+  try { await navigator.clipboard.writeText(content); toast('总结已复制'); }
+  catch { toast('复制失败，请使用编辑框手动复制'); }
+});
+$('#report-export').addEventListener('click', async () => {
+  if (!state.report.data) { toast('请先生成总结'); return; }
+  const res = await window.api.exportReport(state.report.data.id, state.report.format);
+  if (res.ok) toast('总结已导出到 ' + res.filePath);
+  else if (res.error) toast(res.error);
+});
+reportEdit.addEventListener('click', () => {
+  if (!state.report.data) return;
+  state.report.editing = true;
+  reportEditor.value = state.report.data.content;
+  renderReportState();
+  reportEditor.focus();
+});
+reportEditCancel.addEventListener('click', () => { state.report.editing = false; renderReportState(); });
+reportEditSave.addEventListener('click', async () => {
+  if (!state.report.data) return;
+  const res = await window.api.saveReport(state.report.data.id, reportEditor.value);
+  if (!res.ok) { toast(res.error || '保存失败'); return; }
+  state.report.data = res.report;
+  state.report.editing = false;
+  renderReportState('总结修改已保存。');
+});
+$('#report-open-modal').addEventListener('click', () => { reportModal.hidden = false; syncModalCover(); });
+$('#report-modal-close').addEventListener('click', () => { reportModal.hidden = true; syncModalCover(); });
+reportModal.addEventListener('click', e => { if (e.target === reportModal) { reportModal.hidden = true; syncModalCover(); } });
 
 /* ---------- 列表筛选 ---------- */
 
@@ -709,6 +1078,22 @@ const themeSeg = $('#theme-seg');
 const autoStart = $('#set-autostart');
 const silentStart = $('#set-silent');
 const rowSilent = $('#row-silentstart');
+const aiKey = $('#ai-key');
+const aiModel = $('#ai-model');
+const aiStateBadge = $('#ai-state-badge');
+const aiModelSub = $('#ai-model-sub');
+const aiMsg = $('#ai-msg');
+const templateSeg = $('#template-seg');
+const templateText = $('#template-text');
+const templateMsg = $('#template-msg');
+let templateType = 'week';
+
+const DEFAULT_TEMPLATES = {
+  day: '请生成一份当天工作总结，按工作事项整理，说明完成内容、当前进展和需要关注的问题。语言简洁、事实准确，不要补充原始记录中没有的信息。',
+  week: '请生成一份本周工作总结，优先按任务或工作主题归纳，包含本周完成、进行中事项、问题与风险、下一步计划。语言可以润色，但不得遗漏任何原始记录中的事实。',
+  month: '请生成一份本月工作总结，按工作主题归纳主要进展、阶段性成果、问题与风险及下一阶段计划。保留具体任务细节，不要泛化或编造。',
+  custom: '请按照用户指定的周期和模板生成工作总结。可以调整语言和结构，但必须保留所有原始记录中的事实、任务细节和时间线。'
+};
 
 function syncSilentRow() {
   // 常显 + 未开自启时置灰（避免"选项藏起来找不到"）
@@ -723,9 +1108,49 @@ async function loadSettingsUI() {
   $('#set-datapath').textContent = s.dataFile;
   autoStart.checked = s.openAtLogin;
   silentStart.checked = !!s.silentStart;
+  aiKey.value = '';
+  syncAiSettingsUI(s.ai);
+  syncTemplateUI();
+  syncAiEntry();
   syncSilentRow();
   hkMsg.textContent = '';
   syncThemeSeg();
+}
+
+function syncAiModels(ai) {
+  const models = Array.isArray(ai?.models) ? ai.models : [];
+  aiModel.innerHTML = '';
+  if (!models.length) {
+    const o = document.createElement('option');
+    o.value = ai?.model || '';
+    o.textContent = ai?.model || '请先测试连接';
+    aiModel.appendChild(o);
+  } else {
+    for (const model of models) {
+      const o = document.createElement('option');
+      o.value = model;
+      o.textContent = model;
+      aiModel.appendChild(o);
+    }
+  }
+  aiModel.value = ai?.model || '';
+  aiModel.disabled = !ai?.configured && !models.length;
+}
+
+function syncAiSettingsUI(ai = state.settings?.ai) {
+  const configured = !!ai?.configured;
+  aiStateBadge.textContent = !configured ? '未配置' : (ai.lastTestOk ? '已连接' : '已配置');
+  aiStateBadge.classList.toggle('ok', configured && !!ai.lastTestOk);
+  aiModelSub.textContent = ai?.lastError || (ai?.lastTestAt ? `最近测试：${new Date(ai.lastTestAt).toLocaleString()}` : '点击测试连接后自动读取当前可用模型');
+  syncAiModels(ai);
+  aiMsg.textContent = '';
+}
+
+function syncTemplateUI() {
+  const templates = state.settings?.reportTemplates || DEFAULT_TEMPLATES;
+  for (const b of templateSeg.querySelectorAll('button[data-v]')) b.classList.toggle('active', b.dataset.v === templateType);
+  templateText.value = templates[templateType] || DEFAULT_TEMPLATES[templateType];
+  templateMsg.textContent = '';
 }
 
 function syncThemeSeg() {
@@ -759,6 +1184,77 @@ silentStart.addEventListener('change', async () => {
 });
 
 $('#set-openfolder').addEventListener('click', () => window.api.openDataFolder());
+
+$('#ai-test').addEventListener('click', async () => {
+  const button = $('#ai-test');
+  button.disabled = true;
+  aiMsg.className = 'set-msg';
+  aiMsg.textContent = '正在测试连接并读取模型…';
+  const res = await window.api.testAi(aiKey.value.trim());
+  button.disabled = false;
+  if (!res.ok) {
+    aiMsg.textContent = res.error || '连接失败';
+    if (state.settings?.ai) state.settings.ai = res.ai || state.settings.ai;
+    syncAiSettingsUI(state.settings?.ai);
+    syncAiEntry();
+    return;
+  }
+  state.settings.ai = res.ai;
+  aiKey.value = '';
+  syncAiSettingsUI(res.ai);
+  syncAiEntry();
+  aiMsg.className = 'set-msg success';
+  aiMsg.textContent = res.modelChanged ? `连接成功，模型已更新为 ${res.ai.model}` : `连接成功，发现 ${res.ai.models.length} 个可用模型`;
+  toast('DeepSeek 已连接');
+});
+
+aiModel.addEventListener('change', async () => {
+  if (!aiModel.value || !state.settings?.ai) return;
+  const res = await window.api.setAiModel(aiModel.value);
+  if (res.ok) {
+    state.settings.ai = res.ai;
+    syncAiSettingsUI(res.ai);
+    syncAiEntry();
+    aiMsg.textContent = '模型已更换，请重新测试连接';
+  } else aiMsg.textContent = res.error || '模型更新失败';
+});
+
+$('#ai-clear').addEventListener('click', async () => {
+  if (!state.settings?.ai?.configured || !confirm('清除 DeepSeek 配置后，AI 总结功能将隐藏。确定继续吗？')) return;
+  const res = await window.api.clearAi();
+  if (res.ok) {
+    state.settings.ai = res.ai;
+    syncAiSettingsUI(res.ai);
+    syncAiEntry();
+    toast('AI 配置已清除');
+  }
+});
+
+templateSeg.addEventListener('click', ev => {
+  const btn = ev.target.closest('button[data-v]');
+  if (!btn) return;
+  templateType = btn.dataset.v;
+  syncTemplateUI();
+});
+
+$('#template-save').addEventListener('click', async () => {
+  const value = templateText.value.trim();
+  const res = await window.api.setReportTemplate(templateType, value);
+  if (!res.ok) { templateMsg.textContent = res.error || '模板保存失败'; return; }
+  state.settings.reportTemplates[templateType] = value;
+  templateMsg.className = 'set-msg success';
+  templateMsg.textContent = '模板已保存';
+  toast('总结模板已保存');
+});
+
+$('#template-reset').addEventListener('click', async () => {
+  const value = DEFAULT_TEMPLATES[templateType];
+  const res = await window.api.setReportTemplate(templateType, value);
+  if (!res.ok) { templateMsg.textContent = res.error || '恢复失败'; return; }
+  state.settings.reportTemplates[templateType] = value;
+  syncTemplateUI();
+  toast('已恢复默认模板');
+});
 
 /* ---------- 快捷键录制（带冲突检测） ---------- */
 
