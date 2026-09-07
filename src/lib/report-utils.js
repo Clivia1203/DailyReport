@@ -66,7 +66,20 @@ function splitSources(sources, { maxSources = 40, maxChars = 20000 } = {}) {
   return chunks;
 }
 
-function buildPrompt({ start, end, periodLabel, template, sources, segmentIndex = 0, segmentCount = 1 }) {
+function terminologyPrompt(terminology) {
+  const terms = Array.isArray(terminology) ? terminology : [];
+  if (!terms.length) return '（暂无术语规范；请保留记录中的原称，不要自行创造对照关系。）';
+  return terms.map((term, index) => {
+    const canonical = String(term?.canonicalName || term?.canonical_name || '').trim();
+    if (!canonical) return '';
+    const aliases = Array.isArray(term.aliases) && term.aliases.length ? term.aliases.join('、') : '无';
+    const scope = term.scope ? `；适用范围：${term.scope}` : '';
+    const note = term.note ? `；说明：${term.note}` : '';
+    return `${index + 1}. 规范名称：${canonical}；常用说法：${aliases}${scope}${note}`;
+  }).filter(Boolean).join('\n');
+}
+
+function buildPrompt({ start, end, periodLabel, template, sources, terminology = [], segmentIndex = 0, segmentCount = 1 }) {
   const sourceText = sources.length
     ? sources.map(sourceLine).join('\n')
     : '（本周期没有原始记录）';
@@ -82,6 +95,10 @@ function buildPrompt({ start, end, periodLabel, template, sources, segmentIndex 
     '',
     '用户模板与要求：',
     template || DEFAULT_REPORT_TEMPLATES.custom,
+    '',
+    '术语规范（只用于同一事项的稳定叫法映射）：',
+    terminologyPrompt(terminology),
+    '如果功率段、版本或子任务没有被明确记录，请保留较宏观的表达，不要依据词典强行补充细分信息。',
     '',
     ...segmentInstruction,
     '',
@@ -168,12 +185,22 @@ function templateHash(template) { return hash(template || ''); }
 
 function reportId() { return crypto.randomUUID(); }
 
+function reportInputStatus(sources) {
+  const count = Array.isArray(sources) ? sources.length : 0;
+  return {
+    ok: count > 0,
+    count,
+    error: count > 0 ? '' : '本周期没有日报记录，无法生成总结。'
+  };
+}
+
 module.exports = {
   DEFAULT_REPORT_TEMPLATES,
   localDateStr,
   localTimeStr,
   sourceBundle,
   splitSources,
+  terminologyPrompt,
   buildPrompt,
   coveredRefs,
   auditSourceRecords,
@@ -182,5 +209,6 @@ module.exports = {
   markdownToText,
   sourceHash,
   templateHash,
-  reportId
+  reportId,
+  reportInputStatus
 };

@@ -17,7 +17,8 @@ const {
   markdownToText,
   sourceHash,
   templateHash,
-  reportId
+  reportId,
+  reportInputStatus
 } = require('./lib/report-utils');
 const {
   reportCacheKey,
@@ -25,6 +26,57 @@ const {
   findLatestReport,
   reportCacheStatus
 } = require('./lib/report-cache');
+const {
+  REASONING_EFFORTS,
+  normalizeReasoningEffort,
+  resolveReasoningEffort
+} = require('./lib/reasoning-effort');
+const {
+  normalizeSavedFilters
+} = require('./lib/filter-presets');
+const {
+  createBackupPayload,
+  validateBackupPayload,
+  restoreSettingsSnapshot,
+  restoreDataSnapshot
+} = require('./lib/backup');
+const {
+  normalizeTerminology,
+  addTerminologyAlias
+} = require('./lib/terminology');
+const {
+  attachReportThinking,
+  normalizeThinkingSnapshot
+} = require('./lib/thinking-snapshot');
+const {
+  DEFAULT_TERMINOLOGY_DISCOVERY_PROMPT,
+  MAX_DISCOVERY_OUTPUT_TOKENS,
+  MAX_DISCOVERY_CANDIDATES,
+  discoverySystemPrompt,
+  discoverySources,
+  splitDiscoverySources,
+  buildDiscoveryPrompt,
+  buildConsolidationPrompt,
+  parseTerminologyResponse,
+  mergeTerminologyResults,
+  normalizeDiscoveryState
+} = require('./lib/terminology-discovery');
+const {
+  DEFAULT_CLOSURE_PROMPT,
+  closureSourceBundle,
+  splitClosureHistory,
+  buildClosurePrompt,
+  parseClosureResponse,
+  mergeClosureResults,
+  closureInputHash,
+  closureCacheKey,
+  findCachedClosure,
+  findLatestClosure,
+  closureCacheStatus,
+  hydrateClosureResult,
+  filterResolvedClosureSuggestions
+} = require('./lib/closure-utils');
+const { createQuickBlurController } = require('./lib/quick-blur-controller');
 
 const ASSETS = path.join(__dirname, 'assets');
 const DEFAULT_HOTKEY = 'Alt+Shift+D';
@@ -35,6 +87,9 @@ const QUICK_SIZE = { width: 736, height: 176 };
 // 关闭 GPU 加速：透明小窗在部分机器上偶发 DWM 合成闪烁（弹出瞬间黑/白块）。
 // 本应用界面简单，软件渲染完全够用，以此换取透明窗口的显示稳定性。
 app.commandLine.appendSwitch('disable-gpu');
+// 某些 Windows 环境即使关闭硬件加速，Chromium 仍会尝试启动独立 GPU 子进程；
+// 该子进程缺少运行库时会在窗口创建前直接崩溃。放到主进程内运行，避免用户看到系统级错误框。
+app.commandLine.appendSwitch('in-process-gpu');
 app.disableHardwareAcceleration();
 
 const gotLock = app.requestSingleInstanceLock();
@@ -62,13 +117,28 @@ const DEFAULT_SETTINGS = {
   ai: {
     baseUrl: 'https://api.deepseek.com',
     model: '',
+    closureModel: '',
     models: [],
+    reasoningEffort: 'auto',
+    closureReasoningEffort: 'auto',
     encryptedApiKey: '',
     lastTestAt: 0,
     lastTestOk: false,
     lastError: ''
   },
-  reportTemplates: { ...DEFAULT_REPORT_TEMPLATES }
+  reportTemplates: { ...DEFAULT_REPORT_TEMPLATES },
+  closurePrompt: DEFAULT_CLOSURE_PROMPT,
+  terminologyDiscoveryPrompt: DEFAULT_TERMINOLOGY_DISCOVERY_PROMPT,
+  terminology: [],
+  terminologyDiscovery: {
+    initialized: false,
+    lastRunAt: 0,
+    sourceHash: '',
+    model: '',
+    recordCount: 0,
+    termCount: 0
+  },
+  savedFilters: []
 };
 
 // 开机自启带 --hidden 参数（由 applyLoginItem 写入启动项），启动时据此静默驻留
@@ -77,7 +147,9 @@ const startHidden = process.argv.includes('--hidden');
 let settings = {
   ...DEFAULT_SETTINGS,
   ai: { ...DEFAULT_SETTINGS.ai },
-  reportTemplates: { ...DEFAULT_SETTINGS.reportTemplates }
+  reportTemplates: { ...DEFAULT_SETTINGS.reportTemplates },
+  terminology: [],
+  terminologyDiscovery: { ...DEFAULT_SETTINGS.terminologyDiscovery }
 };
 
 function loadSettings() {
@@ -91,11 +163,28 @@ function loadSettings() {
       if (s.ai && typeof s.ai === 'object') {
         if (typeof s.ai.baseUrl === 'string' && s.ai.baseUrl) settings.ai.baseUrl = s.ai.baseUrl;
         if (typeof s.ai.model === 'string') settings.ai.model = s.ai.model;
+        if (typeof s.ai.closureModel === 'string') settings.ai.closureModel = s.ai.closureModel;
         if (Array.isArray(s.ai.models)) settings.ai.models = [...new Set(s.ai.models.filter(x => typeof x === 'string' && x.trim()))];
+        if (typeof s.ai.reasoningEffort === 'string') {
+          const reasoningEffort = s.ai.reasoningEffort.trim().toLowerCase();
+          if (REASONING_EFFORTS.includes(reasoningEffort)) settings.ai.reasoningEffort = reasoningEffort;
+        }
+        if (typeof s.ai.closureReasoningEffort === 'string') {
+          const closureReasoningEffort = s.ai.closureReasoningEffort.trim().toLowerCase();
+          if (REASONING_EFFORTS.includes(closureReasoningEffort)) settings.ai.closureReasoningEffort = closureReasoningEffort;
+        }
         if (typeof s.ai.encryptedApiKey === 'string') settings.ai.encryptedApiKey = s.ai.encryptedApiKey;
         if (Number.isFinite(s.ai.lastTestAt)) settings.ai.lastTestAt = s.ai.lastTestAt;
         if (typeof s.ai.lastTestOk === 'boolean') settings.ai.lastTestOk = s.ai.lastTestOk;
         if (typeof s.ai.lastError === 'string') settings.ai.lastError = s.ai.lastError;
+      }
+      if (Array.isArray(s.terminology)) settings.terminology = normalizeTerminology(s.terminology);
+      if (s.terminologyDiscovery && typeof s.terminologyDiscovery === 'object') {
+        settings.terminologyDiscovery = normalizeDiscoveryState(s.terminologyDiscovery);
+      }
+      if (typeof s.closurePrompt === 'string' && s.closurePrompt.trim()) settings.closurePrompt = s.closurePrompt.trim().slice(0, 2400);
+      if (typeof s.terminologyDiscoveryPrompt === 'string' && s.terminologyDiscoveryPrompt.trim()) {
+        settings.terminologyDiscoveryPrompt = s.terminologyDiscoveryPrompt.trim().slice(0, 2400);
       }
       if (s.reportTemplates && typeof s.reportTemplates === 'object') {
         for (const key of Object.keys(DEFAULT_REPORT_TEMPLATES)) {
@@ -104,6 +193,7 @@ function loadSettings() {
           }
         }
       }
+      if (Array.isArray(s.savedFilters)) settings.savedFilters = normalizeSavedFilters(s.savedFilters);
     }
   } catch { /* 首次运行，使用默认设置 */ }
 }
@@ -167,11 +257,12 @@ function loadDB() {
       return {
         version: 2,
         entries: db.entries,
-        reports: Array.isArray(db.reports) ? db.reports : []
+        reports: Array.isArray(db.reports) ? db.reports : [],
+        closureSummaries: Array.isArray(db.closureSummaries) ? db.closureSummaries : []
       };
     }
   } catch { /* 首次运行或文件损坏，返回空库 */ }
-  return { version: 2, entries: [], reports: [] };
+  return { version: 2, entries: [], reports: [], closureSummaries: [] };
 }
 
 function saveDB(db) {
@@ -180,6 +271,20 @@ function saveDB(db) {
   const tmp = file + '.tmp';
   fs.writeFileSync(tmp, JSON.stringify(db, null, 2), 'utf8');
   fs.renameSync(tmp, file);
+}
+
+// 多个周期并发生成时，报告完成时间可能不同；串行合并写入，避免后完成的任务覆盖先完成的报告。
+let reportPersistenceChain = Promise.resolve();
+
+function appendReportRecord(report) {
+  const write = () => {
+    const db = loadDB();
+    db.reports.push(report);
+    saveDB(db);
+  };
+  const next = reportPersistenceChain.then(write, write);
+  reportPersistenceChain = next.catch(() => {});
+  return next;
 }
 
 function reportContentDir() {
@@ -244,6 +349,80 @@ function persistReportContent(report) {
   delete report.content;
 }
 
+function backupSnapshot() {
+  const db = loadDB();
+  return createBackupPayload({
+    settings,
+    entries: db.entries,
+    reports: db.reports.map(report => ({ ...report, content: readReportContent(report) })),
+    closureSummaries: db.closureSummaries
+  });
+}
+
+function backupDirectory() {
+  return path.join(app.getPath('userData'), 'backups');
+}
+
+function backupFileStamp() {
+  const d = new Date();
+  const p = n => String(n).padStart(2, '0');
+  return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
+}
+
+function writeBackupFile(filePath, payload) {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, JSON.stringify(payload, null, 2), 'utf8');
+}
+
+function createSafetyBackup() {
+  const filePath = path.join(backupDirectory(), `pre-restore-${backupFileStamp()}-${crypto.randomUUID()}.json`);
+  writeBackupFile(filePath, backupSnapshot());
+  return filePath;
+}
+
+function normalizeRestoredSettings(snapshot) {
+  const restored = restoreSettingsSnapshot(settings, snapshot, DEFAULT_SETTINGS);
+  restored.theme = ['auto', 'light', 'dark'].includes(restored.theme) ? restored.theme : DEFAULT_SETTINGS.theme;
+  restored.hotkey = typeof restored.hotkey === 'string' && restored.hotkey.trim()
+    ? restored.hotkey.trim()
+    : DEFAULT_SETTINGS.hotkey;
+  restored.openAtLogin = !!restored.openAtLogin;
+  restored.silentStart = !!restored.silentStart;
+  restored.ai = { ...DEFAULT_SETTINGS.ai, ...(restored.ai || {}) };
+  restored.ai.baseUrl = typeof restored.ai.baseUrl === 'string' && restored.ai.baseUrl.trim()
+    ? restored.ai.baseUrl.trim()
+    : DEFAULT_SETTINGS.ai.baseUrl;
+  restored.ai.model = typeof restored.ai.model === 'string' ? restored.ai.model.trim() : '';
+  restored.ai.closureModel = typeof restored.ai.closureModel === 'string' ? restored.ai.closureModel.trim() : '';
+  restored.ai.models = Array.isArray(restored.ai.models)
+    ? [...new Set(restored.ai.models.filter(x => typeof x === 'string' && x.trim()).map(x => x.trim()))]
+    : [];
+  restored.ai.reasoningEffort = normalizeReasoningEffort(restored.ai.reasoningEffort);
+  restored.ai.closureReasoningEffort = normalizeReasoningEffort(restored.ai.closureReasoningEffort);
+  restored.ai.encryptedApiKey = settings.ai.encryptedApiKey || '';
+  restored.reportTemplates = { ...DEFAULT_REPORT_TEMPLATES };
+  for (const key of Object.keys(DEFAULT_REPORT_TEMPLATES)) {
+    if (typeof snapshot?.reportTemplates?.[key] === 'string' && snapshot.reportTemplates[key].trim()) {
+      restored.reportTemplates[key] = snapshot.reportTemplates[key].trim();
+    }
+  }
+  restored.savedFilters = normalizeSavedFilters(
+    Array.isArray(snapshot?.savedFilters) ? snapshot.savedFilters : settings.savedFilters
+  );
+  restored.closurePrompt = typeof snapshot?.closurePrompt === 'string' && snapshot.closurePrompt.trim()
+    ? snapshot.closurePrompt.trim().slice(0, 2400)
+    : DEFAULT_SETTINGS.closurePrompt;
+  restored.terminologyDiscoveryPrompt = typeof snapshot?.terminologyDiscoveryPrompt === 'string' && snapshot.terminologyDiscoveryPrompt.trim()
+    ? snapshot.terminologyDiscoveryPrompt.trim().slice(0, 2400)
+    : DEFAULT_SETTINGS.terminologyDiscoveryPrompt;
+  restored.terminology = normalizeTerminology(snapshot?.terminology);
+  restored.terminologyDiscovery = normalizeDiscoveryState({
+    ...(snapshot?.terminologyDiscovery || restored.terminologyDiscovery),
+    termCount: restored.terminology.length
+  });
+  return restored;
+}
+
 /* ---------------- 时间与导出 ---------------- */
 
 const WEEKDAYS = ['日', '一', '二', '三', '四', '五', '六'];
@@ -279,6 +458,13 @@ const REPORT_SEGMENT_MAX_CHARS = 20000;
 // 普通报告仍内嵌在 data.json；真正较大的正文落到独立 Markdown 文件，
 // 避免每次保存一条记录都重写几 MB 的 JSON。
 const REPORT_INLINE_CONTENT_LIMIT = 128 * 1024;
+// 近期闭环是结构化 JSON，单次只需要返回结论、证据编号和少量待确认项。
+// 历史记录会按批次发送，避免把一个超长历史一次性塞进上下文。
+const CLOSURE_MAX_OUTPUT_TOKENS = 16384;
+const CLOSURE_LEGACY_MAX_OUTPUT_TOKENS = 8192;
+const CLOSURE_MAX_CONTINUATIONS = 1;
+const CLOSURE_MAX_HISTORY_SOURCES = 36;
+const CLOSURE_MAX_HISTORY_CHARS = 16000;
 
 function apiKeyFromStorage() {
   if (!settings.ai.encryptedApiKey) return '';
@@ -308,7 +494,10 @@ function aiPublicState(models = settings.ai.models) {
     maskedApiKey: maskedApiKey(),
     baseUrl: settings.ai.baseUrl,
     model: settings.ai.model,
+    closureModel: settings.ai.closureModel,
     models: Array.isArray(models) ? models : [],
+    reasoningEffort: normalizeReasoningEffort(settings.ai.reasoningEffort),
+    closureReasoningEffort: normalizeReasoningEffort(settings.ai.closureReasoningEffort),
     lastTestAt: settings.ai.lastTestAt,
     lastTestOk: settings.ai.lastTestOk,
     lastError: settings.ai.lastError
@@ -412,7 +601,9 @@ async function deepSeekStream(endpoint, apiKey, init = {}, onDelta = () => {}) {
         done = true;
       }
     }
-    return { finishReason, usage };
+    // 某些兼容接口会在流正常结束时省略 finish_reason；只要流已完整读完，
+    // 就按正常结束处理，避免把一个可用的报告误判成“部分结果”。
+    return { finishReason: finishReason || 'stop', usage };
   } catch (error) {
     if (error?.name === 'AbortError') throw new Error('请求超时，请检查网络或稍后重试');
     throw error;
@@ -438,6 +629,234 @@ function chooseModel(models, current) {
   return preferred.find(x => models.includes(x)) || models[0];
 }
 
+function chooseClosureModel(models, current) {
+  if (current && models.includes(current)) return current;
+  // 闭环需要做历史语义对应，默认优先能力更强的模型；用户仍可在设置中切换。
+  const preferred = ['deepseek-v4-pro', 'deepseek-reasoner', 'deepseek-v4-flash', 'deepseek-chat'];
+  return preferred.find(x => models.includes(x)) || models[0];
+}
+
+function hashText(value) {
+  return crypto.createHash('sha256').update(String(value || '')).digest('hex');
+}
+
+function terminologyDiscoverySourceHash(entries) {
+  const sources = discoverySources(entries);
+  return hashText(sources.map(source => `${source.id}|${source.date}|${source.time}|${source.text}`).join('\n'));
+}
+
+function responseMessageText(value) {
+  if (typeof value === 'string') return value;
+  if (Array.isArray(value)) return value.map(item => responseMessageText(item)).join('');
+  if (value && typeof value === 'object') {
+    const nested = value.text ?? value.content ?? value.value;
+    return nested === undefined ? JSON.stringify(value) : responseMessageText(nested);
+  }
+  return '';
+}
+
+function responseMessageContent(data) {
+  return responseMessageText(data?.choices?.[0]?.message?.content);
+}
+
+function responseMessageReasoning(data) {
+  const message = data?.choices?.[0]?.message;
+  return responseMessageText(message?.reasoning_content ?? message?.reasoning);
+}
+
+async function requestTerminologyDiscovery({ key, model, prompt, notify = () => {} }) {
+  let thinkingEnabled = true;
+  let jsonModeEnabled = true;
+  let repairAttempted = false;
+  let requestPrompt = prompt;
+  while (true) {
+    try {
+      let reasoning = '';
+      let content = '';
+      await deepSeekStream('/chat/completions', key, {
+        method: 'POST',
+        body: JSON.stringify({
+          model,
+          messages: [
+            { role: 'system', content: discoverySystemPrompt() },
+            { role: 'user', content: requestPrompt }
+          ],
+          ...(thinkingEnabled ? { thinking: { type: 'enabled' }, reasoning_effort: closureReasoningEffort() } : {}),
+          ...(jsonModeEnabled ? { response_format: { type: 'json_object' } } : {}),
+          stream: true,
+          stream_options: { include_usage: true },
+          max_tokens: MAX_DISCOVERY_OUTPUT_TOKENS
+        })
+      }, delta => {
+        if (delta.reasoning) {
+          reasoning += delta.reasoning;
+          notify({
+            scope: 'terminology',
+            phase: 'thinking',
+            text: delta.reasoning,
+            reasoningLength: reasoning.length
+          });
+        }
+        if (delta.content) {
+          content += delta.content;
+          notify({
+            scope: 'terminology',
+            phase: 'writing',
+            text: delta.content,
+            contentLength: content.length
+          });
+        }
+      });
+      const terms = parseTerminologyResponse(content);
+      if (!terms) {
+        if (thinkingEnabled) {
+          // 结构化词典不需要把思考文本返回给解析器；若思考预算挤占了最终 JSON，
+          // 只对这次请求降级重试，不改变用户保存的思考强度设置。
+          thinkingEnabled = false;
+          continue;
+        }
+        if (!repairAttempted) {
+          // 即使服务端没有严格执行 JSON mode，也给模型一次无状态重试机会，
+          // 防止说明文字、思考标签或一次偶发的格式偏差让首次初始化直接失败。
+          repairAttempted = true;
+          requestPrompt = [
+            prompt,
+            '',
+            '输出校验：上一响应无法被程序解析。请重新生成同一份结果，只输出完整、可直接被 JSON.parse 解析的 JSON 对象，不要输出思考过程、Markdown 围栏、解释文字或注释。'
+          ].join('\n');
+          continue;
+        }
+        throw new Error('AI 返回的术语词典无法解析，请重试');
+      }
+      return terms;
+    } catch (error) {
+      if (thinkingEnabled && canRetryWithoutThinking(error)) {
+        thinkingEnabled = false;
+        continue;
+      }
+      if (jsonModeEnabled && canRetryWithoutJsonMode(error)) {
+        jsonModeEnabled = false;
+        continue;
+      }
+      throw error;
+    }
+  }
+}
+
+async function discoverTerminologyFromEntries({ key, model, entries, existing = [], customPrompt, notify = () => {} }) {
+  const sources = discoverySources(entries);
+  const chunks = sources.length ? splitDiscoverySources(sources) : [];
+  const candidates = [];
+  notify({ scope: 'terminology', phase: 'started', model, totalBatches: chunks.length, recordCount: sources.length });
+
+  for (let index = 0; index < chunks.length; index += 1) {
+    notify({
+      scope: 'terminology',
+      phase: 'extracting',
+      model,
+      batch: index + 1,
+      totalBatches: chunks.length,
+      recordCount: chunks[index].length
+    });
+    const terms = await requestTerminologyDiscovery({
+      key,
+      model,
+      prompt: buildDiscoveryPrompt(chunks[index], customPrompt),
+      notify
+    });
+    candidates.push(terms);
+    notify({
+      scope: 'terminology',
+      phase: 'batch-done',
+      model,
+      batch: index + 1,
+      totalBatches: chunks.length,
+      candidateCount: mergeTerminologyResults(candidates).length
+    });
+  }
+
+  let discovered = mergeTerminologyResults(candidates).slice(0, MAX_DISCOVERY_CANDIDATES);
+  let consolidationFallback = false;
+  if (discovered.length > 0 && chunks.length > 1) {
+    notify({ scope: 'terminology', phase: 'consolidating', model, candidateCount: discovered.length });
+    try {
+      const consolidated = await requestTerminologyDiscovery({
+        key,
+        model,
+        prompt: buildConsolidationPrompt(discovered, existing, customPrompt),
+        notify
+      });
+      if (consolidated.length) discovered = consolidated;
+    } catch {
+      // 归并调用失败时保留已经逐批识别出的候选，不让一次辅助调用导致已有结果丢失。
+      consolidationFallback = true;
+    }
+  }
+
+  return {
+    terminology: mergeTerminologyResults([existing, discovered]),
+    recordCount: sources.length,
+    batchCount: chunks.length,
+    candidateCount: discovered.length,
+    consolidationFallback
+  };
+}
+
+function closurePromptHash() {
+  return hashText(settings.closurePrompt || DEFAULT_CLOSURE_PROMPT);
+}
+
+function closureTerminologyHash() {
+  return hashText(JSON.stringify(settings.terminology || []));
+}
+
+function reportTerminologyHash() {
+  // 空词典与旧版本报告兼容；一旦配置过词典，报告缓存必须感知其变化。
+  return settings.terminology?.length ? hashText(JSON.stringify(settings.terminology)) : '';
+}
+
+function closureContext(start, end, periodType = 'week') {
+  const db = loadDB();
+  const recentEntries = db.entries.filter(entry => {
+    const day = localDateStr(entry.ts);
+    return day >= start && day <= end;
+  });
+  const historyEntries = db.entries.filter(entry => localDateStr(entry.ts) < start);
+  const recentSources = closureSourceBundle(recentEntries, 'N');
+  const historicalSources = closureSourceBundle(historyEntries, 'H');
+  const inputHash = closureInputHash(recentSources, historicalSources, settings.terminology);
+  const terminologyHash = closureTerminologyHash();
+  const promptHash = closurePromptHash();
+  return {
+    periodType,
+    start,
+    end,
+    recentSources,
+    historicalSources,
+    inputHash,
+    terminologyHash,
+    promptHash,
+    cacheKey: closureCacheKey({
+      periodType,
+      start,
+      end,
+      inputHash,
+      terminologyHash,
+      promptHash
+    })
+  };
+}
+
+function closureMaxOutputTokens(model) {
+  if (model === 'deepseek-chat' || model === 'deepseek-reasoner') return CLOSURE_LEGACY_MAX_OUTPUT_TOKENS;
+  return CLOSURE_MAX_OUTPUT_TOKENS;
+}
+
+function closureReasoningEffort() {
+  const value = normalizeReasoningEffort(settings.ai.closureReasoningEffort);
+  return value === 'auto' ? 'high' : value;
+}
+
 function reportMaxOutputTokens(model) {
   // 旧版 deepseek-chat / deepseek-reasoner 的兼容上限更保守；
   // V4 使用更大的预算，遇到供应商拒绝时仍会在分段模块中回退。
@@ -448,14 +867,25 @@ function reportMaxOutputTokens(model) {
 }
 
 function reportReasoningEffort(segmentCount) {
-  // 普通日报/周报以较低思考强度换取更快、更稳定的正文输出；长周期分段才提高到中等。
-  return segmentCount > 1 ? 'medium' : 'low';
+  // 自动模式让普通报告优先响应速度，长周期分段时提高到标准强度。
+  // 用户手动选择后，使用用户选择的值；续写请求仍在下方单独降为 low，避免重复消耗思考预算。
+  return resolveReasoningEffort(settings.ai.reasoningEffort, segmentCount);
 }
 
 function canRetryWithSmallerOutput(error, receivedContent) {
   if (receivedContent) return false;
   const message = String(error?.message || '').toLowerCase();
   return /max[_ -]?tokens|maximum.{0,24}tokens|output.{0,24}tokens|token limit/.test(message);
+}
+
+function canRetryWithoutThinking(error) {
+  const message = String(error?.message || '').toLowerCase();
+  return /thinking|reasoning[_ -]?effort|reasoning.*unsupported|unsupported.*reasoning|invalid.*reasoning/.test(message);
+}
+
+function canRetryWithoutJsonMode(error) {
+  const message = String(error?.message || '').toLowerCase();
+  return /response[_ -]?format|json[_ -]?object|json mode|structured output|unsupported.*format|invalid.*format/.test(message);
 }
 
 function reportSystemPrompt() {
@@ -480,6 +910,7 @@ function combineReportSegments(segments) {
 
 async function generateReportSegment({ key, model, prompt, segmentIndex, segmentCount, notify }) {
   const system = reportSystemPrompt();
+  let reasoning = '';
   let content = '';
   let reasoningLength = 0;
   let continuationCount = 0;
@@ -512,7 +943,8 @@ async function generateReportSegment({ key, model, prompt, segmentIndex, segment
     });
 
     let receivedContent = false;
-    const thinkingEnabled = continuationCount === 0 || content.length > 0;
+    // 续写只负责接上正文，不再重复开启思考，避免一次截断被多轮推理放大为长时间等待。
+    const thinkingEnabled = continuationCount === 0;
     try {
       const streamResult = await deepSeekStream('/chat/completions', key, {
         method: 'POST',
@@ -528,6 +960,7 @@ async function generateReportSegment({ key, model, prompt, segmentIndex, segment
         })
       }, delta => {
         if (delta.reasoning) {
+          reasoning += delta.reasoning;
           reasoningLength += delta.reasoning.length;
           notify({
             phase: 'thinking',
@@ -601,12 +1034,145 @@ async function generateReportSegment({ key, model, prompt, segmentIndex, segment
   }
 
   return {
+    reasoning,
     content: content.trim(),
     reasoningLength,
     continuationCount,
     finishReason,
     usage
   };
+}
+
+function closureSystemPrompt() {
+  return '你是一个严格的近期工作闭环分析助手。你只能依据输入记录判断事项之间的关系，不得把缺少记录理解为未完成，不得编造项目背景，也不得输出详细的内部思考过程。你的最终响应必须是合法 JSON。';
+}
+
+async function generateClosureSegment({ key, model, prompt, segmentIndex, segmentCount, notify }) {
+  let content = '';
+  let reasoningLength = 0;
+  let continuationCount = 0;
+  let finishReason = '';
+  let usage = null;
+  let maxTokens = closureMaxOutputTokens(model);
+  let thinkingEnabled = true;
+  let messages = [
+    { role: 'system', content: closureSystemPrompt() },
+    { role: 'user', content: prompt }
+  ];
+
+  const continuationMessages = () => [
+    { role: 'system', content: closureSystemPrompt() },
+    { role: 'user', content: prompt },
+    { role: 'assistant', content: content.trimEnd() },
+    {
+      role: 'user',
+      content: '上一次 JSON 输出未完整结束。请从已有 JSON 的最后一个完整字段继续，最终只返回一个完整、合法的 JSON 对象，不要重复前面的对象，不要加 Markdown 围栏或解释。'
+    }
+  ];
+
+  while (true) {
+    notify({
+      scope: 'closure',
+      phase: continuationCount ? 'continuing' : 'segment',
+      model,
+      segment: segmentIndex + 1,
+      totalSegments: segmentCount,
+      continuation: continuationCount,
+      maxContinuations: CLOSURE_MAX_CONTINUATIONS
+    });
+
+    let receivedContent = false;
+    try {
+      const streamResult = await deepSeekStream('/chat/completions', key, {
+        method: 'POST',
+        body: JSON.stringify({
+          model,
+          messages,
+          ...(thinkingEnabled ? { thinking: { type: 'enabled' }, reasoning_effort: closureReasoningEffort() } : {}),
+          stream: true,
+          stream_options: { include_usage: true },
+          max_tokens: maxTokens
+        })
+      }, delta => {
+        if (delta.reasoning) {
+          reasoningLength += delta.reasoning.length;
+          notify({
+            scope: 'closure',
+            phase: 'thinking',
+            text: delta.reasoning,
+            segment: segmentIndex + 1,
+            totalSegments: segmentCount,
+            continuation: continuationCount,
+            reasoningLength
+          });
+        }
+        if (delta.content) {
+          receivedContent = true;
+          content += delta.content;
+          notify({
+            scope: 'closure',
+            phase: 'writing',
+            text: delta.content,
+            segment: segmentIndex + 1,
+            totalSegments: segmentCount,
+            continuation: continuationCount,
+            contentLength: content.length
+          });
+        }
+      });
+      finishReason = streamResult.finishReason || '';
+      usage = streamResult.usage || usage;
+    } catch (error) {
+      if (receivedContent && continuationCount < CLOSURE_MAX_CONTINUATIONS) {
+        continuationCount += 1;
+        messages = continuationMessages();
+        notify({
+          scope: 'closure',
+          phase: 'recovering',
+          model,
+          segment: segmentIndex + 1,
+          totalSegments: segmentCount,
+          continuation: continuationCount,
+          maxContinuations: CLOSURE_MAX_CONTINUATIONS,
+          text: '闭环分析的流式连接暂时中断，正在继续接收结构化结果。'
+        });
+        continue;
+      }
+      if (!receivedContent && thinkingEnabled && canRetryWithoutThinking(error)) {
+        thinkingEnabled = false;
+        notify({
+          scope: 'closure',
+          phase: 'fallback',
+          model,
+          segment: segmentIndex + 1,
+          totalSegments: segmentCount,
+          text: '当前模型不支持思考参数，已切换为兼容模式继续分析。'
+        });
+        continue;
+      }
+      if (!receivedContent && maxTokens > CLOSURE_LEGACY_MAX_OUTPUT_TOKENS && canRetryWithSmallerOutput(error, receivedContent)) {
+        maxTokens = CLOSURE_LEGACY_MAX_OUTPUT_TOKENS;
+        notify({
+          scope: 'closure',
+          phase: 'fallback',
+          model,
+          segment: segmentIndex + 1,
+          totalSegments: segmentCount,
+          text: '当前模型不接受较大的结构化输出预算，已切换兼容模式继续分析。'
+        });
+        continue;
+      }
+      throw error;
+    }
+
+    const parsed = parseClosureResponse(content);
+    if (parsed) return { ...parsed, reasoningLength, continuationCount, finishReason, usage };
+    if (continuationCount >= CLOSURE_MAX_CONTINUATIONS) {
+      throw new Error('AI 返回的闭环结果不是完整的 JSON，请重试或缩短历史记录范围');
+    }
+    continuationCount += 1;
+    messages = continuationMessages();
+  }
 }
 
 function reportEntries(start, end) {
@@ -708,6 +1274,91 @@ ipcMain.handle('entries:deleteMany', (_e, { ids }) => {
   return { ok: true, removed: before - db.entries.length };
 });
 
+ipcMain.handle('data:backup', async () => {
+  const payload = backupSnapshot();
+  const { canceled, filePath } = await dialog.showSaveDialog(mainWindow, {
+    title: '导出完整备份',
+    defaultPath: `日报随手记_备份_${backupFileStamp()}.json`,
+    filters: [{ name: '日报随手记备份', extensions: ['json'] }]
+  });
+  if (canceled || !filePath) return { ok: false, canceled: true };
+  try {
+    writeBackupFile(filePath, payload);
+    return {
+      ok: true,
+      filePath,
+      summary: {
+        entries: payload.data.entries.length,
+        reports: payload.data.reports.length,
+        closureSummaries: payload.data.closureSummaries.length
+      }
+    };
+  } catch (error) {
+    return { ok: false, error: `备份导出失败：${error?.message || '无法写入文件'}` };
+  }
+});
+
+ipcMain.handle('data:restore', async () => {
+  const { canceled, filePaths } = await dialog.showOpenDialog(mainWindow, {
+    title: '从备份恢复',
+    properties: ['openFile'],
+    filters: [{ name: '日报随手记备份', extensions: ['json'] }]
+  });
+  if (canceled || !filePaths?.[0]) return { ok: false, canceled: true };
+
+  let payload;
+  try {
+    payload = JSON.parse(fs.readFileSync(filePaths[0], 'utf8').replace(/^\ufeff/, ''));
+  } catch (error) {
+    return { ok: false, error: `备份文件无法读取：${error?.message || 'JSON 格式错误'}` };
+  }
+  const checked = validateBackupPayload(payload);
+  if (!checked.ok) return checked;
+
+  const previousDb = loadDB();
+  const previousSettings = JSON.parse(JSON.stringify(settings));
+  let safetyBackupPath = '';
+  try {
+    safetyBackupPath = createSafetyBackup();
+    const restoredDb = restoreDataSnapshot(payload.data);
+    const restoredSettings = normalizeRestoredSettings(payload.settings);
+    const previousHotkey = settings.hotkey;
+
+    for (const report of restoredDb.reports) persistReportContent(report);
+    saveDB(restoredDb);
+    settings = restoredSettings;
+    if (previousHotkey !== settings.hotkey) {
+      try { if (previousHotkey) globalShortcut.unregister(previousHotkey); } catch { /* 忽略旧快捷键清理失败 */ }
+      const registered = globalShortcut.register(settings.hotkey, toggleQuick);
+      if (!registered) {
+        try { if (previousHotkey) globalShortcut.register(previousHotkey, toggleQuick); } catch { /* 忽略回退失败 */ }
+        settings.hotkey = previousHotkey;
+      }
+    }
+    saveSettings();
+    applyLoginItem();
+    refreshTrayMenu();
+    broadcastTheme();
+    notifyMainChanged();
+    return { ok: true, summary: checked.summary, safetyBackupPath };
+  } catch (error) {
+    try {
+      saveDB(previousDb);
+      settings = previousSettings;
+      saveSettings();
+      applyLoginItem();
+      refreshTrayMenu();
+      broadcastTheme();
+      notifyMainChanged();
+    } catch { /* 保留恢复前安全备份，供用户手动回滚 */ }
+    return {
+      ok: false,
+      error: `恢复失败：${error?.message || '无法写入数据'}`,
+      safetyBackupPath
+    };
+  }
+});
+
 ipcMain.handle('export:run', async (_e, { start, end, format }) => {
   if (!start || !end || start > end) return { ok: false, error: '日期范围无效' };
 
@@ -756,27 +1407,46 @@ ipcMain.handle('ai:test', async (_e, { apiKey } = {}) => {
   try {
     const models = await fetchAvailableModels(key);
     const selected = chooseModel(models, settings.ai.model);
+    const closureSelected = chooseClosureModel(models, settings.ai.closureModel);
     const modelChanged = selected !== settings.ai.model;
+    const closureModelChanged = closureSelected !== settings.ai.closureModel;
     settings.ai.models = models;
-    if (suppliedKey) settings.ai.encryptedApiKey = encryptApiKey(suppliedKey);
     settings.ai.model = selected;
+    settings.ai.closureModel = closureSelected;
     settings.ai.lastTestAt = Date.now();
     settings.ai.lastTestOk = true;
     settings.ai.lastError = '';
-    saveSettings();
-    return { ok: true, modelChanged, ai: aiPublicState(models) };
+    // 测试只更新当前会话中的草稿和模型目录；API Key 由独立的“保存配置”动作落盘。
+    return {
+      ok: true,
+      modelChanged,
+      closureModelChanged,
+      ai: { ...aiPublicState(models), configured: true }
+    };
   } catch (error) {
     settings.ai.lastTestAt = Date.now();
     settings.ai.lastTestOk = false;
     settings.ai.lastError = error?.message || '连接失败';
-    saveSettings();
     return { ok: false, error: settings.ai.lastError, ai: aiPublicState() };
+  }
+});
+
+ipcMain.handle('ai:save', (_e, { apiKey } = {}) => {
+  const suppliedKey = String(apiKey || '').trim();
+  try {
+    if (suppliedKey) settings.ai.encryptedApiKey = encryptApiKey(suppliedKey);
+    if (!settings.ai.encryptedApiKey) return { ok: false, error: '请先填写 DeepSeek API Key' };
+    saveSettings();
+    return { ok: true, ai: aiPublicState() };
+  } catch (error) {
+    return { ok: false, error: error?.message || 'AI 配置保存失败' };
   }
 });
 
 ipcMain.handle('ai:clear', () => {
   settings.ai.encryptedApiKey = '';
   settings.ai.model = '';
+  settings.ai.closureModel = '';
   settings.ai.models = [];
   settings.ai.lastTestAt = 0;
   settings.ai.lastTestOk = false;
@@ -798,17 +1468,351 @@ ipcMain.handle('ai:setModel', (_e, { model } = {}) => {
   return { ok: true, ai: aiPublicState() };
 });
 
+ipcMain.handle('ai:setClosureModel', (_e, { model } = {}) => {
+  const value = String(model || '').trim();
+  if (!value) return { ok: false, error: '闭环模型名称不能为空' };
+  if (settings.ai.models.length && !settings.ai.models.includes(value)) {
+    return { ok: false, error: '该模型不在最近读取的可用列表中，请重新测试连接' };
+  }
+  settings.ai.closureModel = value;
+  settings.ai.lastTestOk = false;
+  settings.ai.lastError = '闭环模型已更换，请重新测试连接';
+  saveSettings();
+  return { ok: true, ai: aiPublicState() };
+});
+
+ipcMain.handle('ai:setReasoningEffort', (_e, { reasoningEffort } = {}) => {
+  const value = typeof reasoningEffort === 'string' ? reasoningEffort.trim().toLowerCase() : '';
+  if (!REASONING_EFFORTS.includes(value)) return { ok: false, error: '思考强度选项无效' };
+  settings.ai.reasoningEffort = value;
+  saveSettings();
+  return { ok: true, ai: aiPublicState() };
+});
+
+ipcMain.handle('ai:setClosureReasoningEffort', (_e, { reasoningEffort } = {}) => {
+  const value = typeof reasoningEffort === 'string' ? reasoningEffort.trim().toLowerCase() : '';
+  if (!REASONING_EFFORTS.includes(value)) return { ok: false, error: '闭环思考强度选项无效' };
+  settings.ai.closureReasoningEffort = value;
+  saveSettings();
+  return { ok: true, ai: aiPublicState() };
+});
+
+function terminologyDiscoveryForClient() {
+  return { ...normalizeDiscoveryState(settings.terminologyDiscovery) };
+}
+
+function sendTerminologyProgress(event, progress) {
+  if (event.sender && !event.sender.isDestroyed()) {
+    event.sender.send('terminology:progress', { scope: 'terminology', ...progress });
+  }
+}
+
+ipcMain.handle('terminology:discover', async (event, payload = {}) => {
+  const force = !!payload.force;
+  const key = apiKeyFromStorage();
+  if (!key) return { ok: false, error: '尚未配置 DeepSeek API Key，请先到设置中连接 AI' };
+
+  const entries = loadDB().entries;
+  const sourceHashValue = terminologyDiscoverySourceHash(entries);
+  const previous = normalizeDiscoveryState(settings.terminologyDiscovery);
+  if (!force && previous.initialized) {
+    return {
+      ok: true,
+      skipped: true,
+      terminology: normalizeTerminology(settings.terminology),
+      discovery: terminologyDiscoveryForClient(),
+      ai: aiPublicState()
+    };
+  }
+
+  const notify = progress => sendTerminologyProgress(event, progress);
+  try {
+    // 识别前重新读取模型目录，防止用户更新 API 后旧的模型名称失效。
+    const models = await fetchAvailableModels(key);
+    const previousModel = settings.ai.closureModel || settings.ai.model;
+    const model = chooseClosureModel(models, previousModel);
+    settings.ai.models = models;
+    settings.ai.closureModel = model;
+    settings.ai.lastTestAt = Date.now();
+    settings.ai.lastTestOk = true;
+    settings.ai.lastError = '';
+    saveSettings();
+
+    if (!entries.length) {
+      const now = Date.now();
+      settings.terminologyDiscovery = normalizeDiscoveryState({
+        initialized: true,
+        lastRunAt: now,
+        sourceHash: sourceHashValue,
+        model,
+        recordCount: 0,
+        termCount: settings.terminology.length
+      });
+      saveSettings();
+      notify({ phase: 'saved', model, recordCount: 0, termCount: settings.terminology.length });
+      return {
+        ok: true,
+        skipped: false,
+        terminology: normalizeTerminology(settings.terminology),
+        discovery: terminologyDiscoveryForClient(),
+        ai: aiPublicState(models)
+      };
+    }
+
+    const result = await discoverTerminologyFromEntries({
+      key,
+      model,
+      entries,
+      existing: settings.terminology,
+      customPrompt: settings.terminologyDiscoveryPrompt,
+      notify
+    });
+    // 识别期间允许用户继续编辑；最终合并当前设置，避免覆盖刚保存的手工词条。
+    settings.terminology = mergeTerminologyResults([settings.terminology, result.terminology]);
+    settings.terminologyDiscovery = normalizeDiscoveryState({
+      initialized: true,
+      lastRunAt: Date.now(),
+      sourceHash: sourceHashValue,
+      model,
+      recordCount: result.recordCount,
+      termCount: settings.terminology.length
+    });
+    saveSettings();
+    notify({
+      phase: 'saved',
+      model,
+      recordCount: result.recordCount,
+      batchCount: result.batchCount,
+      termCount: settings.terminology.length,
+      consolidationFallback: result.consolidationFallback
+    });
+    return {
+      ok: true,
+      skipped: false,
+      terminology: normalizeTerminology(settings.terminology),
+      discovery: terminologyDiscoveryForClient(),
+      ai: aiPublicState(models),
+      stats: {
+        recordCount: result.recordCount,
+        batchCount: result.batchCount,
+        termCount: settings.terminology.length,
+        consolidationFallback: result.consolidationFallback
+      }
+    };
+  } catch (error) {
+    notify({ phase: 'error', error: error?.message || '术语识别失败' });
+    return { ok: false, error: error?.message || '术语识别失败' };
+  }
+});
+
+function closureForClient(summary) {
+  if (!summary) return null;
+  const cloned = JSON.parse(JSON.stringify(summary));
+  return filterResolvedClosureSuggestions(cloned, settings.terminology);
+}
+
+ipcMain.handle('closure:getCached', (_e, { start, end, periodType } = {}) => {
+  if (!start || !end || start > end) return { ok: false, error: '日期范围无效' };
+  const type = reportTypeOrCustom(periodType);
+  const context = closureContext(start, end, type);
+  const summaries = loadDB().closureSummaries;
+  const cached = findCachedClosure(summaries, { ...context, cacheKey: context.cacheKey });
+  const summary = cached || findLatestClosure(summaries, context);
+  return {
+    ok: true,
+    cached: !!cached,
+    cacheStatus: closureCacheStatus(summary, context),
+    summary: closureForClient(summary),
+    recentCount: context.recentSources.length,
+    historicalCount: context.historicalSources.length
+  };
+});
+
+ipcMain.handle('closure:generate', async (event, payload = {}) => {
+  const { start, end, force } = payload;
+  if (!start || !end || start > end) return { ok: false, error: '日期范围无效' };
+  const periodType = reportTypeOrCustom(payload.periodType);
+  const context = closureContext(start, end, periodType);
+  const summaries = loadDB().closureSummaries;
+  if (!force) {
+    const cached = findCachedClosure(summaries, context);
+    if (cached) {
+      return {
+        ok: true,
+        cached: true,
+        cacheStatus: 'fresh',
+        summary: closureForClient(cached),
+        model: cached.model || settings.ai.closureModel || '',
+        modelChanged: false
+      };
+    }
+  }
+
+  if (!context.recentSources.length) {
+    const now = Date.now();
+    const emptySummary = {
+      id: crypto.randomUUID(),
+      cacheKey: context.cacheKey,
+      periodType,
+      start,
+      end,
+      model: settings.ai.closureModel || '',
+      inputHash: context.inputHash,
+      terminologyHash: context.terminologyHash,
+      promptHash: context.promptHash,
+      recentSourceCount: 0,
+      historicalSourceCount: context.historicalSources.length,
+      segmentCount: 0,
+      reasoningLength: 0,
+      completed_items: [],
+      recent_explicit_completions: [],
+      needs_confirmation: [],
+      createdAt: now,
+      updatedAt: now
+    };
+    const db = loadDB();
+    db.closureSummaries.push(emptySummary);
+    saveDB(db);
+    return { ok: true, cached: false, cacheStatus: 'fresh', summary: closureForClient(emptySummary), model: emptySummary.model, modelChanged: false };
+  }
+
+  const key = apiKeyFromStorage();
+  if (!key) return { ok: false, error: '尚未配置 DeepSeek API Key，请先到设置中连接 AI' };
+
+  let models;
+  try {
+    models = await fetchAvailableModels(key);
+  } catch (error) {
+    settings.ai.lastTestAt = Date.now();
+    settings.ai.lastTestOk = false;
+    settings.ai.lastError = error?.message || '连接失败';
+    saveSettings();
+    return { ok: false, error: settings.ai.lastError };
+  }
+
+  const previousModel = settings.ai.closureModel;
+  const previousTestOk = settings.ai.lastTestOk;
+  const model = chooseClosureModel(models, previousModel);
+  const catalogChanged = JSON.stringify(settings.ai.models) !== JSON.stringify(models);
+  settings.ai.models = models;
+  settings.ai.closureModel = model;
+  settings.ai.lastTestAt = Date.now();
+  settings.ai.lastTestOk = true;
+  settings.ai.lastError = '';
+  if (catalogChanged || previousModel !== model || !previousTestOk) saveSettings();
+
+  try {
+    const notify = progress => {
+      if (event.sender && !event.sender.isDestroyed()) event.sender.send('closure:progress', progress);
+    };
+    const historyChunks = splitClosureHistory(context.historicalSources, {
+      maxSources: CLOSURE_MAX_HISTORY_SOURCES,
+      maxChars: CLOSURE_MAX_HISTORY_CHARS
+    });
+    const segments = [];
+    for (let index = 0; index < historyChunks.length; index += 1) {
+      const segmentResult = await generateClosureSegment({
+        key,
+        model,
+        segmentIndex: index,
+        segmentCount: historyChunks.length,
+        prompt: buildClosurePrompt({
+          start,
+          end,
+          recentSources: context.recentSources,
+          historicalSources: historyChunks[index],
+          terminology: settings.terminology,
+          customPrompt: settings.closurePrompt,
+          segmentIndex: index,
+          segmentCount: historyChunks.length
+        }),
+        notify
+      });
+      segments.push(segmentResult);
+      notify({
+        scope: 'closure',
+        phase: 'segment-done',
+        segment: index + 1,
+        totalSegments: historyChunks.length,
+        completedCount: segmentResult.completed_items.length + segmentResult.recent_explicit_completions.length,
+        confirmationCount: segmentResult.needs_confirmation.length
+      });
+    }
+
+    const sourceMap = new Map([
+      ...context.recentSources.map(source => [source.ref, source]),
+      ...context.historicalSources.map(source => [source.ref, source])
+    ]);
+    const merged = hydrateClosureResult(mergeClosureResults(segments), sourceMap);
+    const now = Date.now();
+    const summary = {
+      id: crypto.randomUUID(),
+      cacheKey: context.cacheKey,
+      periodType,
+      start,
+      end,
+      model,
+      inputHash: context.inputHash,
+      terminologyHash: context.terminologyHash,
+      promptHash: context.promptHash,
+      recentSourceCount: context.recentSources.length,
+      historicalSourceCount: context.historicalSources.length,
+      segmentCount: segments.length,
+      reasoningLength: segments.reduce((sum, segment) => sum + (segment.reasoningLength || 0), 0),
+      completed_items: merged.completed_items,
+      recent_explicit_completions: merged.recent_explicit_completions,
+      needs_confirmation: merged.needs_confirmation,
+      createdAt: now,
+      updatedAt: now
+    };
+    const db = loadDB();
+    db.closureSummaries.push(summary);
+    saveDB(db);
+    notify({
+      scope: 'closure',
+      phase: 'saved',
+      model,
+      segment: historyChunks.length,
+      totalSegments: historyChunks.length,
+      completedCount: summary.completed_items.length + summary.recent_explicit_completions.length,
+      confirmationCount: summary.needs_confirmation.length
+    });
+    return {
+      ok: true,
+      cached: false,
+      cacheStatus: 'fresh',
+      summary: closureForClient(summary),
+      models,
+      model,
+      modelChanged: previousModel !== model
+    };
+  } catch (error) {
+    settings.ai.lastTestOk = false;
+    settings.ai.lastError = error?.message || '近期闭环生成失败';
+    saveSettings();
+    if (event.sender && !event.sender.isDestroyed()) {
+      event.sender.send('closure:progress', { scope: 'closure', phase: 'error', error: settings.ai.lastError });
+    }
+    return { ok: false, error: settings.ai.lastError };
+  }
+});
+
 ipcMain.handle('report:getCached', (_e, { start, end, periodType, template } = {}) => {
   if (!start || !end || start > end) return { ok: false, error: '日期范围无效' };
   const type = reportTypeOrCustom(periodType);
   const sources = sourceBundle(reportEntries(start, end));
+  const sourceStatus = reportInputStatus(sources);
+  if (!sourceStatus.ok) {
+    return { ok: true, cached: false, cacheStatus: 'missing', report: null, sourceCount: 0 };
+  }
   const templateText = String(template || settings.reportTemplates[type] || DEFAULT_REPORT_TEMPLATES.custom).trim();
   const cacheParams = {
     start,
     end,
     periodType: type,
     sourceHashValue: sourceHash(sources),
-    templateHashValue: templateHash(templateText)
+    templateHashValue: templateHash(templateText),
+    terminologyHashValue: reportTerminologyHash()
   };
   const reports = loadDB().reports;
   const cached = findCachedReport(reports, cacheParams);
@@ -823,15 +1827,27 @@ ipcMain.handle('report:getCached', (_e, { start, end, periodType, template } = {
 
 ipcMain.handle('report:generate', async (event, payload = {}) => {
   const { start, end, periodLabel, force } = payload;
+  const jobId = String(payload.jobId || '').trim();
   if (!start || !end || start > end) return { ok: false, error: '日期范围无效' };
   const periodType = reportTypeOrCustom(payload.periodType);
   const template = String(payload.template || settings.reportTemplates[periodType] || DEFAULT_REPORT_TEMPLATES.custom).trim();
   const entries = reportEntries(start, end);
   const sources = sourceBundle(entries);
+  const sourceStatus = reportInputStatus(sources);
+  if (!sourceStatus.ok) {
+    return { ok: false, code: 'NO_SOURCES', error: sourceStatus.error, sourceCount: 0 };
+  }
   const sourceHashValue = sourceHash(sources);
   const templateHashValue = templateHash(template);
   // 缓存是否有效只由周期、原始记录指纹和模板指纹决定；模型变化不应让旧报告消失。
-  const cacheParams = { start, end, periodType, sourceHashValue, templateHashValue };
+  const cacheParams = {
+    start,
+    end,
+    periodType,
+    sourceHashValue,
+    templateHashValue,
+    terminologyHashValue: reportTerminologyHash()
+  };
   if (!force) {
     const cached = findCachedReport(loadDB().reports, cacheParams);
     if (cached) {
@@ -871,8 +1887,11 @@ ipcMain.handle('report:generate', async (event, payload = {}) => {
     saveSettings();
   }
   try {
+    const generationStartedAt = Date.now();
     const notify = progress => {
-      if (event.sender && !event.sender.isDestroyed()) event.sender.send('report:progress', progress);
+      if (event.sender && !event.sender.isDestroyed()) {
+        event.sender.send('report:progress', { ...progress, jobId });
+      }
     };
     const sourceChunks = splitSources(sources, {
       maxSources: REPORT_SEGMENT_MAX_SOURCES,
@@ -892,6 +1911,7 @@ ipcMain.handle('report:generate', async (event, payload = {}) => {
           periodLabel,
           template,
           sources: chunk,
+          terminology: settings.terminology,
           segmentIndex: index,
           segmentCount: sourceChunks.length
         }),
@@ -900,6 +1920,7 @@ ipcMain.handle('report:generate', async (event, payload = {}) => {
       const chunkCovered = coveredRefs(segmentResult.content, chunk);
       segments.push({
         label: reportSegmentLabel(chunk, index),
+        reasoning: segmentResult.reasoning,
         content: segmentResult.content,
         sourceCount: chunk.length,
         coveredCount: chunkCovered.length,
@@ -939,8 +1960,8 @@ ipcMain.handle('report:generate', async (event, payload = {}) => {
       ...progressDetails
     });
 
-    const db = loadDB();
-    const report = {
+    const createdAt = Date.now();
+    const report = attachReportThinking({
       id: reportId(),
       cacheKey: reportCacheKey(cacheParams),
       periodType,
@@ -951,6 +1972,7 @@ ipcMain.handle('report:generate', async (event, payload = {}) => {
       template,
       sourceHash: sourceHashValue,
       templateHash: templateHashValue,
+      terminologyHash: cacheParams.terminologyHashValue,
       sourceCount: sources.length,
       coveredCount,
       rawRecordCount,
@@ -967,13 +1989,26 @@ ipcMain.handle('report:generate', async (event, payload = {}) => {
         finishReason: segment.finishReason
       })),
       content: finalContent,
-      createdAt: Date.now(),
-      updatedAt: Date.now()
-    };
+      createdAt,
+      updatedAt: createdAt
+    }, {
+      visible: true,
+      open: false,
+      phase: 'done',
+      text: segments.map(segment => segment.reasoning || '').filter(Boolean).join('\n\n'),
+      content: aiContent,
+      segment: segments.length,
+      totalSegments: segments.length,
+      continuation: progressDetails.continuationCount,
+      maxContinuations: REPORT_MAX_CONTINUATIONS,
+      progressNote: '报告已保存，可以查看、编辑或导出。',
+      ...progressDetails,
+      startedAt: generationStartedAt,
+      finishedAt: createdAt
+    });
     notify({ phase: 'saving', ...progressDetails });
     persistReportContent(report);
-    db.reports.push(report);
-    saveDB(db);
+    await appendReportRecord(report);
     notify({ phase: 'saved', ...progressDetails });
     return { ok: true, cached: false, report: reportForClient(report), models, modelChanged: previousModel !== model };
   } catch (error) {
@@ -981,7 +2016,7 @@ ipcMain.handle('report:generate', async (event, payload = {}) => {
     settings.ai.lastError = error?.message || '生成总结失败';
     saveSettings();
     if (event.sender && !event.sender.isDestroyed()) {
-      event.sender.send('report:progress', { phase: 'error', error: settings.ai.lastError });
+      event.sender.send('report:progress', { phase: 'error', error: settings.ai.lastError, jobId });
     }
     return { ok: false, error: settings.ai.lastError };
   }
@@ -1016,6 +2051,18 @@ ipcMain.handle('report:save', (_e, { id, content } = {}) => {
   return { ok: true, report: reportForClient(report) };
 });
 
+ipcMain.handle('report:saveThinking', (_e, { id, thinking } = {}) => {
+  if (!id) return { ok: false, error: '报告标识无效' };
+  const snapshot = normalizeThinkingSnapshot(thinking);
+  if (!snapshot) return { ok: false, error: 'AI 工作过程无效' };
+  const db = loadDB();
+  const report = db.reports.find(x => x.id === id);
+  if (!report) return { ok: false, error: '总结不存在或已被清理' };
+  report.thinking = snapshot;
+  saveDB(db);
+  return { ok: true, thinking: snapshot };
+});
+
 ipcMain.handle('report:export', async (_e, { id, format } = {}) => {
   const report = loadDB().reports.find(x => x.id === id);
   if (!report) return { ok: false, error: '总结不存在或已被清理' };
@@ -1033,7 +2080,8 @@ ipcMain.handle('report:export', async (_e, { id, format } = {}) => {
   return { ok: true, filePath };
 });
 
-ipcMain.on('quick:hide', () => {
+ipcMain.on('quick:hide', (_e, generation) => {
+  if (!Number.isInteger(generation) || generation !== quickGeneration) return;
   if (quickHideTimer) { clearTimeout(quickHideTimer); quickHideTimer = null; }
   hideQuickNow();
 });
@@ -1071,7 +2119,14 @@ ipcMain.handle('settings:get', () => ({
   silentStart: settings.silentStart,
   dataFile: dataFile(),
   ai: aiPublicState(),
-  reportTemplates: { ...settings.reportTemplates }
+  reportTemplates: { ...settings.reportTemplates },
+  closurePrompt: settings.closurePrompt,
+  closurePromptDefault: DEFAULT_CLOSURE_PROMPT,
+  terminologyDiscoveryPrompt: settings.terminologyDiscoveryPrompt,
+  terminologyDiscoveryPromptDefault: DEFAULT_TERMINOLOGY_DISCOVERY_PROMPT,
+  terminology: normalizeTerminology(settings.terminology),
+  terminologyDiscovery: terminologyDiscoveryForClient(),
+  savedFilters: settings.savedFilters.map(filter => ({ ...filter, rangeFocus: { ...filter.rangeFocus } }))
 }));
 
 ipcMain.handle('settings:set', (_e, patch) => {
@@ -1107,7 +2162,14 @@ ipcMain.handle('settings:set', (_e, patch) => {
     openAtLogin: settings.openAtLogin,
     silentStart: settings.silentStart,
     ai: aiPublicState(),
-    reportTemplates: { ...settings.reportTemplates }
+    reportTemplates: { ...settings.reportTemplates },
+    closurePrompt: settings.closurePrompt,
+    closurePromptDefault: DEFAULT_CLOSURE_PROMPT,
+    terminologyDiscoveryPrompt: settings.terminologyDiscoveryPrompt,
+    terminologyDiscoveryPromptDefault: DEFAULT_TERMINOLOGY_DISCOVERY_PROMPT,
+    terminology: normalizeTerminology(settings.terminology),
+    terminologyDiscovery: terminologyDiscoveryForClient(),
+    savedFilters: settings.savedFilters.map(filter => ({ ...filter, rangeFocus: { ...filter.rangeFocus } }))
   };
   return result;
 });
@@ -1123,18 +2185,121 @@ ipcMain.handle('settings:setReportTemplate', (_e, { type, template } = {}) => {
   return { ok: true, type, template: value };
 });
 
+ipcMain.handle('settings:setClosurePrompt', (_e, { prompt } = {}) => {
+  const value = String(prompt || '').trim().slice(0, 2400);
+  if (!value) return { ok: false, error: '闭环提示词不能为空' };
+  settings.closurePrompt = value;
+  saveSettings();
+  return { ok: true, prompt: value };
+});
+
+ipcMain.handle('settings:setTerminologyDiscoveryPrompt', (_e, { prompt } = {}) => {
+  const value = String(prompt || '').trim().slice(0, 2400);
+  if (!value) return { ok: false, error: '术语识别提示词不能为空' };
+  settings.terminologyDiscoveryPrompt = value;
+  saveSettings();
+  return { ok: true, prompt: value };
+});
+
+ipcMain.handle('settings:setTerminology', (_e, { terminology } = {}) => {
+  settings.terminology = normalizeTerminology(terminology);
+  settings.terminologyDiscovery = normalizeDiscoveryState({
+    ...settings.terminologyDiscovery,
+    termCount: settings.terminology.length
+  });
+  saveSettings();
+  return { ok: true, terminology: normalizeTerminology(settings.terminology) };
+});
+
+ipcMain.handle('settings:addTerminologyAlias', (_e, { canonicalName, alias, scope } = {}) => {
+  const canonical = String(canonicalName || '').trim();
+  const value = String(alias || '').trim();
+  if (!canonical || !value) return { ok: false, error: '规范名称和别名不能为空' };
+  try {
+    settings.terminology = addTerminologyAlias(settings.terminology, canonical, value, scope);
+    settings.terminologyDiscovery = normalizeDiscoveryState({
+      ...settings.terminologyDiscovery,
+      termCount: settings.terminology.length
+    });
+    saveSettings();
+    return { ok: true, terminology: normalizeTerminology(settings.terminology) };
+  } catch (error) {
+    return { ok: false, error: error?.message || '术语别名保存失败' };
+  }
+});
+
+ipcMain.handle('settings:setSavedFilters', (_e, { filters } = {}) => {
+  settings.savedFilters = normalizeSavedFilters(filters);
+  saveSettings();
+  return {
+    ok: true,
+    savedFilters: settings.savedFilters.map(filter => ({ ...filter, rangeFocus: { ...filter.rangeFocus } }))
+  };
+});
+
 ipcMain.handle('data:openFolder', () => shell.openPath(path.dirname(dataFile())));
 
 /* ---------------- 全局快捷键：注册 / 冲突检测 / 热更新 ---------------- */
 
 function toggleQuick() {
   if (quickWindow && quickWindow.isVisible()) hideQuickAnimated();
+  else if (quickShowPending || quickResetPending) {
+    quickShowPending = false;
+    cancelQuickPresentation();
+  }
   else showQuick();
 }
 
 let quickHideTimer = null;
+let quickGeneration = 0;
+let quickReady = false;
+let quickShowPending = false;
+let quickBlurIgnoreUntil = 0;
+let quickFocusTimer = null;
+let quickPresentTimer = null;
+let quickResetPending = null;
+let quickBlurController = null;
+
+function cancelQuickPresentation() {
+  if (quickPresentTimer !== null) {
+    clearTimeout(quickPresentTimer);
+    quickPresentTimer = null;
+  }
+  quickResetPending = null;
+}
+
+function revealQuick(windowRef, generation) {
+  if (
+    !windowRef || windowRef.isDestroyed() || quickWindow !== windowRef ||
+    generation !== quickGeneration ||
+    !quickResetPending || quickResetPending.windowRef !== windowRef ||
+    quickResetPending.generation !== generation
+  ) return;
+
+  cancelQuickPresentation();
+  // 页面已确认完成复位后再显示，避免窗口可见但内容仍停留在上一轮退场态。
+  windowRef.show();
+  quickFocusTimer = setTimeout(() => {
+    quickFocusTimer = null;
+    if (quickWindow !== windowRef || windowRef.isDestroyed() || !windowRef.isVisible()) return;
+    windowRef.focus();
+  }, 80);
+}
+
+ipcMain.on('quick:reset-ready', (event, generation) => {
+  const pending = quickResetPending;
+  if (
+    !Number.isInteger(generation) || !pending ||
+    pending.windowRef !== quickWindow || pending.generation !== generation ||
+    event.sender !== pending.windowRef.webContents
+  ) return;
+  revealQuick(pending.windowRef, pending.generation);
+});
 
 function hideQuickNow() {
+  if (quickBlurController) quickBlurController.cancel();
+  cancelQuickPresentation();
+  if (quickFocusTimer) { clearTimeout(quickFocusTimer); quickFocusTimer = null; }
   if (quickWindow && !quickWindow.isDestroyed() && quickWindow.isVisible()) quickWindow.hide();
 }
 
@@ -1144,9 +2309,13 @@ function hideQuickNow() {
 function hideQuickAnimated() {
   if (!quickWindow || quickWindow.isDestroyed() || !quickWindow.isVisible()) return;
   if (quickHideTimer) return; // 退出已在进行
-  quickWindow.webContents.send('quick:out');
+  cancelQuickPresentation();
+  if (quickFocusTimer) { clearTimeout(quickFocusTimer); quickFocusTimer = null; }
+  const generation = quickGeneration;
+  quickWindow.webContents.send('quick:out', generation);
   quickHideTimer = setTimeout(() => {
     quickHideTimer = null;
+    if (generation !== quickGeneration) return;
     hideQuickNow();
   }, 1200);  // 页面正常会在 150ms 回执；此兜底仅防渲染层失联，宁长勿短
 }
@@ -1253,14 +2422,44 @@ function createQuickWindow() {
       backgroundThrottling: false  // 隐藏时不节流渲染：保证退场动画播完、末帧恒为透明
     }
   });
-  quickWindow.loadFile(path.join(__dirname, 'renderer', 'quick.html'));
-  quickWindow.on('blur', () => hideQuickAnimated());
-  quickWindow.on('closed', () => { quickWindow = null; });
+  const windowRef = quickWindow;
+  const blurController = createQuickBlurController({
+    shouldDismiss: () => (
+      quickWindow === windowRef && !windowRef.isDestroyed() &&
+      windowRef.isVisible() && !windowRef.isFocused()
+    ),
+    onDismiss: () => hideQuickAnimated()
+  });
+  quickBlurController = blurController;
+  cancelQuickPresentation();
+  if (quickFocusTimer) { clearTimeout(quickFocusTimer); quickFocusTimer = null; }
+  quickReady = false;
+  const markQuickReady = () => {
+    if (quickWindow !== windowRef || windowRef.isDestroyed()) return;
+    if (quickReady) return;
+    quickReady = true;
+    if (quickShowPending) presentQuick();
+  };
+  // ready-to-show 等待首帧更稳；did-finish-load 作为透明窗口未派发首帧事件时的兜底。
+  windowRef.webContents.once('ready-to-show', markQuickReady);
+  windowRef.webContents.once('did-finish-load', markQuickReady);
+  windowRef.loadFile(path.join(__dirname, 'renderer', 'quick.html'));
+  windowRef.on('blur', () => blurController.handleBlur(quickBlurIgnoreUntil));
+  windowRef.on('focus', () => blurController.cancel());
+  windowRef.on('closed', () => {
+    if (quickWindow !== windowRef) return;
+    blurController.cancel();
+    quickBlurController = null;
+    cancelQuickPresentation();
+    if (quickFocusTimer) { clearTimeout(quickFocusTimer); quickFocusTimer = null; }
+    quickWindow = null;
+    quickReady = false;
+    quickShowPending = false;
+  });
 }
 
-function showQuick() {
-  if (!quickWindow || quickWindow.isDestroyed()) createQuickWindow();
-  if (quickHideTimer) { clearTimeout(quickHideTimer); quickHideTimer = null; } // 取消进行中的退出
+function updateQuickBounds() {
+  if (!quickWindow || quickWindow.isDestroyed()) return;
   const { workArea } = screen.getPrimaryDisplay();
   const x = Math.round(workArea.x + (workArea.width - QUICK_SIZE.width) / 2);
   // 视觉上输入条底边距工作区底部约 80px（高度中含 56px 透明阴影区）
@@ -1273,10 +2472,37 @@ function showQuick() {
   }
   const [px, py] = quickWindow.getPosition();
   if (px !== x || py !== y) quickWindow.setPosition(x, y, false);
-  // 先让页面重启入场动画（从全透明起），再显示窗口，消灭"可见但未重置"的空窗帧
-  quickWindow.webContents.send('quick:reset');
-  quickWindow.show();
-  quickWindow.focus();
+}
+
+function presentQuick() {
+  if (!quickWindow || quickWindow.isDestroyed() || !quickReady) return;
+  cancelQuickPresentation();
+  if (quickFocusTimer) { clearTimeout(quickFocusTimer); quickFocusTimer = null; }
+  const windowRef = quickWindow;
+  const generation = quickGeneration;
+  quickShowPending = false;
+  updateQuickBounds();
+  // 快捷键的 Alt 键或托盘鼠标可能仍处于按下状态；显示阶段暂时忽略瞬时失焦，
+  // 待窗口稳定后再交接焦点，避免触发输入产生 blur -> hide 的竞态。
+  quickBlurIgnoreUntil = Math.max(quickBlurIgnoreUntil, Date.now() + 900);
+  // 页面已经完成加载并注册 IPC 监听器后再 reset，避免首次唤起丢失入场状态。
+  quickResetPending = { windowRef, generation };
+  windowRef.webContents.send('quick:reset', generation);
+  quickPresentTimer = setTimeout(() => {
+    quickPresentTimer = null;
+    revealQuick(windowRef, generation);
+  }, 400);
+}
+
+function showQuick(options = {}) {
+  if (!quickWindow || quickWindow.isDestroyed()) createQuickWindow();
+  quickGeneration += 1;
+  if (quickHideTimer) { clearTimeout(quickHideTimer); quickHideTimer = null; } // 取消进行中的退出
+  if (quickBlurController) quickBlurController.cancel();
+  cancelQuickPresentation();
+  quickShowPending = true;
+  if (options.ignoreBlur) quickBlurIgnoreUntil = Date.now() + 500;
+  if (quickReady) presentQuick();
 }
 
 // 系统缩放/分辨率变化时，透明固定尺寸窗口不会自动按新 DPI 重算，
@@ -1286,6 +2512,11 @@ function watchDisplayMetrics() {
     if (!changed.includes('scaleFactor') && !changed.includes('bounds')) return;
     if (display.id !== screen.getPrimaryDisplay().id) return;
     if (quickHideTimer) { clearTimeout(quickHideTimer); quickHideTimer = null; }
+    cancelQuickPresentation();
+    quickReady = false;
+    quickShowPending = false;
+    quickBlurIgnoreUntil = 0;
+    if (quickFocusTimer) { clearTimeout(quickFocusTimer); quickFocusTimer = null; }
     if (quickWindow && !quickWindow.isDestroyed()) {
       quickWindow.destroy();
       quickWindow = null;
@@ -1295,7 +2526,7 @@ function watchDisplayMetrics() {
 
 function trayMenuTemplate() {
   return Menu.buildFromTemplate([
-    { label: settings.hotkey ? `快速记录（${settings.hotkey}）` : '快速记录（未设置快捷键）', click: () => showQuick() },
+    { label: settings.hotkey ? `快速记录（${settings.hotkey}）` : '快速记录（未设置快捷键）', click: () => showQuick({ ignoreBlur: true }) },
     { label: '打开主界面', click: () => { if (mainWindow) { mainWindow.show(); mainWindow.focus(); } } },
     { type: 'separator' },
     { label: '退出', click: () => { quitting = true; app.quit(); } }
@@ -1307,20 +2538,23 @@ function refreshTrayMenu() {
 }
 
 function createTray() {
-  const icon = nativeImage.createFromPath(path.join(ASSETS, 'icon.png'));
-  tray = new Tray(icon.resize({ width: 16, height: 16 }));
+  // 托盘使用专门的 32px 简化图标，避免把完整应用图标强制缩成 16px 后细节糊成一团。
+  // Windows 会根据系统 DPI 对托盘资源做最终显示适配；旧环境缺少专用资源时回退到主图标。
+  const trayIconPath = path.join(ASSETS, 'tray.png');
+  const iconPath = fs.existsSync(trayIconPath) ? trayIconPath : path.join(ASSETS, 'icon.png');
+  tray = new Tray(nativeImage.createFromPath(iconPath));
   tray.setToolTip('日报随手记');
-  tray.on('click', () => showQuick());
+  tray.on('click', () => showQuick({ ignoreBlur: true }));
   tray.setContextMenu(trayMenuTemplate());
 }
 
 /* ---------------- 应用生命周期 ---------------- */
 
 app.on('second-instance', () => {
-  if (mainWindow) {
-    mainWindow.show();
-    mainWindow.focus();
-  }
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  mainWindow.show();
+  mainWindow.focus();
 });
 
 app.whenReady().then(() => {
@@ -1348,6 +2582,7 @@ app.whenReady().then(() => {
     n.on('click', () => showQuick());
     n.show();
   }
+
 });
 
 app.on('will-quit', () => globalShortcut.unregisterAll());

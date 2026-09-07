@@ -8,7 +8,8 @@ const {
   auditSourceRecords,
   appendRawRecords,
   markdownToText,
-  sourceHash
+  sourceHash,
+  reportInputStatus
 } = require('./report-utils');
 
 const entries = [
@@ -45,7 +46,8 @@ test('buildPrompt: 包含模板、周期和全部原始记录编号', () => {
   const sources = sourceBundle(entries);
   const prompt = buildPrompt({
     start: '2026-09-01', end: '2026-09-02', periodLabel: '本周',
-    template: '按完成/问题/计划分组', sources
+    template: '按完成/问题/计划分组', sources,
+    terminology: [{ canonicalName: 'DP3C-X2', aliases: ['双轴', '两轴'], scope: '驱动器' }]
   });
   assert.match(prompt, /本周/);
   assert.match(prompt, /按完成\/问题\/计划分组/);
@@ -53,6 +55,9 @@ test('buildPrompt: 包含模板、周期和全部原始记录编号', () => {
   assert.match(prompt, /\[R002\].*修复导出问题/);
   assert.match(prompt, /原始记录未明确/);
   assert.match(prompt, /只输出一个最终版本/);
+  assert.match(prompt, /规范名称：DP3C-X2/);
+  assert.match(prompt, /双轴、两轴/);
+  assert.match(prompt, /不要依据词典强行补充细分信息/);
 });
 
 test('buildPrompt: 长周期分段明确只整理当前记录组', () => {
@@ -102,4 +107,17 @@ test('sourceHash: 同一批记录稳定，内容变化即使条数不变也会�
   assert.match(first, /^[a-f0-9]{64}$/);
   assert.equal(first, reversed);
   assert.notEqual(first, changed);
+});
+
+test('reportInputStatus: 没有原始记录时禁止生成总结', () => {
+  assert.deepEqual(reportInputStatus([]), {
+    ok: false,
+    count: 0,
+    error: '本周期没有日报记录，无法生成总结。'
+  });
+  assert.deepEqual(reportInputStatus([{ ref: 'R001' }]), {
+    ok: true,
+    count: 1,
+    error: ''
+  });
 });

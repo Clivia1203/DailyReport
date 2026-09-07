@@ -31,8 +31,16 @@ function report(overrides = {}) {
 test('reportCacheKey: 数据和模板指纹决定缓存，不包含当前模型', () => {
   const key = reportCacheKey(params);
   assert.equal(key, 'week|2026-08-31|2026-09-06|source-current|template-current');
+  assert.equal(key, reportCacheKey({ ...params, reasoningEffort: 'max' }));
   assert.notEqual(key, reportCacheKey({ ...params, sourceHashValue: 'source-changed' }));
   assert.notEqual(key, reportCacheKey({ ...params, templateHashValue: 'template-changed' }));
+});
+
+test('reportCacheKey: 术语词典指纹变化会生成新的缓存快照', () => {
+  const withoutTerms = reportCacheKey(params);
+  const withTerms = reportCacheKey({ ...params, terminologyHashValue: 'terms-current' });
+  assert.equal(withTerms, `${withoutTerms}|terms-current`);
+  assert.notEqual(withTerms, reportCacheKey({ ...params, terminologyHashValue: 'terms-changed' }));
 });
 
 test('findCachedReport: 模型变化不影响命中，并返回同一快照的最新版本', () => {
@@ -57,4 +65,18 @@ test('findLatestReport: 原始记录变化时仍返回该周期上一次报告',
   ], params);
   assert.equal(latest.id, 'previous');
   assert.equal(reportCacheStatus(latest, params), 'source-changed');
+});
+
+test('reportCacheStatus: 词典变化会标记旧报告待更新，空词典兼容旧报告', () => {
+  const current = { ...params, terminologyHashValue: 'terms-current' };
+  const old = report({
+    sourceHash: params.sourceHashValue,
+    templateHash: params.templateHashValue,
+    terminologyHash: 'terms-old'
+  });
+  assert.equal(reportCacheStatus(old, current), 'terminology-changed');
+  assert.equal(reportCacheStatus(report({ sourceHash: params.sourceHashValue, templateHash: params.templateHashValue }), {
+    ...params,
+    terminologyHashValue: ''
+  }), 'fresh');
 });

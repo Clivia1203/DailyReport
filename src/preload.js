@@ -12,6 +12,9 @@ contextBridge.exposeInMainWorld('api', {
   getSettings: () => ipcRenderer.invoke('settings:get'),
   setSettings: patch => ipcRenderer.invoke('settings:set', patch),
   openDataFolder: () => ipcRenderer.invoke('data:openFolder'),
+  exportBackup: () => ipcRenderer.invoke('data:backup'),
+  restoreBackup: () => ipcRenderer.invoke('data:restore'),
+  setSavedFilters: filters => ipcRenderer.invoke('settings:setSavedFilters', { filters }),
   onNavigate: cb => {
     const h = (_e, view) => cb(view);
     ipcRenderer.on('ui:navigate', h);
@@ -25,21 +28,43 @@ contextBridge.exposeInMainWorld('api', {
   getAiStatus: () => ipcRenderer.invoke('ai:status'),
   revealAiKey: () => ipcRenderer.invoke('ai:reveal'),
   testAi: apiKey => ipcRenderer.invoke('ai:test', { apiKey }),
+  saveAi: apiKey => ipcRenderer.invoke('ai:save', { apiKey }),
   clearAi: () => ipcRenderer.invoke('ai:clear'),
   setAiModel: model => ipcRenderer.invoke('ai:setModel', { model }),
+  setAiClosureModel: model => ipcRenderer.invoke('ai:setClosureModel', { model }),
+  setAiReasoningEffort: reasoningEffort => ipcRenderer.invoke('ai:setReasoningEffort', { reasoningEffort }),
+  setAiClosureReasoningEffort: reasoningEffort => ipcRenderer.invoke('ai:setClosureReasoningEffort', { reasoningEffort }),
   getCachedReport: params => ipcRenderer.invoke('report:getCached', params),
   generateReport: params => ipcRenderer.invoke('report:generate', params),
   saveReport: (id, content) => ipcRenderer.invoke('report:save', { id, content }),
+  saveReportThinking: (id, thinking) => ipcRenderer.invoke('report:saveThinking', { id, thinking }),
   exportReport: (id, format) => ipcRenderer.invoke('report:export', { id, format }),
   setReportTemplate: (type, template) => ipcRenderer.invoke('settings:setReportTemplate', { type, template }),
+  setClosurePrompt: prompt => ipcRenderer.invoke('settings:setClosurePrompt', { prompt }),
+  setTerminologyDiscoveryPrompt: prompt => ipcRenderer.invoke('settings:setTerminologyDiscoveryPrompt', { prompt }),
+  setTerminology: terminology => ipcRenderer.invoke('settings:setTerminology', { terminology }),
+  addTerminologyAlias: (canonicalName, alias, scope) => ipcRenderer.invoke('settings:addTerminologyAlias', { canonicalName, alias, scope }),
+  discoverTerminology: options => ipcRenderer.invoke('terminology:discover', options),
+  getCachedClosure: params => ipcRenderer.invoke('closure:getCached', params),
+  generateRecentClosures: params => ipcRenderer.invoke('closure:generate', params),
   onReportProgress: cb => {
     const h = (_e, progress) => cb(progress);
     ipcRenderer.on('report:progress', h);
     return () => ipcRenderer.removeListener('report:progress', h);
   },
+  onClosureProgress: cb => {
+    const h = (_e, progress) => cb(progress);
+    ipcRenderer.on('closure:progress', h);
+    return () => ipcRenderer.removeListener('closure:progress', h);
+  },
+  onTerminologyProgress: cb => {
+    const h = (_e, progress) => cb(progress);
+    ipcRenderer.on('terminology:progress', h);
+    return () => ipcRenderer.removeListener('terminology:progress', h);
+  },
 
   // 快速记录条
-  hideQuick: () => ipcRenderer.send('quick:hide'),
+  hideQuick: generation => ipcRenderer.send('quick:hide', generation),
   setModalCover: on => ipcRenderer.send('window:modal-cover', on),
 
   // 主题（主进程统一管理，多窗口同步）
@@ -59,15 +84,16 @@ contextBridge.exposeInMainWorld('api', {
   },
 
   // 快速条每次唤起时重置输入
+  quickResetReady: generation => ipcRenderer.send('quick:reset-ready', generation),
   onQuickReset: cb => {
-    const h = () => cb();
+    const h = (_e, generation) => cb(generation);
     ipcRenderer.on('quick:reset', h);
     return () => ipcRenderer.removeListener('quick:reset', h);
   },
 
   // 主进程发起的退出（失焦/热键切换）：页面播退出动画，隐藏时机由主进程计时
   onQuickOut: cb => {
-    const h = () => cb();
+    const h = (_e, generation) => cb(generation);
     ipcRenderer.on('quick:out', h);
     return () => ipcRenderer.removeListener('quick:out', h);
   }

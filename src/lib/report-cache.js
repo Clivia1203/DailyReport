@@ -1,5 +1,6 @@
-function reportCacheKey({ start, end, periodType, sourceHashValue, templateHashValue }) {
-  return [periodType, start, end, sourceHashValue, templateHashValue].join('|');
+function reportCacheKey({ start, end, periodType, sourceHashValue, templateHashValue, terminologyHashValue = '' }) {
+  const key = [periodType, start, end, sourceHashValue, templateHashValue].join('|');
+  return terminologyHashValue ? `${key}|${terminologyHashValue}` : key;
 }
 
 function samePeriod(report, params) {
@@ -23,18 +24,22 @@ function snapshotHashes(report) {
   if (report?.sourceHash && report?.templateHash) {
     return {
       sourceHashValue: report.sourceHash,
-      templateHashValue: report.templateHash
+      templateHashValue: report.templateHash,
+      terminologyHashValue: typeof report.terminologyHash === 'string' ? report.terminologyHash : ''
     };
   }
-  return legacySnapshotHashes(report);
+  const legacy = legacySnapshotHashes(report);
+  return legacy ? { ...legacy, terminologyHashValue: '' } : null;
 }
 
 function matchesSnapshot(report, params) {
   const hashes = snapshotHashes(report);
+  const hasTerminologyHash = Object.prototype.hasOwnProperty.call(params || {}, 'terminologyHashValue');
   return samePeriod(report, params)
     && !!hashes
     && hashes.sourceHashValue === params.sourceHashValue
-    && hashes.templateHashValue === params.templateHashValue;
+    && hashes.templateHashValue === params.templateHashValue
+    && (!hasTerminologyHash || hashes.terminologyHashValue === (params.terminologyHashValue || ''));
 }
 
 function reportTimestamp(report) {
@@ -64,9 +69,15 @@ function reportCacheStatus(report, params) {
   if (!hashes) return 'unknown';
   const sourceChanged = hashes.sourceHashValue !== params.sourceHashValue;
   const templateChanged = hashes.templateHashValue !== params.templateHashValue;
-  if (!sourceChanged && !templateChanged) return 'fresh';
+  const terminologyChanged = Object.prototype.hasOwnProperty.call(params || {}, 'terminologyHashValue')
+    && hashes.terminologyHashValue !== (params.terminologyHashValue || '');
+  if (!sourceChanged && !templateChanged && !terminologyChanged) return 'fresh';
+  if (sourceChanged && templateChanged && terminologyChanged) return 'source-template-and-terminology-changed';
   if (sourceChanged && templateChanged) return 'source-and-template-changed';
+  if (sourceChanged && terminologyChanged) return 'source-and-terminology-changed';
+  if (templateChanged && terminologyChanged) return 'template-and-terminology-changed';
   if (sourceChanged) return 'source-changed';
+  if (terminologyChanged) return 'terminology-changed';
   return 'template-changed';
 }
 
