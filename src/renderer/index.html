@@ -16,7 +16,6 @@
         <span class="brand-kbd" id="hotkey-tip">Alt+Shift+D</span>
       </div>
       <div class="topbar-actions">
-        <button class="icon-btn" id="btn-theme" title="切换深浅主题"></button>
         <button class="icon-btn" id="btn-settings" title="设置">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="21" y1="4" x2="14" y2="4"/><line x1="10" y1="4" x2="3" y2="4"/><line x1="21" y1="12" x2="12" y2="12"/><line x1="8" y1="12" x2="3" y2="12"/><line x1="21" y1="20" x2="16" y2="20"/><line x1="12" y1="20" x2="3" y2="20"/><line x1="14" y1="2" x2="14" y2="6"/><line x1="8" y1="10" x2="8" y2="14"/><line x1="16" y1="18" x2="16" y2="22"/></svg>
         </button>
@@ -26,51 +25,187 @@
     <main class="content">
       <!-- ===== 主视图 ===== -->
       <section id="view-main" class="view">
+        <!-- 主视图共享标题栏：问候和日期属于整张工作台，而不是某一侧栏 -->
+        <div class="main-titlebar">
+          <div class="today-panel" id="today-panel"></div>
+          <div class="main-titlebar-context" aria-hidden="true">
+            <span class="main-titlebar-context-kicker">工作记录</span>
+            <span class="main-titlebar-context-divider"></span>
+            <span class="main-titlebar-context-note">记录 · 统计 · 回顾</span>
+          </div>
+        </div>
+
         <div class="cols">
           <div class="side-col">
-            <!-- 今日面板 -->
-            <div class="today-panel" id="today-panel"></div>
-
             <!-- 统计条 -->
             <div class="stats-strip" id="stats-strip"></div>
+
+            <!-- 近期总结：仅全屏/宽屏显示；小窗口不增加额外操作密度 -->
+            <div class="recent-summary-panel" id="recent-summary-panel" hidden></div>
+            <div class="ov-thumb" id="recent-summary-thumb"></div>
           </div>
 
           <div class="main-col">
-            <!-- 列表筛选栏 -->
-            <div class="list-toolbar" id="list-toolbar">
-          <select id="f-year"></select>
-          <select id="f-month"></select>
-          <div class="search-wrap">
-            <span class="search-ico">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-            </span>
-            <input type="search" id="f-text" placeholder="搜索内容…">
-          </div>
-          <span class="f-count" id="f-count"></span>
-          <button class="btn small primary" id="btn-composer" title="新记录（Ctrl+N）">记录</button>
-          <button class="btn small" id="btn-export-open">导出</button>
-          <button class="btn small" id="btn-manage">管理</button>
-        </div>
-
-        <!-- 批量管理栏 -->
-        <div class="card manage-bar" id="manage-bar" hidden>
-          <button class="link-btn" id="mg-selectall">全选</button>
-          <span class="f-count" id="mg-count">已选 0 条</span>
-          <div class="export-spacer"></div>
-          <button class="btn small danger-ghost" id="mg-delete">删除选中</button>
-          <button class="btn small" id="mg-done">完成</button>
-        </div>
-
-        <!-- 历史记录（含活动图，随列表滚动） -->
-        <div class="scroll-wrap">
-          <section class="list" id="list">
+            <!-- 活动图和操作栏固定，只有下方日报记录滚动 -->
             <div class="activity-chart" id="activity-chart"></div>
-            <div id="list-items"></div>
-          </section>
-          <div class="ov-thumb" id="list-thumb"></div>
-        </div>
+
+            <!-- 列表筛选和功能栏：位于活动图下方，保持单行操作区 -->
+            <div class="list-toolbar" id="list-toolbar">
+              <div class="toolbar-group date-filter-group" id="date-filter-group">
+                <button class="btn small toolbar-control date-filter-toggle" id="date-filter-toggle" type="button" aria-haspopup="true" aria-expanded="false">
+                  <span id="date-filter-label">日期筛选</span>
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg>
+                </button>
+                <div class="filter-popover date-filter-popover" id="date-filter-popover" hidden>
+                  <div class="filter-popover-head">
+                    <span>日期筛选</span>
+                    <button class="icon-btn" id="date-filter-close" type="button" title="关闭">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                    </button>
+                  </div>
+                  <div class="date-filter-fields">
+                    <label>年份<select id="f-year"></select></label>
+                    <label>月份<select id="f-month"></select></label>
+                  </div>
+                  <div class="filter-popover-note">点击热力图或统计卡后，会自动切换为日期范围聚焦。</div>
+                </div>
+              </div>
+              <div class="search-wrap">
+                <span class="search-ico">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+                </span>
+                <input type="search" id="f-text" placeholder="搜索内容…" title="支持模糊搜索：多个关键词可用空格分隔">
+              </div>
+              <div class="toolbar-group saved-filter-group" id="saved-filter-group">
+                <select id="f-saved" class="filter-saved" title="加载已保存筛选">
+                  <option value="">已保存筛选</option>
+                </select>
+                <button class="btn small" id="f-save-filter" title="保存当前筛选">保存筛选</button>
+              </div>
+              <span class="f-count" id="f-count"></span>
+              <span class="toolbar-divider" aria-hidden="true"></span>
+              <button class="btn small primary" id="btn-composer" title="新记录（Ctrl+N）">记录</button>
+              <button class="btn small ai-report-btn" id="btn-report" hidden>AI 总结</button>
+              <div class="toolbar-group more-group" id="more-group">
+                <button class="btn small" id="btn-more" type="button" aria-haspopup="true" aria-expanded="false">更多
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg>
+                </button>
+                <div class="more-menu" id="more-menu" hidden>
+                  <button class="menu-item" id="btn-export-open" type="button">导出</button>
+                  <button class="menu-item" id="btn-manage" type="button">管理</button>
+                  <button class="menu-item filter-menu-item" id="f-clear-filter" type="button" hidden>清除当前筛选</button>
+                  <button class="menu-item filter-menu-item danger" id="f-delete-filter" type="button" hidden>删除当前保存的筛选</button>
+                </div>
+              </div>
+            </div>
+
+            <!-- 批量管理栏：进入管理模式后同样位于活动图下方 -->
+            <div class="card manage-bar" id="manage-bar" hidden>
+              <button class="link-btn" id="mg-selectall">全选</button>
+              <span class="f-count" id="mg-count">已选 0 条</span>
+              <div class="export-spacer"></div>
+              <button class="btn small danger-ghost" id="mg-delete">删除选中</button>
+              <button class="btn small" id="mg-done">完成</button>
+            </div>
+
+            <!-- 历史记录（独立滚动区） -->
+            <div class="scroll-wrap">
+              <section class="list" id="list">
+                <div id="list-items"></div>
+              </section>
+              <div class="ov-thumb" id="list-thumb"></div>
+            </div>
           </div><!-- /main-col -->
         </div><!-- /cols -->
+      </section>
+
+      <!-- ===== 周期总结视图 ===== -->
+      <section id="view-report" class="view" hidden>
+        <div class="settings-head report-head">
+          <button class="icon-btn" id="btn-report-back" title="返回主界面">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+          </button>
+          <span class="settings-title">周期总结</span>
+          <span class="report-connection" id="report-connection"></span>
+        </div>
+
+        <div class="report-toolbar">
+          <div class="report-period">
+            <select id="report-type" title="总结周期">
+              <option value="day">日报</option>
+              <option value="week" selected>周报</option>
+              <option value="month">月报</option>
+              <option value="custom">自定义周期</option>
+            </select>
+            <button class="icon-btn small-icon" id="report-prev" title="上一周期">‹</button>
+            <button class="icon-btn small-icon" id="report-next" title="下一周期">›</button>
+          </div>
+          <div class="report-dates" id="report-dates">
+            <input type="date" id="report-start" title="开始日期">
+            <span>→</span>
+            <input type="date" id="report-end" title="结束日期">
+          </div>
+          <div class="report-actions">
+            <select id="report-format" title="显示格式">
+              <option value="md">Markdown</option>
+              <option value="txt">纯文本</option>
+            </select>
+            <button class="btn small" id="report-copy">复制</button>
+            <button class="btn small" id="report-export">导出总结</button>
+            <button class="btn small primary" id="report-generate">生成总结</button>
+          </div>
+        </div>
+
+        <div class="report-status" id="report-status"></div>
+
+        <section class="card report-thinking" id="report-thinking" hidden>
+          <div class="report-thinking-head">
+            <div>
+              <span class="report-thinking-title">AI 工作过程</span>
+              <span class="report-thinking-status" id="report-thinking-status">正在连接…</span>
+            </div>
+            <button class="link-btn" id="report-thinking-toggle">查看详细过程</button>
+          </div>
+          <div class="report-thinking-note" id="report-thinking-note">实时状态代表实际生成进度；详细过程仅用于查看，不会写入总结或导出文件。</div>
+          <pre class="report-thinking-content" id="report-thinking-content"></pre>
+        </section>
+
+        <div class="report-layout" id="report-layout">
+          <section class="card report-card report-full" id="report-full">
+            <div class="report-card-head">
+              <div>
+                <div class="report-title" id="report-title">本周工作总结</div>
+                <div class="report-meta" id="report-meta"></div>
+              </div>
+              <button class="btn small" id="report-edit">编辑</button>
+            </div>
+            <div class="report-content" id="report-content"></div>
+            <textarea class="report-editor" id="report-editor" hidden></textarea>
+            <div class="report-edit-foot" id="report-edit-foot" hidden>
+              <span class="note">保存会自动同步 Markdown、纯文本和导出内容；不会修改原始记录。</span>
+              <span class="export-spacer"></span>
+              <button class="btn small" id="report-edit-cancel">取消</button>
+              <button class="btn small primary" id="report-edit-save">保存修改</button>
+            </div>
+          </section>
+
+          <div class="report-resizer" id="report-resizer" role="separator" aria-orientation="vertical" aria-label="调整原始记录栏宽度" title="拖动调整原始记录栏宽度"></div>
+
+          <aside class="report-side">
+            <div class="report-side-content">
+              <div class="card report-side-card">
+                <div class="set-title">本周期概览</div>
+                <div class="report-metric"><span>记录数</span><b id="report-count">0</b></div>
+                <div class="report-metric"><span>AI 覆盖</span><b id="report-coverage">--</b></div>
+                <div class="report-metric"><span>模型</span><b class="report-model" id="report-model">--</b></div>
+              </div>
+              <div class="card report-side-card report-source-card">
+                <div class="report-side-head"><span class="set-title">原始记录</span><span class="note">只读</span></div>
+                <div id="report-source-list"></div>
+              </div>
+            </div>
+          </aside>
+        </div>
       </section>
 
       <!-- ===== 设置视图 ===== -->
@@ -84,6 +219,19 @@
 
         <div class="scroll-wrap settings-wrap">
           <div class="settings-scroll">
+        <div class="card settings-ai-entry">
+          <button class="settings-entry-button" id="btn-ai-settings" type="button">
+            <span class="settings-entry-copy">
+              <span class="settings-entry-title">AI 设置</span>
+              <span class="set-sub">API Key、模型、报告提示词、近期总结和术语规范</span>
+            </span>
+            <span class="settings-entry-right">
+              <span class="ai-state-badge" id="ai-entry-state">未配置</span>
+              <svg class="settings-entry-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 18 15 12 9 6"/></svg>
+            </span>
+          </button>
+        </div>
+
           <div class="card set-group">
           <div class="set-title">快捷键</div>
           <div class="set-row">
@@ -137,8 +285,209 @@
             </div>
             <button class="btn small" id="set-openfolder">打开所在文件夹</button>
           </div>
+          <div class="set-row data-actions-row">
+            <div class="set-info">完整备份
+              <div class="set-sub">包含日报、周期总结、近期闭环、模板、术语和筛选配置；API Key 不会写入备份文件。</div>
+            </div>
+            <div class="data-actions">
+              <button class="btn small" id="set-backup">导出备份</button>
+              <button class="btn small" id="set-restore">从备份恢复</button>
+            </div>
           </div>
+          <div class="set-msg" id="data-msg"></div>
+          </div><!-- /data group -->
+          </div><!-- /settings-scroll -->
           <div class="ov-thumb" id="settings-thumb"></div>
+        </div><!-- /scroll-wrap -->
+      </section>
+
+      <!-- ===== AI 设置视图 ===== -->
+      <section id="view-ai-settings" class="view" hidden>
+        <div class="settings-head ai-settings-head">
+          <button class="icon-btn" id="btn-ai-settings-back" title="返回设置">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+          </button>
+          <div class="ai-settings-heading">
+            <span class="settings-title">AI 设置</span>
+            <span class="settings-head-sub">集中管理连接、模型和 AI 生成规则</span>
+          </div>
+        </div>
+
+        <div class="ai-settings-layout">
+          <nav class="card ai-settings-nav" aria-label="AI 设置项目">
+            <div class="ai-settings-nav-label">设置项目</div>
+            <button class="ai-nav-item active" type="button" data-ai-panel="service" aria-selected="true">
+              <span class="ai-nav-item-title">AI 服务</span>
+              <span class="ai-nav-item-sub">连接与模型</span>
+            </button>
+            <button class="ai-nav-item" type="button" data-ai-panel="report" aria-selected="false">
+              <span class="ai-nav-item-title">周期报告</span>
+              <span class="ai-nav-item-sub">日报、周报、月报</span>
+            </button>
+            <button class="ai-nav-item" type="button" data-ai-panel="closure" aria-selected="false">
+              <span class="ai-nav-item-title">近期总结</span>
+              <span class="ai-nav-item-sub">历史对照与闭环</span>
+            </button>
+            <button class="ai-nav-item" type="button" data-ai-panel="terminology" aria-selected="false">
+              <span class="ai-nav-item-title">术语规范</span>
+              <span class="ai-nav-item-sub">名称与别名词典</span>
+            </button>
+          </nav>
+
+          <div class="settings-scroll ai-settings-content">
+            <section class="card set-group ai-settings-panel" data-ai-panel="service">
+              <div class="set-title">AI 服务</div>
+              <div class="set-row">
+                <div class="set-info">DeepSeek API
+                  <div class="set-sub">使用你自己的 API Key。Key 保存在本机 Windows 安全存储中，页面默认只显示掩码。</div>
+                </div>
+                <span class="ai-state-badge" id="ai-state-badge">未配置</span>
+              </div>
+              <div class="set-row ai-key-row">
+                <div class="set-info">API Key
+                  <div class="set-sub">已保存的 Key 默认掩码显示；点击眼睛可临时查看，输入新 Key 可替换。</div>
+                </div>
+                <div class="ai-key-control">
+                  <input type="password" id="ai-key" class="ai-key-input" placeholder="sk-…" autocomplete="off">
+                  <button type="button" class="icon-btn ai-key-toggle" id="ai-key-toggle" title="显示 API Key" aria-label="显示 API Key">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6S2 12 2 12z"/><circle cx="12" cy="12" r="2.5"/></svg>
+                  </button>
+                </div>
+              </div>
+              <div class="set-row">
+                <div class="set-info">周期报告模型
+                  <div class="set-sub" id="ai-model-sub">点击测试连接后自动读取当前可用模型</div>
+                </div>
+                <select id="ai-model" class="ai-model-select" disabled><option value="">请先测试连接</option></select>
+              </div>
+              <div class="set-row">
+                <div class="set-info">术语识别 / 近期总结模型
+                  <div class="set-sub" id="ai-closure-model-sub">独立于周期报告模型，用来归并术语并对照历史记录与本期完成事项。</div>
+                </div>
+                <select id="ai-closure-model" class="ai-model-select" disabled><option value="">请先测试连接</option></select>
+              </div>
+              <div class="set-row">
+                <div class="set-info">思考强度
+                  <div class="set-sub" id="ai-reasoning-sub">自动根据报告周期选择；修改后仅影响下一次重新生成，不会让已保存总结失效</div>
+                </div>
+                <select id="ai-reasoning-effort" class="ai-model-select" title="AI 思考强度">
+                  <option value="auto">自动（推荐）</option>
+                  <option value="low">快速</option>
+                  <option value="high">标准</option>
+                  <option value="max">深度</option>
+                </select>
+              </div>
+              <div class="set-row">
+                <div class="set-info">闭环思考强度
+                  <div class="set-sub" id="ai-closure-reasoning-sub">自动优先使用更适合语义判断的强度；仅影响近期闭环生成。</div>
+                </div>
+                <select id="ai-closure-reasoning-effort" class="ai-model-select" title="近期闭环 AI 思考强度">
+                  <option value="auto">自动（推荐）</option>
+                  <option value="low">快速</option>
+                  <option value="high">标准</option>
+                  <option value="max">深度</option>
+                </select>
+              </div>
+              <div class="set-row ai-actions-row">
+                <span class="set-msg" id="ai-msg"></span>
+                <div class="hk-area"><button class="btn small" id="ai-test">测试连接</button><button class="btn small primary" id="ai-save">保存配置</button><button class="link-btn" id="ai-clear">清除配置</button></div>
+              </div>
+            </section>
+
+            <section class="card set-group ai-settings-panel" data-ai-panel="report" hidden>
+              <div class="set-title">周期报告模板</div>
+              <div class="set-row template-type-row">
+                <div class="set-info">选择周期模板
+                  <div class="set-sub">模板只控制结构和表达方式，系统会始终要求完整保留原始记录。</div>
+                </div>
+                <div class="segmented" id="template-seg">
+                  <button data-v="day">日报</button><button data-v="week" class="active">周报</button><button data-v="month">月报</button><button data-v="custom">自定义</button>
+                </div>
+              </div>
+              <div class="template-editor-row">
+                <textarea id="template-text" class="template-textarea" rows="5" placeholder="填写这个周期的总结要求…"></textarea>
+                <div class="template-foot"><span class="set-sub">模板会与所选周期和全部原始记录一起发送，保存后影响下一次生成。</span><button class="btn small" id="template-save">保存模板</button><button class="link-btn" id="template-reset">恢复默认</button></div>
+                <div class="set-msg" id="template-msg"></div>
+              </div>
+            </section>
+
+            <section class="card set-group ai-settings-panel" data-ai-panel="closure" hidden>
+              <div class="set-title">近期总结提示词</div>
+              <div class="set-sub">它独立于日报、周报和月报模板，只控制“历史提及过、近期又出现完成结果”的闭环整理方式。默认提示词可以随时恢复。</div>
+              <div class="template-editor-row">
+                <textarea id="closure-prompt-text" class="template-textarea" rows="7" maxlength="2400" placeholder="填写近期闭环分析要求…"></textarea>
+                <div class="template-foot"><span class="set-sub">修改后不会自动调用 AI；下一次查看或更新闭环时生效。</span><button class="btn small" id="closure-prompt-save">保存提示词</button><button class="link-btn" id="closure-prompt-reset">恢复默认</button></div>
+                <div class="set-msg" id="closure-prompt-msg"></div>
+              </div>
+            </section>
+
+            <section class="card set-group ai-settings-panel" data-ai-panel="terminology" hidden>
+              <div class="set-title">术语规范</div>
+              <div class="set-sub">快速记录不用选择项目或标签。首次连接 AI 后会阅读已有日报，识别可能指向同一事项的不同叫法并自动形成词典；你可以在这里修改，无法确定时 AI 会保守处理。</div>
+              <div class="terminology-discovery" id="terminology-discovery">
+                <div class="terminology-discovery-copy">
+                  <div class="terminology-discovery-title">首次识别全部日报</div>
+                  <div class="set-sub" id="terminology-discovery-status">连接 AI 后自动开始；不会修改任何原始记录。</div>
+                </div>
+                <button class="btn small" id="terminology-discover" type="button">识别全部日报</button>
+              </div>
+              <section class="card report-thinking terminology-thinking" id="terminology-thinking" hidden>
+                <div class="report-thinking-head">
+                  <div>
+                    <span class="report-thinking-title">AI 工作过程</span>
+                    <span class="report-thinking-status" id="terminology-thinking-status">正在连接…</span>
+                  </div>
+                  <button class="link-btn" id="terminology-thinking-toggle" type="button" aria-expanded="false">查看详细过程</button>
+                </div>
+                <div class="report-thinking-note" id="terminology-thinking-note">实时状态代表术语识别进度；详细过程默认收起，不会修改原始日报。</div>
+                <pre class="report-thinking-content" id="terminology-thinking-content" hidden></pre>
+              </section>
+              <div class="template-editor-row terminology-prompt-row">
+                <div class="set-title terminology-prompt-title">术语识别提示词</div>
+                <div class="set-sub">默认提示词会要求 AI 只依据日报做保守归并；可以按你的习惯修改，随时恢复默认。修改后下一次识别生效。</div>
+                <textarea id="terminology-prompt-text" class="template-textarea" rows="6" maxlength="2400" placeholder="填写术语识别要求…"></textarea>
+                <div class="template-foot"><span class="set-sub">不会改变快速记录，也不会修改已有日报。</span><button class="btn small" id="terminology-prompt-save">保存提示词</button><button class="link-btn" id="terminology-prompt-reset">恢复默认</button></div>
+                <div class="set-msg" id="terminology-prompt-msg"></div>
+              </div>
+              <section class="terminology-pending" id="terminology-pending" hidden>
+                <div class="terminology-pending-head">
+                  <div>
+                    <div class="terminology-pending-title">待确认的叫法关联</div>
+                    <div class="set-sub">这些关联只用于改进后续术语归并；不确认也不影响日报、周报或近期总结的正常使用。</div>
+                  </div>
+                  <span class="terminology-pending-count" id="terminology-pending-count"></span>
+                </div>
+                <div id="terminology-pending-list"></div>
+              </section>
+              <div class="terminology-editor" id="terminology-editor">
+                <div class="terminology-editor-head">
+                  <div>
+                    <div class="terminology-editor-title" id="terminology-editor-title">新增术语</div>
+                    <div class="set-sub">先建立规范名称，再填写日报中可能出现的不同说法。</div>
+                  </div>
+                </div>
+                <div class="terminology-grid">
+                  <label>规范输出名称<input id="term-canonical" type="text" maxlength="120" placeholder="例如：DP310-X2"></label>
+                  <label>适用范围（可选）<input id="term-scope" type="text" maxlength="120" placeholder="例如：步进驱动器"></label>
+                </div>
+                <label>常用说法（每行或逗号分隔）<textarea id="term-aliases" data-resizable="true" rows="2" maxlength="600" placeholder="例如：双轴、两轴、双轴步进驱动器"></textarea></label>
+                <label>补充说明（可选）<input id="term-note" type="text" maxlength="240" placeholder="例如：功率段不明确时只输出产品族名称"></label>
+                <div class="terminology-actions"><span class="set-msg" id="term-msg"></span><button class="btn small" id="term-cancel" hidden>取消编辑</button><button class="btn small" id="term-save">添加术语</button></div>
+              </div>
+              <div class="terminology-list-toolbar">
+                <div class="terminology-list-heading">
+                  <div class="terminology-list-title">已有术语词典</div>
+                  <div class="set-sub" id="terminology-list-count">0 组术语</div>
+                </div>
+                <div class="terminology-search-wrap">
+                  <svg class="terminology-search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg>
+                  <input id="terminology-search" type="search" placeholder="搜索规范名称或常用说法…" title="支持模糊搜索：多个关键词可用空格分隔" autocomplete="off">
+                  <button class="terminology-search-clear" id="terminology-search-clear" type="button" hidden aria-label="清除术语搜索" title="清除搜索">×</button>
+                </div>
+              </div>
+              <div id="terminology-list" class="terminology-list"></div>
+            </section>
+          </div>
         </div>
       </section>
     </main>
@@ -188,8 +537,66 @@
     </div>
   </div>
 
+  <!-- 保存筛选命名弹窗 -->
+  <div class="modal-backdrop" id="filter-name-modal" hidden>
+    <div class="modal card filter-name-modal" role="dialog" aria-modal="true" aria-labelledby="filter-name-title">
+      <div class="modal-head">
+        <span class="modal-title" id="filter-name-title">保存筛选</span>
+        <button class="icon-btn" id="filter-name-close" title="取消">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
+      </div>
+      <div class="filter-name-help">为当前筛选条件起一个名称，之后可以从下拉框一键加载。</div>
+      <label class="filter-name-label" for="filter-name">筛选名称</label>
+      <input type="text" id="filter-name" maxlength="40" placeholder="例如：模切飞线问题" autocomplete="off">
+      <div class="filter-name-msg" id="filter-name-msg" aria-live="polite"></div>
+      <div class="modal-foot filter-name-foot">
+        <button class="btn" id="filter-name-cancel">取消</button>
+        <button class="btn primary" id="filter-name-confirm">保存筛选</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 通用确认弹窗：避免使用不跟随主题的原生 confirm() -->
+  <div class="modal-backdrop" id="confirm-modal" hidden>
+    <div class="modal card confirm-modal" role="dialog" aria-modal="true" aria-labelledby="confirm-title" aria-describedby="confirm-message">
+      <div class="modal-head">
+        <span class="modal-title" id="confirm-title">确认操作</span>
+        <button class="icon-btn" id="confirm-close" type="button" title="取消" aria-label="取消">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
+      </div>
+      <div class="confirm-message" id="confirm-message"></div>
+      <div class="modal-foot confirm-foot">
+        <button class="btn" id="confirm-cancel" type="button">取消</button>
+        <button class="btn primary" id="confirm-ok" type="button">确定</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 近期闭环完整结果弹窗 -->
+  <div class="modal-backdrop" id="closure-modal" hidden>
+    <div class="modal card closure-modal" role="dialog" aria-modal="true" aria-labelledby="closure-modal-title">
+      <div class="modal-head">
+        <span class="modal-title" id="closure-modal-title">近期工作闭环</span>
+        <button class="icon-btn" id="closure-close" type="button" title="关闭" aria-label="关闭">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
+      </div>
+      <div class="closure-modal-note" id="closure-modal-note"></div>
+      <div class="closure-modal-content" id="closure-modal-content"></div>
+    </div>
+  </div>
+
   <div id="toast"></div>
   <script src="stats.js"></script>
+  <script src="../lib/filter-presets.js"></script>
+  <script src="../lib/text-search.js"></script>
+  <script src="../lib/thinking-snapshot.js"></script>
+  <script src="report-lifecycle.js"></script>
+  <script src="thinking-state.js"></script>
+  <script src="report-generation.js"></script>
+  <script src="custom-select.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

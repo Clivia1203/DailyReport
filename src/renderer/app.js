@@ -1,13 +1,84 @@
 const $ = s => document.querySelector(s);
+const thinkingState = window.DRThinkingState;
+const thinkingSnapshot = window.DRThinkingSnapshot;
+const customSelect = window.DRCustomSelect;
+
+function syncCustomSelect(select) {
+  customSelect?.sync(select);
+}
+
+function createClosureThinking(visible = false) {
+  return thinkingState.createThinkingState({
+    visible,
+    phase: visible ? 'segment' : ''
+  });
+}
+
+function createTerminologyThinking(visible = false) {
+  return thinkingState.createThinkingState({
+    visible,
+    phase: visible ? 'segment' : ''
+  });
+}
 
 const state = {
   entries: [],
   filter: { year: 'all', month: 'all', text: '' },
   rangeFocus: { type: 'all' }, // 范围聚焦（ADR-0003）：与年/月下拉互斥，搜索叠加
+  savedFilters: [],
   manage: false,
   selected: new Set(),
   settings: null,
-  recording: false
+  recording: false,
+  report: {
+    type: 'week',
+    start: '',
+    end: '',
+    periodLabel: '',
+    format: 'md',
+    data: null,
+    cacheStatus: 'missing',
+    editing: false,
+    draftMarkdown: '',
+    thinking: {
+      visible: false,
+      open: false,
+      phase: 'thinking',
+      text: '',
+      content: '',
+      segment: 0,
+      totalSegments: 0,
+      continuation: 0,
+      maxContinuations: 0,
+      progressNote: '',
+      reasoningLength: 0,
+      contentLength: 0,
+      sourceCount: 0,
+      coveredCount: 0,
+      rawRecordCount: 0,
+      finishReason: '',
+      startedAt: 0,
+      finishedAt: 0
+    }
+  },
+  terminologyDiscovery: {
+    running: false,
+    note: '',
+    error: '',
+    thinking: createTerminologyThinking()
+  },
+  workbench: {
+    closure: {
+      data: null,
+      cacheStatus: 'missing',
+      loading: false,
+      generating: false,
+      progressNote: '',
+      error: '',
+      thinking: createClosureThinking(),
+      dismissedSuggestions: new Set()
+    }
+  }
 };
 
 /* ---------- 工具 ---------- */
@@ -64,14 +135,25 @@ function hideToast() { $('#toast').classList.remove('show'); }
 
 const viewMain = $('#view-main');
 const viewSettings = $('#view-settings');
+const viewAiSettings = $('#view-ai-settings');
+const viewReport = $('#view-report');
 
 function showView(name) {
   viewMain.hidden = name !== 'main';
   viewSettings.hidden = name !== 'settings';
+  viewAiSettings.hidden = name !== 'ai-settings';
+  viewReport.hidden = name !== 'report';
+  if (typeof syncWeeklyWorkbenchViewport === 'function') syncWeeklyWorkbenchViewport();
 }
 
 $('#btn-settings').addEventListener('click', () => { showView('settings'); loadSettingsUI(); });
 $('#btn-back').addEventListener('click', () => showView('main'));
+$('#btn-ai-settings').addEventListener('click', () => {
+  showView('ai-settings');
+  setAiSettingsPanel('service');
+});
+$('#btn-ai-settings-back').addEventListener('click', () => showView('settings'));
+$('#btn-report-back').addEventListener('click', () => showView('main'));
 window.api.onNavigate(v => showView(v));
 
 /* ---------- 主题 ---------- */
@@ -85,11 +167,13 @@ const ICONS = {
 
 function applyTheme(theme) {
   document.documentElement.dataset.theme = theme;
-  $('#btn-theme').innerHTML = theme === 'dark' ? ICONS.sun : ICONS.moon;
+  const themeButton = $('#btn-theme');
+  if (themeButton) themeButton.innerHTML = theme === 'dark' ? ICONS.sun : ICONS.moon;
   try { localStorage.setItem('theme:cache', theme); } catch { /* 忽略 */ }
 }
 
-$('#btn-theme').addEventListener('click', async () => {
+const themeButton = $('#btn-theme');
+if (themeButton) themeButton.addEventListener('click', async () => {
   const cur = document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light';
   const next = cur === 'dark' ? 'light' : 'dark';
   applyTheme(next);
@@ -181,6 +265,77 @@ function growTextarea(el) {
   el.style.height = 'auto';
   el.style.height = Math.min(el.scrollHeight, 240) + 'px';
 }
+
+function syncTextareaResizerVisibility(textarea) {
+  const shell = textarea?.parentElement?.classList.contains('textarea-resize-shell')
+    ? textarea.parentElement
+    : null;
+  if (shell) shell.hidden = textarea.hidden;
+}
+
+// Chromium 的原生 textarea 缩放手柄在 Windows 下可能带白色底，改为应用内绘制并保留垂直拖动。
+function installTextareaResizer(textarea) {
+  if (!textarea || textarea.dataset.resizable !== 'true') return null;
+  if (textarea.parentElement?.classList.contains('textarea-resize-shell')) {
+    return textarea.parentElement;
+  }
+
+  const shell = document.createElement('div');
+  shell.className = 'textarea-resize-shell';
+  if (textarea.classList.contains('report-editor')) shell.classList.add('report-editor-shell');
+  textarea.parentNode.insertBefore(shell, textarea);
+  shell.appendChild(textarea);
+
+  const handle = document.createElement('span');
+  handle.className = 'textarea-resize-handle';
+  handle.setAttribute('aria-hidden', 'true');
+  handle.title = '拖动调整文本框高度';
+  handle.innerHTML = '<svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M4 13 L13 4 L13 13 Z"/></svg>';
+  shell.appendChild(handle);
+
+  syncTextareaResizerVisibility(textarea);
+
+  let resizing = false;
+  handle.addEventListener('pointerdown', event => {
+    if (event.button !== 0 || resizing) return;
+    event.preventDefault();
+    event.stopPropagation();
+    resizing = true;
+
+    const startY = event.clientY;
+    const startHeight = textarea.getBoundingClientRect().height;
+    const computed = getComputedStyle(textarea);
+    const minHeight = Math.max(0, parseFloat(computed.minHeight) || 0);
+    const parsedMaxHeight = parseFloat(computed.maxHeight);
+    const maxHeight = Number.isFinite(parsedMaxHeight) && parsedMaxHeight > 0
+      ? parsedMaxHeight
+      : Infinity;
+
+    const onMove = moveEvent => {
+      const nextHeight = Math.min(
+        maxHeight,
+        Math.max(minHeight, startHeight + moveEvent.clientY - startY)
+      );
+      textarea.style.height = `${Math.round(nextHeight)}px`;
+    };
+    const onUp = () => {
+      resizing = false;
+      document.body.classList.remove('textarea-resizing');
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      window.removeEventListener('pointercancel', onUp);
+    };
+
+    document.body.classList.add('textarea-resizing');
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+    window.addEventListener('pointercancel', onUp);
+    handle.setPointerCapture?.(event.pointerId);
+  });
+
+  return shell;
+}
+
 composerText.addEventListener('input', () => growTextarea(composerText));
 
 composerText.addEventListener('keydown', e => {
@@ -244,8 +399,116 @@ async function saveComposer() {
 /* ---------- 导出模态 ---------- */
 
 const exportModal = $('#export-modal');
+const closureModal = $('#closure-modal');
+const closureModalClose = $('#closure-close');
+const closureModalNote = $('#closure-modal-note');
+const closureModalContent = $('#closure-modal-content');
+
+const filterNameModal = $('#filter-name-modal');
+const filterNameInput = $('#filter-name');
+const filterNameMsg = $('#filter-name-msg');
+const filterNameConfirm = $('#filter-name-confirm');
+const filterNameCancel = $('#filter-name-cancel');
+const filterNameClose = $('#filter-name-close');
+let filterNameResolver = null;
+
+const confirmModal = $('#confirm-modal');
+const confirmTitle = $('#confirm-title');
+const confirmMessage = $('#confirm-message');
+const confirmOk = $('#confirm-ok');
+const confirmCancel = $('#confirm-cancel');
+const confirmClose = $('#confirm-close');
+let confirmResolver = null;
+
+function closeFilterNameModal(value = null) {
+  const resolve = filterNameResolver;
+  filterNameResolver = null;
+  filterNameModal.hidden = true;
+  syncModalCover();
+  if (resolve) resolve(value);
+}
+
+function confirmFilterName() {
+  const name = filterNameInput.value.trim();
+  if (!name) {
+    filterNameMsg.textContent = '请输入筛选名称';
+    filterNameInput.focus();
+    return;
+  }
+  closeFilterNameModal(name);
+}
+
+function askFilterName(defaultName) {
+  return new Promise(resolve => {
+    filterNameResolver = resolve;
+    filterNameInput.value = defaultName;
+    filterNameMsg.textContent = '';
+    filterNameModal.hidden = false;
+    syncModalCover();
+    requestAnimationFrame(() => {
+      filterNameInput.focus();
+      filterNameInput.select();
+    });
+  });
+}
+
+function closeConfirmModal(value = false) {
+  const resolve = confirmResolver;
+  confirmResolver = null;
+  confirmModal.hidden = true;
+  confirmOk.classList.remove('confirm-danger');
+  syncModalCover();
+  if (resolve) resolve(value);
+}
+
+function askConfirmation(message, options = {}) {
+  const {
+    title = '确认操作',
+    confirmLabel = '确定',
+    cancelLabel = '取消',
+    danger = false
+  } = options;
+  return new Promise(resolve => {
+    if (confirmResolver) confirmResolver(false);
+    confirmResolver = resolve;
+    confirmTitle.textContent = title;
+    confirmMessage.textContent = message;
+    confirmOk.textContent = confirmLabel;
+    confirmCancel.textContent = cancelLabel;
+    confirmOk.classList.toggle('confirm-danger', danger);
+    confirmModal.hidden = false;
+    syncModalCover();
+    requestAnimationFrame(() => confirmOk.focus());
+  });
+}
+
+filterNameConfirm.addEventListener('click', confirmFilterName);
+filterNameCancel.addEventListener('click', () => closeFilterNameModal());
+filterNameClose.addEventListener('click', () => closeFilterNameModal());
+filterNameModal.addEventListener('click', event => {
+  if (event.target === filterNameModal) closeFilterNameModal();
+});
+filterNameInput.addEventListener('input', () => { filterNameMsg.textContent = ''; });
+filterNameInput.addEventListener('keydown', event => {
+  if (event.key === 'Enter') {
+    event.preventDefault();
+    confirmFilterName();
+  }
+  if (event.key === 'Escape') closeFilterNameModal();
+});
+
+confirmOk.addEventListener('click', () => closeConfirmModal(true));
+confirmCancel.addEventListener('click', () => closeConfirmModal(false));
+confirmClose.addEventListener('click', () => closeConfirmModal(false));
+confirmModal.addEventListener('click', event => {
+  if (event.target === confirmModal) closeConfirmModal(false);
+});
+document.addEventListener('keydown', event => {
+  if (event.key === 'Escape' && !confirmModal.hidden) closeConfirmModal(false);
+});
 
 function openExportModal() {
+  closeMoreMenu();
   exportModal.hidden = false;
   syncModalCover();
   renderExportPreview();
@@ -258,7 +521,9 @@ function closeExportModal() {
 
 // 任一模窗打开时，请主进程把标题栏控制按钮区染成遮罩色（视觉遮盖）
 function syncModalCover() {
-  window.api.setModalCover(!composerModal.hidden || !exportModal.hidden);
+  window.api.setModalCover(
+    !composerModal.hidden || !exportModal.hidden || !closureModal.hidden || !filterNameModal.hidden || !confirmModal.hidden
+  );
 }
 
 $('#btn-export-open').addEventListener('click', openExportModal);
@@ -307,12 +572,1038 @@ $('#btn-export').addEventListener('click', async () => {
   else if (res.error) toast(res.error);
 });
 
+/* ---------- 周期总结 ---------- */
+
+const reportType = $('#report-type');
+const reportPrev = $('#report-prev');
+const reportNext = $('#report-next');
+const reportStart = $('#report-start');
+const reportEnd = $('#report-end');
+const reportDates = $('#report-dates');
+const reportFormat = $('#report-format');
+const reportStatus = $('#report-status');
+const reportThinking = $('#report-thinking');
+const reportThinkingStatus = $('#report-thinking-status');
+const reportThinkingToggle = $('#report-thinking-toggle');
+const reportThinkingContent = $('#report-thinking-content');
+const reportThinkingNote = $('#report-thinking-note');
+const reportTitle = $('#report-title');
+const reportMeta = $('#report-meta');
+const reportContent = $('#report-content');
+const reportGenerate = $('#report-generate');
+const reportEditor = $('#report-editor');
+const reportFull = $('#report-full');
+const reportEdit = $('#report-edit');
+const reportEditFoot = $('#report-edit-foot');
+const reportEditCancel = $('#report-edit-cancel');
+const reportEditSave = $('#report-edit-save');
+const reportCount = $('#report-count');
+const reportCoverage = $('#report-coverage');
+const reportModel = $('#report-model');
+const reportSourceList = $('#report-source-list');
+const reportConnection = $('#report-connection');
+const reportLayout = $('#report-layout');
+const reportResizer = $('#report-resizer');
+const reportLifecycle = window.DRReportLifecycle;
+const reportThinkingCache = reportLifecycle.createReportThinkingCache();
+const reportGeneration = window.DRReportGeneration;
+const reportGenerationManager = reportGeneration.createReportGenerationManager({
+  // 同时生成多周时保留有限并发，避免一次打开过多流式请求。
+  maxConcurrent: 2,
+  run: ({ jobId, payload }) => window.api.generateReport({ ...payload, jobId }).then(res => {
+    if (res?.ok) return res;
+    const error = new Error(res?.error || '生成总结失败');
+    error.reportResponse = res;
+    throw error;
+  })
+});
+
+function localDateFromString(value) { return new Date(value + 'T00:00:00'); }
+
+function dateStringFromDate(date) {
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+}
+
+function shiftDateString(value, days) {
+  const d = localDateFromString(value);
+  d.setDate(d.getDate() + days);
+  return dateStringFromDate(d);
+}
+
+function periodBounds(type, anchor = Date.now()) {
+  const now = new Date(anchor);
+  if (type === 'day') {
+    const day = dateStr(anchor);
+    return { start: day, end: day, label: day };
+  }
+  if (type === 'month') {
+    const first = new Date(now.getFullYear(), now.getMonth(), 1);
+    const next = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+    return { start: dateStringFromDate(first), end: dateStringFromDate(next), label: `${now.getFullYear()} 年 ${now.getMonth() + 1} 月` };
+  }
+  if (type === 'custom') return { start: dateStr(anchor), end: dateStr(anchor), label: dateStr(anchor) };
+  const monday = new Date(DR.weekStart(anchor));
+  const sunday = new Date(monday);
+  sunday.setDate(sunday.getDate() + 6);
+  return { start: dateStringFromDate(monday), end: dateStringFromDate(sunday), label: `${dateStringFromDate(monday)} 至 ${dateStringFromDate(sunday)}` };
+}
+
+function reportPeriodLabel() {
+  const type = reportType.value;
+  if (type === 'day') return `${reportStart.value} 工作总结`;
+  if (type === 'month') {
+    const d = localDateFromString(reportStart.value);
+    return `${d.getFullYear()} 年 ${d.getMonth() + 1} 月工作总结`;
+  }
+  return `${reportStart.value} 至 ${reportEnd.value} 工作总结`;
+}
+
+function setReportPeriod(type, start, end) {
+  reportType.value = type;
+  syncCustomSelect(reportType);
+  const bounds = start && end ? { start, end } : periodBounds(type);
+  reportStart.value = bounds.start;
+  reportEnd.value = bounds.end;
+  state.report.type = type;
+  state.report.start = bounds.start;
+  state.report.end = bounds.end;
+  state.report.periodLabel = reportPeriodLabel();
+  syncReportThinkingForPeriod();
+  reportDates.hidden = type !== 'custom';
+  reportTitle.textContent = reportPeriodLabel();
+  rememberReportPeriod();
+  syncReportControls();
+}
+
+function currentReportPeriod() {
+  return {
+    type: state.report.type,
+    start: state.report.start,
+    end: state.report.end
+  };
+}
+
+function syncReportThinkingForPeriod() {
+  const period = currentReportPeriod();
+  let cached = reportThinkingCache.read(period);
+  if (cached?.phase === 'incomplete') {
+    // 兼容当前会话中由旧代码生成的快照；已保存的报告统一恢复为稳定完成态。
+    cached = thinkingState.finalizeThinkingState({
+      ...cached,
+      open: false,
+      progressNote: '总结已生成，已保留全部原始记录。'
+    }, 'done', cached.finishedAt);
+    reportThinkingCache.write(period, cached);
+  }
+  const job = currentReportJob();
+  if (cached && (!reportJobIsActive(job) || cached.jobId === job.id)) {
+    state.report.thinking = cached;
+    return cached;
+  }
+  if (reportJobIsActive(job)) return beginReportThinking(job, job.status);
+  const fresh = thinkingState.createThinkingState();
+  reportThinkingCache.write(period, fresh);
+  state.report.thinking = fresh;
+  return fresh;
+}
+
+function sameReportPeriod(left, right) {
+  return !!left && !!right
+    && left.type === right.type
+    && left.start === right.start
+    && left.end === right.end;
+}
+
+function currentReportJob() {
+  return reportGenerationManager.getForPeriod(currentReportPeriod());
+}
+
+function reportJobIsActive(job) {
+  return reportGeneration.isReportJobActive(job);
+}
+
+function reportJobMessage(job) {
+  if (!job) return '';
+  if (job.status === 'queued') {
+    const pending = reportGenerationManager.pendingCount();
+    return pending > 1
+      ? `已加入生成队列，前面还有 ${pending - 1} 个任务。`
+      : '已加入生成队列，等待可用的 AI 请求…';
+  }
+  return '正在连接 DeepSeek 并生成总结，请稍候…';
+}
+
+function syncReportControls() {
+  const job = currentReportJob();
+  const busy = reportJobIsActive(job);
+  const editing = state.report.editing;
+  // 编辑态锁住整个报告周期，避免页面切到新周期而编辑框仍保留旧草稿。
+  reportType.disabled = editing;
+  reportStart.disabled = editing;
+  reportEnd.disabled = editing;
+  reportPrev.disabled = editing || state.report.type === 'custom';
+  reportNext.disabled = editing || state.report.type === 'custom';
+  reportGenerate.disabled = busy;
+  syncCustomSelect(reportType);
+  reportGenerate.textContent = busy
+    ? (job.status === 'queued' ? '排队中…' : '生成中…')
+    : (state.report.data ? '重新生成' : '生成总结');
+}
+
+const REPORT_PERIOD_STORAGE_KEY = 'report-period-selection';
+
+function readReportPeriod() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(REPORT_PERIOD_STORAGE_KEY) || 'null');
+    const validType = ['day', 'week', 'month', 'custom'].includes(saved?.type);
+    const validDates = /^\d{4}-\d{2}-\d{2}$/.test(saved?.start || '')
+      && /^\d{4}-\d{2}-\d{2}$/.test(saved?.end || '')
+      && saved.start <= saved.end;
+    return validType && validDates ? saved : null;
+  } catch {
+    return null;
+  }
+}
+
+function rememberReportPeriod() {
+  if (!state.report.start || !state.report.end) return;
+  try {
+    localStorage.setItem(REPORT_PERIOD_STORAGE_KEY, JSON.stringify({
+      type: state.report.type,
+      start: state.report.start,
+      end: state.report.end
+    }));
+  } catch { /* 忽略 */ }
+}
+
+function reportEntries() {
+  return state.entries.filter(entry => {
+    const day = dateStr(entry.ts);
+    return day >= state.report.start && day <= state.report.end;
+  }).sort((a, b) => a.ts - b.ts || (a.createdAt || 0) - (b.createdAt || 0));
+}
+
+function reportText(content) {
+  return String(content || '')
+    .replace(/^[ \t]*#{1,6}[ \t]+/gm, '')
+    .replace(/^[ \t]*[-*][ \t]+/gm, '• ')
+    .replace(/^[ \t]*\d+\.[ \t]+/gm, '')
+    .replace(/`([^`]+)`/g, '$1')
+    .replace(/\*\*([^*]+)\*\*/g, '$1')
+    .replace(/\*([^*]+)\*/g, '$1')
+    .replace(/^[ \t]*---[ \t]*$/gm, '────────────────')
+    .trim();
+}
+
+function reportContentForFormat(content, format = state.report.format) {
+  return format === 'txt' ? reportText(content) : String(content || '');
+}
+
+function reportTextToMarkdown(content) {
+  return String(content || '')
+    .replace(/\r\n?/g, '\n')
+    .replace(/^[ \t]*•[ \t]+/gm, '- ')
+    .replace(/^[ \t]*────────────────[ \t]*$/gm, '---')
+    .trim();
+}
+
+function reportEditorToMarkdown(content, format = state.report.format) {
+  return format === 'txt' ? reportTextToMarkdown(content) : String(content || '').trim();
+}
+
+function currentReportDraftMarkdown(format = state.report.format) {
+  const draft = String(state.report.draftMarkdown || '');
+  const expected = reportContentForFormat(draft, format);
+  return reportEditor.value === expected
+    ? draft
+    : reportEditorToMarkdown(reportEditor.value, format);
+}
+
+function scrollProgress(element) {
+  if (!element) return 0;
+  const max = Math.max(0, element.scrollHeight - element.clientHeight);
+  return max ? Math.max(0, Math.min(1, element.scrollTop / max)) : 0;
+}
+
+function captureReportEditScroll() {
+  const card = state.report.editing ? reportEditor : reportFull;
+  return {
+    card: scrollProgress(card),
+    view: scrollProgress(viewReport)
+  };
+}
+
+function restoreReportViewScroll(position) {
+  const snapshot = position || { card: 0, view: 0 };
+  const apply = () => {
+    const cardMax = Math.max(0, reportFull.scrollHeight - reportFull.clientHeight);
+    reportFull.scrollTop = cardMax * snapshot.card;
+    const viewMax = Math.max(0, viewReport.scrollHeight - viewReport.clientHeight);
+    viewReport.scrollTop = viewMax * snapshot.view;
+  };
+
+  requestAnimationFrame(() => {
+    apply();
+    // 查看态正文重新渲染后高度可能在下一帧才稳定，再校准一次避免回到顶部。
+    requestAnimationFrame(apply);
+  });
+}
+
+function restoreReportEditScroll(position) {
+  const snapshot = position || { card: 0, view: 0 };
+  const apply = () => {
+    // 编辑态由 textarea 自己滚动；报告卡片只保留标题和底部操作栏的位置。
+    reportFull.scrollTop = 0;
+    const editorMax = Math.max(0, reportEditor.scrollHeight - reportEditor.clientHeight);
+    reportEditor.scrollTop = editorMax * snapshot.card;
+    const viewMax = Math.max(0, viewReport.scrollHeight - viewReport.clientHeight);
+    viewReport.scrollTop = viewMax * snapshot.view;
+  };
+
+  requestAnimationFrame(() => {
+    try { reportEditor.focus({ preventScroll: true }); }
+    catch { reportEditor.focus(); }
+    apply();
+    // 让 textarea 完成首次布局后再校准一次，避免 focus 的默认滚动覆盖位置。
+    requestAnimationFrame(apply);
+  });
+}
+
+// 仅渲染标题、列表和段落，AI 返回内容一律使用 textContent，避免把远程内容当 HTML 执行。
+function renderMarkdown(target, markdown) {
+  target.innerHTML = '';
+  let list = null;
+  for (const raw of String(markdown || '').split(/\r?\n/)) {
+    const line = raw.trim();
+    if (!line) { list = null; continue; }
+    const heading = /^(#{1,6})\s+(.+)$/.exec(line);
+    if (heading) {
+      list = null;
+      const el = document.createElement(`h${Math.min(6, heading[1].length)}`);
+      el.textContent = heading[2];
+      target.appendChild(el);
+      continue;
+    }
+    const bullet = /^[-*]\s+(.+)$/.exec(line);
+    if (bullet) {
+      if (!list || list.tagName !== 'UL') { list = document.createElement('ul'); target.appendChild(list); }
+      const li = document.createElement('li');
+      li.textContent = bullet[1];
+      list.appendChild(li);
+      continue;
+    }
+    if (/^---+$/.test(line)) { list = null; target.appendChild(document.createElement('hr')); continue; }
+    list = null;
+    const p = document.createElement('p');
+    p.textContent = line;
+    target.appendChild(p);
+  }
+}
+
+function renderReportContent(target, content) {
+  if (state.report.format === 'txt') {
+    target.innerHTML = '';
+    const pre = document.createElement('pre');
+    pre.className = 'report-plain';
+    pre.textContent = reportContentForFormat(content, 'txt');
+    target.appendChild(pre);
+  } else renderMarkdown(target, content);
+}
+
+function renderReportSources() {
+  reportSourceList.innerHTML = '';
+  const entries = reportEntries();
+  reportCount.textContent = String(entries.length);
+  if (!entries.length) {
+    const empty = document.createElement('div');
+    empty.className = 'report-source-empty';
+    empty.textContent = '本周期没有记录';
+    reportSourceList.appendChild(empty);
+    return;
+  }
+  for (const entry of entries) {
+    const row = document.createElement('div');
+    row.className = 'report-source-entry';
+    const time = document.createElement('span');
+    time.className = 'entry-time';
+    time.textContent = `${dateStr(entry.ts)} ${timeStr(entry.ts)}`;
+    const text = document.createElement('span');
+    text.textContent = entry.text;
+    row.append(time, text);
+    reportSourceList.appendChild(row);
+  }
+}
+
+let reportThinkingTimer = null;
+
+function renderReportThinking() {
+  const thinking = state.report.thinking || thinkingState.createThinkingState();
+  reportThinking.hidden = !thinking.visible;
+  reportThinkingContent.hidden = !thinking.open;
+  reportThinkingToggle.textContent = thinking.open ? '收起详细过程' : '查看详细过程';
+  reportThinkingToggle.setAttribute('aria-expanded', String(thinking.open));
+  if (reportThinkingNote) {
+    reportThinkingNote.textContent = thinking.progressNote || '实时状态代表实际生成进度；详细过程仅用于查看，不会写入总结或导出文件。';
+  }
+  const elapsed = thinkingState.elapsedSeconds(thinking);
+  const segmentLabel = thinking.totalSegments > 1 && thinking.segment
+    ? ` · 第 ${thinking.segment}/${thinking.totalSegments} 段`
+    : '';
+  const outputLength = thinking.contentLength || thinking.content.length;
+  const outputLabel = outputLength > 0 ? ` · 已收到 ${outputLength} 字` : '';
+  if (thinking.phase === 'queued') reportThinkingStatus.textContent = `等待生成${segmentLabel} · ${elapsed}s`;
+  else if (thinking.phase === 'segment') reportThinkingStatus.textContent = `准备生成总结${segmentLabel} · ${elapsed}s`;
+  else if (thinking.phase === 'thinking') reportThinkingStatus.textContent = `AI 正在思考${segmentLabel} · ${elapsed}s`;
+  else if (thinking.phase === 'writing') reportThinkingStatus.textContent = `正在输出总结${segmentLabel}${outputLabel} · ${elapsed}s`;
+  else if (thinking.phase === 'continuing') reportThinkingStatus.textContent = `正在续写第 ${thinking.continuation}/${thinking.maxContinuations} 次${segmentLabel} · ${elapsed}s`;
+  else if (thinking.phase === 'recovering') reportThinkingStatus.textContent = `正在恢复流式输出${segmentLabel} · ${elapsed}s`;
+  else if (thinking.phase === 'fallback') reportThinkingStatus.textContent = `正在切换兼容输出模式${segmentLabel} · ${elapsed}s`;
+  else if (thinking.phase === 'stream-done') reportThinkingStatus.textContent = `正文输出完成，准备保存 · ${elapsed}s`;
+  else if (thinking.phase === 'saving') reportThinkingStatus.textContent = `正在保存完整报告 · ${elapsed}s`;
+  else if (thinking.phase === 'saved') reportThinkingStatus.textContent = `报告已保存 · ${elapsed}s`;
+  else if (thinking.phase === 'done') reportThinkingStatus.textContent = `已完成 · ${elapsed}s`;
+  // 兼容修复前已经存在于当前会话内的快照；报告已保存时统一按完成态展示。
+  else if (thinking.phase === 'incomplete') reportThinkingStatus.textContent = `已完成 · ${elapsed}s`;
+  else if (thinking.phase === 'error') reportThinkingStatus.textContent = '生成失败';
+  else reportThinkingStatus.textContent = `AI 正在处理${segmentLabel} · ${elapsed}s`;
+  const blocks = [];
+  if (thinking.progressNote) blocks.push(`进度：${thinking.progressNote}`);
+  if (thinking.text) blocks.push(`思考过程：\n${thinking.text}`);
+  if (thinking.content) blocks.push(`总结输出：\n${thinking.content}`);
+  reportThinkingContent.textContent = blocks.join('\n\n');
+  if (thinking.open) reportThinkingContent.scrollTop = reportThinkingContent.scrollHeight;
+}
+
+function saveReportThinking(period, thinking) {
+  reportThinkingCache.write(period, thinking);
+  if (sameReportPeriod(period, currentReportPeriod())) {
+    state.report.thinking = thinking;
+    renderReportThinking();
+  }
+  return thinking;
+}
+
+function restoreReportThinkingFromReport(report) {
+  const snapshot = thinkingSnapshot?.extractReportThinking(report);
+  if (!snapshot) return false;
+  const period = currentReportPeriod();
+  reportThinkingCache.write(period, snapshot);
+  state.report.thinking = snapshot;
+  return true;
+}
+
+function persistReportThinkingForCurrentReport(thinking) {
+  const report = state.report.data;
+  const snapshot = thinkingSnapshot?.normalizeThinkingSnapshot(thinking);
+  if (!report?.id || !snapshot || reportJobIsActive(currentReportJob())) return;
+  window.api.saveReportThinking(report.id, snapshot).catch(() => {
+    // 思考过程属于辅助展示；持久化失败不能影响已生成的总结正文。
+  });
+}
+
+function beginReportThinking() {
+  const job = arguments[0] || null;
+  const status = arguments[1] || job?.status || 'running';
+  const period = job?.period || currentReportPeriod();
+  const thinking = thinkingState.createThinkingState({
+    visible: true,
+    phase: status === 'queued' ? 'queued' : 'thinking'
+  });
+  thinking.jobId = job?.id || '';
+  thinking.progressNote = status === 'queued'
+    ? '已加入生成队列，等待可用的 AI 请求…'
+    : '正在连接 DeepSeek，准备分析原始记录…';
+  saveReportThinking(period, thinking);
+  syncReportThinkingTimer();
+  return thinking;
+}
+
+function reportThinkingForJob(job) {
+  const cached = reportThinkingCache.read(job.period);
+  if (cached && cached.jobId === job.id) return cached;
+  return beginReportThinking(job, job.status === 'queued' ? 'queued' : 'running');
+}
+
+function markReportJobStarted(job) {
+  const current = reportThinkingForJob(job);
+  const thinking = {
+    ...current,
+    visible: true,
+    phase: 'thinking',
+    progressNote: '正在连接 DeepSeek，准备分析原始记录…'
+  };
+  saveReportThinking(job.period, thinking);
+  syncReportThinkingTimer();
+}
+
+function finishReportThinking(phase = 'done', job, note) {
+  const targetJob = job || currentReportJob();
+  const period = targetJob?.period || currentReportPeriod();
+  const current = targetJob ? reportThinkingForJob(targetJob) : state.report.thinking;
+  const thinking = thinkingState.finalizeThinkingState({
+    ...current,
+    visible: true,
+    open: phase === 'error',
+    progressNote: note || current.progressNote
+  }, phase === 'incomplete' ? 'done' : phase);
+  saveReportThinking(period, thinking);
+  syncReportThinkingTimer();
+  return thinking;
+}
+
+function hideReportThinking() {
+  if (!reportGenerationManager.hasActiveJobs()) {
+    clearInterval(reportThinkingTimer);
+    reportThinkingTimer = null;
+  }
+  state.report.thinking = {
+    ...state.report.thinking,
+    visible: false,
+    open: false
+  };
+  reportThinking.hidden = true;
+}
+
+function syncReportThinkingTimer() {
+  if (reportGenerationManager.hasActiveJobs()) {
+    if (!reportThinkingTimer) reportThinkingTimer = setInterval(() => {
+      if (!viewReport.hidden) renderReportThinking();
+    }, 1000);
+    return;
+  }
+  clearInterval(reportThinkingTimer);
+  reportThinkingTimer = null;
+}
+
+function updateReportThinkingFromProgress(job, progress) {
+  if (!progress) return;
+  let thinking = reportThinkingForJob(job);
+  thinking = thinkingState.appendThinkingProgress(thinking, progress);
+  if (progress.text && !['writing', 'thinking'].includes(progress.phase)) {
+    thinking.progressNote = progress.text;
+  }
+  if (progress.phase === 'segment') {
+    thinking.progressNote = `正在分析第 ${progress.segment || 1}/${progress.totalSegments || 1} 段原始记录…`;
+  } else if (progress.phase === 'thinking') {
+    thinking.progressNote = `AI 正在分析第 ${progress.segment || 1}/${progress.totalSegments || 1} 段记录…`;
+  } else if (progress.phase === 'writing') {
+    thinking.progressNote = `正在接收总结正文，已收到 ${thinking.content.length} 字…`;
+  } else if (progress.phase === 'continuing') {
+    thinking.progressNote = `正在继续整理总结正文（第 ${progress.continuation || 1} 次）…`;
+  } else if (progress.phase === 'recovering') {
+    thinking.progressNote = '正在继续整理总结正文…';
+  } else if (progress.phase === 'fallback') {
+    thinking.progressNote = '正在继续生成总结…';
+  } else if (progress.phase === 'stream-done') {
+    thinking.progressNote = '正文流式输出完成，准备保存完整报告…';
+  } else if (progress.phase === 'saving') {
+    thinking.progressNote = '正在保存报告正文、完整性清单和原始记录明细…';
+  } else if (progress.phase === 'saved') {
+    thinking.progressNote = '报告已保存，可以查看、编辑或导出。';
+  } else if (progress.phase === 'done') {
+    // 兼容旧版主进程发送的 done 事件；新版会继续发送 saved。
+    thinking = {
+      ...thinking,
+      phase: 'done',
+      progressNote: '正文已生成，正在保存完整报告。'
+    };
+  } else if (progress.phase === 'error') {
+    thinking = {
+      ...thinking,
+      phase: 'error',
+      progressNote: progress.error || '生成过程中发生错误。'
+    };
+  }
+  saveReportThinking(job.period, thinking);
+}
+
+function reportCoverageMessage(report) {
+  if (!report) return '';
+  const sourceCount = Number(report.sourceCount) || 0;
+  const rawRecordCount = Number(report.rawRecordCount) || 0;
+  // complete/sourceAudit 是内部质量元数据；只要报告已保存且原始记录仍在，
+  // 用户看到的是可用结果，不把模型协议细节变成难以理解的错误提示。
+  return sourceCount > 0 && rawRecordCount < sourceCount
+    ? '总结已生成，日报原文仍已保留；可以重新生成以补齐报告。'
+    : '总结已生成，已保留全部原始记录。';
+}
+
+function handleReportGenerationEvent(event) {
+  const job = event?.job;
+  if (!job) return;
+  if (event.type === 'queued') {
+    beginReportThinking(job, 'queued');
+  } else if (event.type === 'started') {
+    markReportJobStarted(job);
+  } else if (event.type === 'progress') {
+    updateReportThinkingFromProgress(job, event.progress);
+  } else if (event.type === 'completed') {
+    const result = event.result;
+    const report = result?.report;
+    if (!report) {
+      handleReportGenerationFailure(job, new Error('AI 没有返回有效的总结结果'));
+      return;
+    }
+    if (state.settings?.ai) {
+      state.settings.ai.model = report.model;
+      state.settings.ai.lastTestOk = true;
+      syncAiEntry();
+    }
+    finishReportThinking('done', job, reportCoverageMessage(report));
+    if (sameReportPeriod(job.period, currentReportPeriod())) {
+      state.report.data = report;
+      state.report.cacheStatus = result.cacheStatus || 'fresh';
+      renderReportState(result.modelChanged
+        ? `当前模型已更新为 ${report.model}，${reportCoverageMessage(report)}`
+        : reportCoverageMessage(report));
+    } else {
+      toast(`${job.period.start} 至 ${job.period.end} 的总结已生成`);
+    }
+  } else if (event.type === 'failed') {
+    handleReportGenerationFailure(job, event.error);
+  }
+  syncReportControls();
+  syncReportThinkingTimer();
+}
+
+function handleReportGenerationFailure(job, error) {
+  const message = error?.message || String(error || '生成总结失败');
+  finishReportThinking('error', job, message);
+  if (sameReportPeriod(job.period, currentReportPeriod())) {
+    renderReportState(message);
+    toast(message);
+  } else {
+    toast(`${job.period.start} 至 ${job.period.end} 总结失败：${message}`);
+  }
+}
+
+reportGenerationManager.subscribe(handleReportGenerationEvent);
+
+window.api.onReportProgress(progress => {
+  if (!progress?.jobId) return;
+  const job = reportGenerationManager.get(progress.jobId);
+  if (!job) return;
+  reportGenerationManager.updateProgress(progress.jobId, progress);
+});
+
+function renderReportMeta(data, rawRecordLabel) {
+  reportMeta.replaceChildren();
+  if (!data) {
+    reportMeta.textContent = '尚未生成本周期总结';
+    return;
+  }
+
+  const fields = [
+    `来源：${data.sourceCount} 条`,
+    `模型：${data.model || '--'}`
+  ];
+  const rawRecordCount = Number(data.rawRecordCount);
+  if (data.sourceCount > 0 && Number.isFinite(rawRecordCount) && rawRecordCount < Number(data.sourceCount)) {
+    fields.push(`原始明细：${rawRecordLabel}`);
+  }
+  fields.forEach((text, index) => {
+    if (index > 0) reportMeta.appendChild(document.createTextNode('　·　'));
+    const item = document.createElement('span');
+    item.className = 'report-meta-item';
+    item.textContent = text;
+    reportMeta.appendChild(item);
+  });
+}
+
+function renderReportState(message) {
+  const data = state.report.data;
+  const staleCache = !!data && !['fresh', 'missing'].includes(state.report.cacheStatus);
+  const cacheStatusMessage = {
+    'source-changed': '原始记录已变化，当前显示上一次生成的报告；点击“重新生成”即可更新。',
+    'template-changed': '报告模板已变化，当前显示上一次生成的报告；点击“重新生成”即可更新。',
+    'source-and-template-changed': '原始记录和报告模板都已变化，当前显示上一次生成的报告；点击“重新生成”即可更新。',
+    'terminology-changed': '术语词典已变化，当前显示上一次生成的报告；点击“重新生成”即可应用新的规范名称。',
+    'source-and-terminology-changed': '原始记录和术语词典都已变化，当前显示上一次生成的报告；点击“重新生成”即可更新。',
+    'template-and-terminology-changed': '报告模板和术语词典都已变化，当前显示上一次生成的报告；点击“重新生成”即可更新。',
+    'source-template-and-terminology-changed': '原始记录、模板和术语词典都已变化，当前显示上一次生成的报告；点击“重新生成”即可更新。',
+    unknown: '当前显示历史报告，无法确认其原始记录版本；建议重新生成。'
+  }[state.report.cacheStatus] || '当前显示历史报告，建议重新生成。';
+  const rawRecordsIncomplete = !!data
+    && data.sourceCount > 0
+    && Number(data.rawRecordCount) < Number(data.sourceCount);
+  const incomplete = staleCache || rawRecordsIncomplete;
+  const rawRecordsMessage = rawRecordsIncomplete
+    ? '总结已生成，日报原文仍已保留；可以重新生成以补齐报告。'
+    : '';
+  const rawRecordLabel = data
+    ? (Number.isFinite(data.rawRecordCount) ? `${data.rawRecordCount} / ${data.sourceCount}` : '已附加')
+    : '--';
+  reportTitle.textContent = reportPeriodLabel();
+  renderReportMeta(data, rawRecordLabel);
+  reportCoverage.textContent = data ? `${data.coveredCount} / ${data.sourceCount}` : '--';
+  reportModel.textContent = data?.model || state.settings?.ai?.model || '--';
+  reportStatus.textContent = message || (staleCache
+    ? cacheStatusMessage
+    : rawRecordsMessage
+    ? rawRecordsMessage
+    : data ? '总结已生成，已保留全部原始记录。' : '选择周期后点击“生成总结”。');
+  reportStatus.className = `report-status${message ? ' active' : ''}${incomplete ? ' incomplete' : ''}`;
+  reportEdit.hidden = !data;
+  reportFull.classList.toggle('editing', state.report.editing);
+  reportContent.hidden = state.report.editing;
+  reportEditor.hidden = !data || !state.report.editing;
+  reportEditFoot.hidden = !data || !state.report.editing;
+  syncTextareaResizerVisibility(reportEditor);
+  if (data && !state.report.editing) {
+    renderReportContent(reportContent, data.content);
+  } else if (!data && !state.report.editing) {
+    reportContent.innerHTML = '';
+    const empty = document.createElement('div');
+    empty.className = 'report-empty';
+    empty.textContent = '尚未生成本周期总结，点击右上角“生成总结”开始。';
+    reportContent.appendChild(empty);
+  }
+  renderReportSources();
+  syncReportControls();
+}
+
+function syncAiEntry() {
+  const ai = state.settings?.ai;
+  const configured = !!ai?.configured;
+  $('#btn-report').hidden = !configured;
+  if (reportConnection) {
+    let label = '未配置 AI';
+    if (configured) {
+      if (aiConnectionChecking) label = 'AI 正在检查连接…';
+      else if (ai.lastTestOk) label = `AI 已连接 · ${ai.model}`;
+      else if (ai.lastError) label = 'AI 连接失败';
+      else label = 'AI 已配置';
+    }
+    reportConnection.textContent = label;
+    reportConnection.classList.toggle('ok', configured && ai.lastTestOk);
+  }
+}
+
+function autoTestAiOnStartup() {
+  if (aiStartupCheckPromise) return aiStartupCheckPromise;
+  if (aiStartupCheckCompleted || !state.settings?.ai?.configured) return Promise.resolve(null);
+
+  aiConnectionChecking = true;
+  syncAiSettingsUI(state.settings.ai);
+  syncAiEntry();
+  const epoch = aiStartupCheckEpoch;
+  aiStartupCheckPromise = Promise.resolve()
+    .then(() => window.api.testAi(''))
+    .then(res => {
+      if (epoch !== aiStartupCheckEpoch || !state.settings?.ai) return res;
+      const configured = !!state.settings.ai.configured;
+      state.settings.ai = {
+        ...state.settings.ai,
+        ...(res?.ai || {}),
+        configured: configured || !!res?.ai?.configured
+      };
+      if (!res?.ok && !res?.ai) {
+        state.settings.ai.lastTestAt = Date.now();
+        state.settings.ai.lastTestOk = false;
+        state.settings.ai.lastError = res?.error || '连接失败';
+      }
+      return res;
+    })
+    .catch(error => {
+      const message = error?.message || 'AI 连接检查失败';
+      if (epoch === aiStartupCheckEpoch && state.settings?.ai) {
+        state.settings.ai.lastTestAt = Date.now();
+        state.settings.ai.lastTestOk = false;
+        state.settings.ai.lastError = message;
+      }
+      return { ok: false, error: message };
+    })
+    .finally(() => {
+      if (epoch !== aiStartupCheckEpoch) return;
+      aiConnectionChecking = false;
+      aiStartupCheckCompleted = true;
+      syncAiSettingsUI(state.settings?.ai);
+      syncAiEntry();
+    });
+  return aiStartupCheckPromise;
+}
+
+let reportCacheRequestId = 0;
+
+async function loadCachedReport() {
+  const requestId = ++reportCacheRequestId;
+  state.report.cacheStatus = 'missing';
+  renderReportState();
+  if (!state.settings?.ai?.configured) return;
+  const res = await window.api.getCachedReport({
+    start: state.report.start,
+    end: state.report.end,
+    periodType: state.report.type,
+    template: state.settings.reportTemplates[state.report.type]
+  });
+  if (requestId !== reportCacheRequestId) return;
+  if (res.ok) {
+    state.report.data = res.report;
+    state.report.cacheStatus = res.cacheStatus || (res.report ? 'unknown' : 'missing');
+    if (!reportJobIsActive(currentReportJob())) restoreReportThinkingFromReport(res.report);
+  } else {
+    state.report.data = null;
+    state.report.cacheStatus = 'missing';
+  }
+  renderReportState();
+  renderReportThinking();
+}
+
+function reloadReportContent() {
+  syncReportThinkingForPeriod();
+  state.report.data = null;
+  state.report.cacheStatus = 'missing';
+  renderReportThinking();
+  syncReportControls();
+  loadCachedReport();
+}
+
+async function openReportView() {
+  if (!state.settings) await loadSettingsUI();
+  if (!state.settings?.ai?.configured) {
+    showView('settings');
+    toast('请先在设置中配置 DeepSeek API');
+    return;
+  }
+  showView('report');
+  const savedPeriod = readReportPeriod();
+  if (savedPeriod) setReportPeriod(savedPeriod.type, savedPeriod.start, savedPeriod.end);
+  else if (!state.report.start) setReportPeriod('week');
+  state.report.data = null;
+  state.report.cacheStatus = 'missing';
+  state.report.editing = false;
+  renderReportThinking();
+  await loadCachedReport();
+  const job = currentReportJob();
+  if (reportJobIsActive(job)) renderReportState(reportJobMessage(job));
+  syncReportControls();
+}
+
+function generateReport(force = false) {
+  const period = currentReportPeriod();
+  if (!reportEntries().length) {
+    const message = '本周期没有日报记录，无法生成总结。';
+    // 旧的空报告或已经失效的历史报告不应继续伪装成当前周期结果。
+    state.report.data = null;
+    state.report.cacheStatus = 'missing';
+    renderReportState(message);
+    toast(message);
+    syncReportControls();
+    return Promise.resolve({ accepted: false, reason: 'empty', completion: Promise.resolve({ ok: false, code: 'NO_SOURCES', error: message }) });
+  }
+  const result = reportGenerationManager.enqueue({
+    period,
+    payload: {
+      start: period.start,
+      end: period.end,
+      periodType: period.type,
+      periodLabel: reportPeriodLabel(),
+      template: state.settings?.reportTemplates?.[period.type],
+      force
+    }
+  });
+  if (!result.accepted) {
+    toast('本周期总结正在生成，请稍候。');
+    return result.completion;
+  }
+  const job = reportGenerationManager.get(result.job.id);
+  if (sameReportPeriod(period, currentReportPeriod())) {
+    renderReportState(reportJobMessage(job));
+  }
+  syncReportControls();
+  return result.completion;
+}
+
+function shiftReportPeriod(delta) {
+  if (state.report.editing || state.report.type === 'custom') return;
+  if (state.report.type === 'day') {
+    const next = shiftDateString(state.report.start, delta);
+    setReportPeriod('day', next, next);
+  } else if (state.report.type === 'week') {
+    const nextStart = shiftDateString(state.report.start, delta * 7);
+    setReportPeriod('week', nextStart, shiftDateString(nextStart, 6));
+  } else {
+    const first = localDateFromString(state.report.start);
+    first.setMonth(first.getMonth() + delta, 1);
+    const start = dateStringFromDate(first);
+    const endDate = new Date(first.getFullYear(), first.getMonth() + 1, 0);
+    setReportPeriod('month', start, dateStringFromDate(endDate));
+  }
+  reloadReportContent();
+}
+
+$('#btn-report').addEventListener('click', openReportView);
+reportType.addEventListener('change', () => {
+  if (state.report.editing) return;
+  setReportPeriod(reportType.value);
+  reloadReportContent();
+});
+reportStart.addEventListener('change', () => {
+  if (state.report.editing || reportType.value !== 'custom') return;
+  state.report.start = reportStart.value;
+  if (state.report.start > state.report.end) reportEnd.value = reportStart.value;
+  state.report.end = reportEnd.value;
+  state.report.periodLabel = reportPeriodLabel();
+  rememberReportPeriod();
+  reloadReportContent();
+});
+reportEnd.addEventListener('change', () => {
+  if (state.report.editing || reportType.value !== 'custom') return;
+  if (reportEnd.value < reportStart.value) reportStart.value = reportEnd.value;
+  state.report.start = reportStart.value;
+  state.report.end = reportEnd.value;
+  state.report.periodLabel = reportPeriodLabel();
+  rememberReportPeriod();
+  reloadReportContent();
+});
+reportPrev.addEventListener('click', () => shiftReportPeriod(-1));
+reportNext.addEventListener('click', () => shiftReportPeriod(1));
+reportFormat.addEventListener('change', () => {
+  const previousFormat = state.report.format;
+  const nextFormat = reportFormat.value;
+  if (state.report.editing) {
+    state.report.draftMarkdown = currentReportDraftMarkdown(previousFormat);
+    state.report.format = nextFormat;
+    reportEditor.value = reportContentForFormat(state.report.draftMarkdown, nextFormat);
+  } else {
+    state.report.format = nextFormat;
+  }
+  renderReportState();
+  if (state.report.editing) reportEditor.focus();
+});
+reportGenerate.addEventListener('click', () => generateReport(!!state.report.data));
+$('#report-copy').addEventListener('click', async () => {
+  if (!state.report.data) { toast('请先生成总结'); return; }
+  const content = state.report.format === 'txt' ? reportText(state.report.data.content) : state.report.data.content;
+  try { await navigator.clipboard.writeText(content); toast('总结已复制'); }
+  catch { toast('复制失败，请使用编辑框手动复制'); }
+});
+$('#report-export').addEventListener('click', async () => {
+  if (!state.report.data) { toast('请先生成总结'); return; }
+  const res = await window.api.exportReport(state.report.data.id, state.report.format);
+  if (res.ok) toast('总结已导出到 ' + res.filePath);
+  else if (res.error) toast(res.error);
+});
+reportEdit.addEventListener('click', () => {
+  if (!state.report.data) return;
+  const scrollPosition = captureReportEditScroll();
+  state.report.editing = true;
+  state.report.draftMarkdown = String(state.report.data.content || '');
+  reportEditor.value = reportContentForFormat(state.report.draftMarkdown, state.report.format);
+  renderReportState();
+  restoreReportEditScroll(scrollPosition);
+});
+reportEditCancel.addEventListener('click', () => {
+  const scrollPosition = captureReportEditScroll();
+  state.report.editing = false;
+  state.report.draftMarkdown = '';
+  renderReportState();
+  restoreReportViewScroll(scrollPosition);
+});
+reportEditSave.addEventListener('click', async () => {
+  if (!state.report.data) return;
+  const scrollPosition = captureReportEditScroll();
+  const content = currentReportDraftMarkdown();
+  const res = await window.api.saveReport(state.report.data.id, content);
+  if (!res.ok) { toast(res.error || '保存失败'); return; }
+  state.report.data = res.report;
+  state.report.editing = false;
+  state.report.draftMarkdown = '';
+  renderReportState('总结修改已保存。');
+  restoreReportViewScroll(scrollPosition);
+});
+reportThinkingToggle.addEventListener('click', () => {
+  state.report.thinking = thinkingState.toggleThinking(state.report.thinking);
+  reportThinkingCache.write(currentReportPeriod(), state.report.thinking);
+  persistReportThinkingForCurrentReport(state.report.thinking);
+  renderReportThinking();
+});
+
+function setReportSideWidth(width) {
+  const value = Math.max(220, Math.min(520, Math.round(Number(width) || 280)));
+  reportLayout.style.setProperty('--report-side-width', `${value}px`);
+  try { localStorage.setItem('report-side-width', String(value)); } catch { /* 忽略 */ }
+}
+
+try {
+  const savedSideWidth = Number(localStorage.getItem('report-side-width'));
+  if (savedSideWidth) setReportSideWidth(savedSideWidth);
+} catch { /* 忽略 */ }
+
+reportResizer.addEventListener('pointerdown', event => {
+  if (window.innerWidth < 1200) return;
+  event.preventDefault();
+  reportResizer.classList.add('dragging');
+  reportResizer.setPointerCapture?.(event.pointerId);
+  const startX = event.clientX;
+  const startWidth = parseFloat(getComputedStyle(reportLayout).getPropertyValue('--report-side-width')) || 280;
+  const onMove = moveEvent => setReportSideWidth(startWidth + startX - moveEvent.clientX);
+  const onUp = upEvent => {
+    reportResizer.classList.remove('dragging');
+    reportResizer.releasePointerCapture?.(upEvent.pointerId);
+    reportResizer.removeEventListener('pointermove', onMove);
+    reportResizer.removeEventListener('pointerup', onUp);
+    reportResizer.removeEventListener('pointercancel', onUp);
+  };
+  reportResizer.addEventListener('pointermove', onMove);
+  reportResizer.addEventListener('pointerup', onUp);
+  reportResizer.addEventListener('pointercancel', onUp);
+});
+
+reportResizer.addEventListener('dblclick', () => setReportSideWidth(280));
+
 /* ---------- 列表筛选 ---------- */
 
 const fYear = $('#f-year');
 const fMonth = $('#f-month');
 const fText = $('#f-text');
 const fCount = $('#f-count');
+const fSaved = $('#f-saved');
+const fSaveFilter = $('#f-save-filter');
+const fDeleteFilter = $('#f-delete-filter');
+const fClearFilter = $('#f-clear-filter');
+const dateFilterGroup = $('#date-filter-group');
+const dateFilterToggle = $('#date-filter-toggle');
+const dateFilterLabel = $('#date-filter-label');
+const dateFilterPopover = $('#date-filter-popover');
+const dateFilterClose = $('#date-filter-close');
+const moreGroup = $('#more-group');
+const moreToggle = $('#btn-more');
+const moreMenu = $('#more-menu');
+
+function setDateFilterOpen(open) {
+  dateFilterPopover.hidden = !open;
+  dateFilterToggle.setAttribute('aria-expanded', String(open));
+}
+
+function closeMoreMenu() {
+  moreMenu.hidden = true;
+  moreToggle.setAttribute('aria-expanded', 'false');
+}
+
+function setMoreMenuOpen(open) {
+  moreMenu.hidden = !open;
+  moreToggle.setAttribute('aria-expanded', String(open));
+}
+
+dateFilterToggle.addEventListener('click', event => {
+  event.stopPropagation();
+  setDateFilterOpen(dateFilterPopover.hidden);
+  closeMoreMenu();
+});
+dateFilterClose.addEventListener('click', () => setDateFilterOpen(false));
+moreToggle.addEventListener('click', event => {
+  event.stopPropagation();
+  setMoreMenuOpen(moreMenu.hidden);
+  setDateFilterOpen(false);
+});
+document.addEventListener('click', event => {
+  const customOwner = customSelect?.ownerForTarget(event.target);
+  const inDateFilter = dateFilterGroup.contains(event.target)
+    || (!!customOwner?.wrapper && dateFilterGroup.contains(customOwner.wrapper));
+  if (!inDateFilter) setDateFilterOpen(false);
+  if (!moreGroup.contains(event.target)) closeMoreMenu();
+});
 
 function buildMonthOptions() {
   fMonth.innerHTML = '';
@@ -324,6 +1615,7 @@ function buildMonthOptions() {
     o.value = String(m); o.textContent = `${m} 月`;
     fMonth.appendChild(o);
   }
+  syncCustomSelect(fMonth);
 }
 
 function populateYearOptions() {
@@ -338,7 +1630,84 @@ function populateYearOptions() {
     o.value = String(y); o.textContent = `${y} 年`;
     fYear.appendChild(o);
   }
+  if (cur !== 'all' && /^\d{4}$/.test(cur) && !years.includes(Number(cur))) {
+    const o = document.createElement('option');
+    o.value = cur; o.textContent = `${cur} 年`;
+    fYear.appendChild(o);
+  }
   if ([...fYear.options].some(o => o.value === cur)) fYear.value = cur;
+  syncCustomSelect(fYear);
+}
+
+function currentFilterSnapshot() {
+  return window.DRFilterPresets.normalizeFilterSnapshot({
+    ...state.filter,
+    rangeFocus: state.rangeFocus
+  });
+}
+
+function renderSavedFilterOptions() {
+  const model = window.DRFilterPresets.savedFilterSelectModel(state.savedFilters);
+  fSaved.innerHTML = '';
+  for (const item of model.options) {
+    const option = document.createElement('option');
+    option.value = item.value;
+    option.textContent = item.label;
+    fSaved.appendChild(option);
+  }
+  fSaved.disabled = model.disabled;
+  syncCustomSelect(fSaved);
+}
+
+function syncFilterControls(filteredCount = filteredEntries().length) {
+  const snapshot = currentFilterSnapshot();
+  const signature = window.DRFilterPresets.filterSignature(snapshot);
+  const active = isFiltering();
+  const matched = state.savedFilters.find(item => window.DRFilterPresets.filterSignature(item) === signature);
+  fSaved.value = matched?.id || '';
+  syncCustomSelect(fSaved);
+  fSaveFilter.disabled = !active;
+  fDeleteFilter.hidden = !matched;
+  fClearFilter.hidden = !active;
+  fCount.textContent = active
+    ? `显示 ${filteredCount} / ${state.entries.length} 条`
+    : `${state.entries.length} 条记录`;
+}
+
+function resetFilters() {
+  state.filter = { year: 'all', month: 'all', text: '' };
+  state.rangeFocus = { type: 'all' };
+  fYear.value = 'all';
+  fMonth.value = 'all';
+  syncCustomSelect(fYear);
+  syncCustomSelect(fMonth);
+  fText.value = '';
+  renderRangeChip();
+  renderList();
+}
+
+function applyFilterSnapshot(filter) {
+  const snapshot = window.DRFilterPresets.normalizeFilterSnapshot(filter);
+  state.filter = { year: snapshot.year, month: snapshot.month, text: snapshot.text };
+  state.rangeFocus = snapshot.rangeFocus;
+  fYear.value = snapshot.year;
+  fMonth.value = snapshot.month;
+  syncCustomSelect(fYear);
+  syncCustomSelect(fMonth);
+  fText.value = snapshot.text;
+  renderRangeChip();
+  renderList();
+}
+
+function syncDateFilterButton() {
+  const parts = [];
+  if (fYear.value !== 'all') parts.push(`${fYear.value}年`);
+  if (fMonth.value !== 'all') parts.push(`${fMonth.value}月`);
+  const rangeLabel = state.rangeFocus.type !== 'all' ? DR.rangeLabel(state.rangeFocus) : '';
+  dateFilterLabel.textContent = rangeLabel || (parts.length ? parts.join(' · ') : '日期筛选');
+  const active = !!rangeLabel || parts.length > 0;
+  dateFilterToggle.classList.toggle('active', active);
+  dateFilterToggle.title = active ? `当前日期筛选：${rangeLabel || parts.join(' · ')}` : '按年份或月份筛选';
 }
 
 function filteredEntries() {
@@ -346,7 +1715,7 @@ function filteredEntries() {
   let list = window.DRStats.filterByRange(state.entries, state.rangeFocus, Date.now());
   if (year !== 'all') list = list.filter(x => new Date(x.ts).getFullYear() === Number(year));
   if (month !== 'all') list = list.filter(x => new Date(x.ts).getMonth() === Number(month) - 1);
-  if (text) list = list.filter(x => x.text.toLowerCase().includes(text.toLowerCase()));
+  if (text) list = list.filter(x => window.DRTextSearch.matchesSearch(x.text, text));
   return list;
 }
 
@@ -363,6 +1732,7 @@ function isFiltering() {
     state.rangeFocus = { type: 'all' };
     renderRangeChip();
   }
+  syncDateFilterButton();
   renderList();
 }));
 
@@ -371,9 +1741,578 @@ fText.addEventListener('input', () => {
   renderList();
 });
 
+fSaved.addEventListener('change', () => {
+  const preset = state.savedFilters.find(item => item.id === fSaved.value);
+  if (preset) {
+    applyFilterSnapshot(preset);
+    toast(`已加载筛选：${preset.name}`);
+  }
+});
+
+fClearFilter.addEventListener('click', () => {
+  closeMoreMenu();
+  resetFilters();
+});
+
+fDeleteFilter.addEventListener('click', async () => {
+  closeMoreMenu();
+  const selected = state.savedFilters.find(item => item.id === fSaved.value);
+  if (!selected) return;
+  const confirmed = await askConfirmation(`删除保存的筛选“${selected.name}”？`, {
+    title: '删除保存的筛选',
+    confirmLabel: '删除',
+    danger: true
+  });
+  if (!confirmed) return;
+  fDeleteFilter.disabled = true;
+  try {
+    const res = await window.api.setSavedFilters(state.savedFilters.filter(item => item.id !== selected.id));
+    if (!res?.ok) { toast(res?.error || '筛选删除失败'); return; }
+    state.savedFilters = Array.isArray(res.savedFilters) ? res.savedFilters : [];
+    renderSavedFilterOptions();
+    syncFilterControls();
+    toast('已删除保存的筛选');
+  } catch (error) {
+    toast(`筛选删除失败：${error?.message || '无法保存设置'}`);
+  } finally {
+    fDeleteFilter.disabled = false;
+  }
+});
+
+fSaveFilter.addEventListener('click', async () => {
+  if (!isFiltering()) {
+    toast('请先设置关键词或日期筛选');
+    return;
+  }
+  const snapshot = currentFilterSnapshot();
+  const defaultName = snapshot.text ? `搜索：${snapshot.text.slice(0, 16)}` : (DR.rangeLabel(snapshot.rangeFocus) || '我的筛选');
+  const name = await askFilterName(defaultName);
+  if (!name?.trim()) return;
+  const existing = state.savedFilters.find(item => window.DRFilterPresets.filterSignature(item) === window.DRFilterPresets.filterSignature(snapshot));
+  const next = window.DRFilterPresets.upsertSavedFilter(
+    state.savedFilters,
+    snapshot,
+    name,
+    existing?.id || globalThis.crypto?.randomUUID?.() || `filter-${Date.now()}`
+  );
+  fSaveFilter.disabled = true;
+  try {
+    const res = await window.api.setSavedFilters(next);
+    if (!res?.ok) { toast(res?.error || '筛选保存失败'); return; }
+    state.savedFilters = Array.isArray(res.savedFilters) ? res.savedFilters : next;
+    renderSavedFilterOptions();
+    syncFilterControls();
+    toast(existing ? '已更新保存的筛选' : '筛选已保存');
+  } catch (error) {
+    toast(`筛选保存失败：${error?.message || '无法保存设置'}`);
+  } finally {
+    syncFilterControls();
+  }
+});
+
 /* ---------- 范围聚焦（统计卡点击，票02） ---------- */
 
 const DR = window.DRStats;
+
+/* ---------- 近期总结（仅宽屏） ---------- */
+
+const weeklyWorkbench = $('#recent-summary-panel');
+let updateWorkbenchThumb = () => false;
+let closureThinkingTimer = null;
+
+// 事件委托绑定在稳定的父节点上，卡片刷新时不会丢失展开/收起操作。
+weeklyWorkbench.addEventListener('click', event => {
+  const toggle = event.target?.closest?.('.closure-thinking-toggle');
+  if (!toggle || !weeklyWorkbench.contains(toggle)) return;
+  const thinking = state.workbench.closure.thinking;
+  if (!thinking?.visible) return;
+  thinking.open = !thinking.open;
+  renderWeeklyWorkbench();
+});
+
+function wbNode(tag, className, content) {
+  const node = document.createElement(tag);
+  if (className) node.className = className;
+  if (content !== undefined) node.textContent = content;
+  return node;
+}
+
+function workbenchWeekBounds(now = Date.now()) {
+  const monday = new Date(DR.weekStart(now));
+  const sunday = new Date(monday);
+  sunday.setDate(sunday.getDate() + 6);
+  return { start: dateStringFromDate(monday), end: dateStringFromDate(sunday) };
+}
+
+function workbenchHeader(kicker, title, reportInfo) {
+  const head = wbNode('div', 'wb-head');
+  const copy = wbNode('div');
+  copy.append(wbNode('div', 'wb-kicker', kicker), wbNode('div', 'wb-title', title));
+  const status = wbNode('span', `wb-status${reportInfo.className ? ` ${reportInfo.className}` : ''}`, reportInfo.label);
+  head.append(copy, status);
+  return head;
+}
+
+function closureSuggestionKey(item) {
+  return `${String(item?.canonical_name || '').trim().toLocaleLowerCase()}|${String(item?.alias || '').trim().toLocaleLowerCase()}`;
+}
+
+function closureItems(data = state.workbench.closure.data) {
+  if (!data) return [];
+  const completed = Array.isArray(data.completed_items)
+    ? data.completed_items.map(item => ({ ...item, kind: 'closed' }))
+    : [];
+  const direct = Array.isArray(data.recent_explicit_completions)
+    ? data.recent_explicit_completions.map(item => ({ ...item, kind: 'recent' }))
+    : [];
+  return [...completed, ...direct];
+}
+
+function closureWorkbenchInfo() {
+  const closure = state.workbench.closure;
+  if (closure.generating) return { label: '正在分析', className: '', detail: closure.progressNote || '正在对照历史记录和本期记录…' };
+  if (!state.settings?.ai?.configured) return { label: '未配置 AI', className: 'muted', detail: '配置 AI 后，这里可以识别近期出现的工作闭环。' };
+  if (closure.loading) return { label: '正在读取', className: '', detail: '正在读取本周已经保存的闭环结果…' };
+  if (closure.error) return { label: '分析失败', className: 'warn', detail: closure.error };
+  if (!closure.data) return { label: '尚未整理', className: 'muted', detail: '只对照近期记录和历史记录，不代表整个项目的完整进度。' };
+  const status = closure.cacheStatus;
+  if (status === 'fresh') return { label: '闭环已同步', className: 'ok', detail: '当前周期记录、术语和闭环提示词未变化。' };
+  const statusText = {
+    'source-changed': '当前周期或历史记录发生变化，建议更新近期闭环。',
+    'terminology-changed': '术语规范已变化，建议更新近期闭环。',
+    'prompt-changed': '闭环提示词已变化，建议更新近期闭环。',
+    unknown: '这是历史闭环结果，建议重新分析确认。'
+  }[status] || '当前显示历史闭环结果，建议更新。';
+  return { label: '待更新', className: 'warn', detail: statusText };
+}
+
+function closureThinkingStatus(thinking) {
+  const elapsed = thinking.startedAt
+    ? ` · ${thinkingState.elapsedSeconds(thinking)}s`
+    : '';
+  const segment = thinking.totalSegments > 1 && thinking.segment
+    ? ` · 第 ${thinking.segment}/${thinking.totalSegments} 批`
+    : '';
+  const received = thinking.reasoningLength > 0 ? ` · 已收到 ${thinking.reasoningLength} 字` : '';
+  if (thinking.phase === 'segment') return `准备分析${segment}${elapsed}`;
+  if (thinking.phase === 'thinking') return `AI 正在思考${segment}${received}${elapsed}`;
+  if (thinking.phase === 'writing') return `正在整理结果${segment}${elapsed}`;
+  if (thinking.phase === 'continuing') return `正在续写结构化结果${segment}${elapsed}`;
+  if (thinking.phase === 'recovering') return `正在恢复流式输出${segment}${elapsed}`;
+  if (thinking.phase === 'fallback') return `正在切换兼容模式${segment}${elapsed}`;
+  if (thinking.phase === 'segment-done') return `已完成批次对照${segment}${elapsed}`;
+  if (thinking.phase === 'saved' || thinking.phase === 'done') return `已完成${elapsed}`;
+  if (thinking.phase === 'error') return '分析失败';
+  return `AI 正在处理${segment}${elapsed}`;
+}
+
+function syncClosureThinkingNode(box) {
+  if (!box) return false;
+  const closure = state.workbench.closure;
+  const thinking = closure.thinking;
+  const toggle = box.querySelector('.closure-thinking-toggle');
+  const status = box.querySelector('.report-thinking-status');
+  const note = box.querySelector('.report-thinking-note');
+  const content = box.querySelector('.report-thinking-content');
+  if (!thinking?.visible || !toggle || !status || !note || !content) return false;
+
+  toggle.textContent = thinking.open ? '收起详细过程' : '查看详细过程';
+  toggle.setAttribute('aria-expanded', String(thinking.open));
+  status.textContent = closureThinkingStatus(thinking);
+  note.textContent = thinking.progressNote
+    || '实时状态代表实际生成进度；详细过程仅用于查看，不会写入总结或导出文件。';
+  content.hidden = !thinking.open;
+
+  const blocks = [];
+  if (thinking.progressNote) blocks.push(`进度：${thinking.progressNote}`);
+  if (thinking.text) blocks.push(`思考过程：\n${thinking.text}`);
+  if (!thinking.text && !closure.generating && ['saved', 'done'].includes(thinking.phase)) {
+    blocks.push('本次分析没有返回可展示的思考文本；结果仍按记录对照生成。');
+  }
+  content.textContent = blocks.join('\n\n');
+  if (thinking.open) {
+    requestAnimationFrame(() => {
+      if (content.isConnected) content.scrollTop = content.scrollHeight;
+    });
+  }
+  return true;
+}
+
+function renderClosureThinking() {
+  const closure = state.workbench.closure;
+  const thinking = closure.thinking;
+  if (!thinking?.visible) return null;
+
+  const box = wbNode('div', 'wb-closure-thinking');
+  const head = wbNode('div', 'report-thinking-head');
+  const copy = wbNode('div');
+  copy.append(
+    wbNode('span', 'report-thinking-title', 'AI 工作过程'),
+    wbNode('span', 'report-thinking-status', closureThinkingStatus(thinking))
+  );
+  const toggle = wbNode('button', 'link-btn closure-thinking-toggle', thinking.open ? '收起详细过程' : '查看详细过程');
+  toggle.type = 'button';
+  toggle.setAttribute('aria-expanded', String(thinking.open));
+  head.append(copy, toggle);
+
+  const note = wbNode('div', 'report-thinking-note');
+  const content = wbNode('pre', 'report-thinking-content');
+  box.append(head, note, content);
+  syncClosureThinkingNode(box);
+  return box;
+}
+
+function appendClosureEvidence(parent, evidence, label, limit = 2) {
+  const list = Array.isArray(evidence) ? evidence.slice(0, limit) : [];
+  if (!list.length) return;
+  const box = wbNode('div', 'wb-closure-evidence');
+  box.appendChild(wbNode('div', 'wb-closure-evidence-label', label));
+  for (const source of list) {
+    const row = wbNode('div', 'wb-closure-evidence-row');
+    const when = [source.date, source.time].filter(Boolean).join(' ');
+    row.append(wbNode('span', 'wb-closure-evidence-time', when || '记录'), wbNode('span', 'wb-closure-evidence-text', source.text || ''));
+    box.appendChild(row);
+  }
+  parent.appendChild(box);
+}
+
+function renderClosureItem(item, compact = true) {
+  const row = wbNode('article', `wb-closure-item${item.kind === 'recent' ? ' recent' : ''}`);
+  const head = wbNode('div', 'wb-closure-item-head');
+  head.appendChild(wbNode('div', 'wb-closure-item-title', item.title));
+  head.appendChild(wbNode('span', 'wb-confidence', item.confidence === 'high' ? '较确定' : '需谨慎'));
+  row.appendChild(head);
+  row.appendChild(wbNode('div', 'wb-closure-item-summary', item.summary));
+  const beforeCount = Array.isArray(item.before_evidence) ? item.before_evidence.length : (item.before_refs || []).length;
+  const recentEvidence = item.recent_evidence || item.evidence;
+  const recentCount = Array.isArray(recentEvidence) ? recentEvidence.length : (item.recent_refs || []).length;
+  if (beforeCount || recentCount) {
+    const counts = [];
+    if (beforeCount) counts.push(`历史记录 ${beforeCount} 条`);
+    if (recentCount) counts.push(`本期记录 ${recentCount} 条`);
+    row.appendChild(wbNode('div', 'wb-closure-item-meta', counts.join(' · ')));
+  }
+  if (item.note) row.appendChild(wbNode('div', 'wb-closure-item-note', item.note));
+  if (!compact) {
+    appendClosureEvidence(row, item.before_evidence, '历史记录');
+    appendClosureEvidence(row, recentEvidence, '本期记录');
+  }
+  return row;
+}
+
+function appendClosureSuggestions(parent, data, compact = true, withHeading = true) {
+  const suggestions = (Array.isArray(data?.needs_confirmation) ? data.needs_confirmation : [])
+    .filter(item => !state.workbench.closure.dismissedSuggestions.has(closureSuggestionKey(item)));
+  if (!suggestions.length) return;
+  const section = wbNode('div', 'wb-closure-suggestions');
+  if (withHeading) section.appendChild(wbNode('div', 'wb-closure-section-title', '待确认的叫法关联'));
+  if (compact) {
+    const note = wbNode('div', 'wb-closure-suggestion-note', 'AI 只在无法确定时提示，不会自动写入术语。');
+    section.appendChild(note);
+  }
+  for (const suggestion of suggestions.slice(0, compact ? 2 : 20)) {
+    const box = wbNode('div', 'wb-closure-suggestion');
+    const copy = wbNode('div', 'wb-closure-suggestion-copy');
+    copy.appendChild(wbNode('div', 'wb-closure-suggestion-title', `${suggestion.alias} 可能对应 ${suggestion.canonical_name}`));
+    copy.appendChild(wbNode('div', 'wb-closure-suggestion-reason', suggestion.reason));
+    const actions = wbNode('div', 'wb-closure-suggestion-actions');
+    const confirm = wbNode('button', 'link-btn', '确认并记住');
+    confirm.type = 'button';
+    confirm.addEventListener('click', () => confirmClosureSuggestion(suggestion));
+    const dismiss = wbNode('button', 'link-btn', '暂不处理');
+    dismiss.type = 'button';
+    dismiss.addEventListener('click', () => dismissClosureSuggestion(suggestion));
+    actions.append(confirm, dismiss);
+    box.append(copy, actions);
+    section.appendChild(box);
+  }
+  parent.appendChild(section);
+}
+
+function renderWorkbenchClosureCard() {
+  const info = closureWorkbenchInfo();
+  const card = wbNode('section', 'wb-card wb-closure-card');
+  card.append(workbenchHeader('近期总结', '最近完成了什么', info));
+  card.appendChild(wbNode('div', 'wb-summary', '只把历史记录中的待处理事项，与当前周期记录中的完成或阶段性结果做对照；未记录不等于未完成。'));
+
+  const data = state.workbench.closure.data;
+  const items = closureItems(data);
+  const metrics = wbNode('div', 'wb-closure-metrics');
+  metrics.append(
+    wbNode('span', '', `识别 ${items.length} 项`)
+  );
+  card.appendChild(metrics);
+
+  const thinking = renderClosureThinking();
+  if (thinking) card.appendChild(thinking);
+
+  if (state.workbench.closure.generating) {
+    const progress = wbNode('div', 'wb-closure-progress');
+    progress.appendChild(wbNode('span', 'wb-closure-spinner'));
+    progress.appendChild(wbNode('span', '', state.workbench.closure.progressNote || '正在分析记录…'));
+    card.appendChild(progress);
+  } else if (items.length) {
+    const list = wbNode('div', 'wb-closure-list');
+    items.slice(0, 4).forEach(item => list.appendChild(renderClosureItem(item, true)));
+    if (items.length > 4) list.appendChild(wbNode('div', 'wb-closure-more', `还有 ${items.length - 4} 项，打开完整结果查看`));
+    card.appendChild(list);
+  } else {
+    card.appendChild(wbNode('div', 'wb-empty', data ? '当前记录中暂未识别出明确的近期闭环。可以重新分析，或继续保持自然记录。' : '生成后会显示“历史提及过、近期又出现完成结果”的事项。'));
+  }
+  const actions = wbNode('div', 'wb-closure-actions');
+  const generate = wbNode('button', `wb-action${data && info.className !== 'warn' ? '' : ' primary'}`, data ? (info.className === 'warn' ? '更新近期闭环' : '重新分析闭环') : '分析近期闭环');
+  generate.type = 'button';
+  generate.disabled = !state.settings?.ai?.configured || state.workbench.closure.generating;
+  generate.addEventListener('click', () => generateWorkbenchClosure(info.className !== 'warn' && !!data));
+  actions.appendChild(generate);
+  if (data) {
+    const view = wbNode('button', 'wb-action', '查看完整结果');
+    view.type = 'button';
+    view.addEventListener('click', openClosureModal);
+    actions.appendChild(view);
+  }
+  card.appendChild(actions);
+  return card;
+}
+
+function renderWeeklyWorkbench() {
+  if (!weeklyWorkbench) return;
+  const closure = state.workbench.closure;
+  const card = weeklyWorkbench.querySelector('.wb-closure-card');
+  const livePlan = reportLifecycle.liveRenderStrategy({
+    generating: closure.generating,
+    hasExistingCard: !!card,
+    hasThinking: !!card?.querySelector('.wb-closure-thinking'),
+    hasProgress: !!card?.querySelector('.wb-closure-progress')
+  });
+  if (livePlan === 'patch') {
+    const thinkingPatched = syncClosureThinkingNode(card.querySelector('.wb-closure-thinking'));
+    const progressText = card.querySelector('.wb-closure-progress')?.children?.[1];
+    if (progressText) progressText.textContent = closure.progressNote || '正在分析记录…';
+    if (thinkingPatched) {
+      updateWorkbenchThumb();
+      return;
+    }
+  }
+  weeklyWorkbench.innerHTML = '';
+  weeklyWorkbench.appendChild(renderWorkbenchClosureCard());
+  updateWorkbenchThumb();
+}
+
+function syncWeeklyWorkbenchViewport() {
+  const wide = window.matchMedia('(min-width: 1200px)').matches;
+  const visible = wide && !viewMain.hidden;
+  weeklyWorkbench.hidden = !visible;
+  updateWorkbenchThumb();
+}
+
+window.addEventListener('resize', syncWeeklyWorkbenchViewport);
+
+let workbenchClosureRequestId = 0;
+
+async function loadWorkbenchClosure({ preserveThinking = true } = {}) {
+  const requestId = ++workbenchClosureRequestId;
+  const closure = state.workbench.closure;
+  if (closure.generating) return;
+  closure.thinking = preserveThinking
+    ? thinkingState.preserveThinking(closure.thinking)
+    : createClosureThinking();
+  if (!state.settings?.ai?.configured) {
+    closure.data = null;
+    closure.cacheStatus = 'missing';
+    closure.loading = false;
+    closure.error = '';
+    closure.progressNote = '';
+    renderTerminologyUI();
+    renderWeeklyWorkbench();
+    return;
+  }
+  const bounds = workbenchWeekBounds();
+  closure.loading = true;
+  closure.error = '';
+  renderWeeklyWorkbench();
+  try {
+    const res = await window.api.getCachedClosure({
+      start: bounds.start,
+      end: bounds.end,
+      periodType: 'week'
+    });
+    if (requestId !== workbenchClosureRequestId) return;
+    if (!res.ok) throw new Error(res.error || '无法读取近期闭环');
+    closure.data = res.summary || null;
+    closure.cacheStatus = res.cacheStatus || 'missing';
+    closure.progressNote = '';
+  } catch (error) {
+    if (requestId !== workbenchClosureRequestId) return;
+    closure.data = null;
+    closure.cacheStatus = 'missing';
+    closure.error = error?.message || '无法读取近期闭环';
+  } finally {
+    if (requestId === workbenchClosureRequestId) {
+      closure.loading = false;
+      renderTerminologyUI();
+      renderWeeklyWorkbench();
+    }
+  }
+}
+
+async function generateWorkbenchClosure(force = false) {
+  const closure = state.workbench.closure;
+  if (closure.generating) return;
+  if (!state.settings?.ai?.configured) {
+    toast('请先到设置中连接 AI');
+    return;
+  }
+  const bounds = workbenchWeekBounds();
+  closure.generating = true;
+  closure.error = '';
+  closure.progressNote = '正在连接 AI，准备对照历史记录…';
+  closure.thinking = createClosureThinking(true);
+  closure.thinking.progressNote = closure.progressNote;
+  clearInterval(closureThinkingTimer);
+  closureThinkingTimer = setInterval(() => renderWeeklyWorkbench(), 1000);
+  renderWeeklyWorkbench();
+  let completed = false;
+  try {
+    const res = await window.api.generateRecentClosures({
+      start: bounds.start,
+      end: bounds.end,
+      periodType: 'week',
+      force
+    });
+    if (!res.ok) throw new Error(res.error || '近期闭环生成失败');
+    closure.data = res.summary || null;
+    closure.cacheStatus = res.cacheStatus || 'fresh';
+    closure.progressNote = '近期闭环已保存。';
+    closure.thinking = thinkingState.finalizeThinkingState(closure.thinking, 'saved');
+    closure.thinking.progressNote = '近期闭环已保存；详细过程默认收起。';
+    completed = true;
+    toast(res.cached ? '已读取已保存的近期闭环' : '近期闭环已生成');
+  } catch (error) {
+    closure.error = error?.message || '近期闭环生成失败';
+    closure.thinking = thinkingState.finalizeThinkingState(closure.thinking, 'error');
+    closure.thinking.progressNote = closure.error;
+    toast(closure.error);
+  } finally {
+    clearInterval(closureThinkingTimer);
+    closureThinkingTimer = null;
+    closure.generating = false;
+    renderWeeklyWorkbench();
+    if (completed) loadWorkbenchClosure({ preserveThinking: true });
+  }
+}
+
+function renderClosureModal() {
+  const data = state.workbench.closure.data;
+  if (!data) return;
+  closureModalNote.textContent = `只基于 ${data.start} 至 ${data.end} 的本期记录和历史记录做前后对照；历史记录不完整时不会推断项目整体状态。`;
+  closureModalContent.innerHTML = '';
+  const items = closureItems(data);
+  if (items.length) {
+    const title = wbNode('div', 'closure-modal-section-title', `识别到 ${items.length} 项近期完成或阶段性闭环`);
+    closureModalContent.appendChild(title);
+    items.forEach(item => closureModalContent.appendChild(renderClosureItem(item, false)));
+  } else {
+    closureModalContent.appendChild(wbNode('div', 'wb-empty', '当前记录中暂未识别出明确的近期闭环。'));
+  }
+}
+
+function openClosureModal() {
+  if (!state.workbench.closure.data) return;
+  renderClosureModal();
+  closureModal.hidden = false;
+  syncModalCover();
+}
+
+function closeClosureModal() {
+  closureModal.hidden = true;
+  syncModalCover();
+}
+
+function confirmClosureSuggestion(suggestion) {
+  return (async () => {
+    const term = (state.settings?.terminology || []).find(item => item.canonicalName === suggestion.canonical_name);
+    const res = await window.api.addTerminologyAlias(
+      suggestion.canonical_name,
+      suggestion.alias,
+      term?.scope || ''
+    );
+    if (!res.ok) { toast(res.error || '术语别名保存失败'); return; }
+    if (state.settings) {
+      state.settings.terminology = res.terminology || [];
+      if (state.settings.terminologyDiscovery) state.settings.terminologyDiscovery.termCount = state.settings.terminology.length;
+    }
+    if (state.workbench.closure.data) {
+      state.workbench.closure.data = {
+        ...state.workbench.closure.data,
+        needs_confirmation: (state.workbench.closure.data.needs_confirmation || [])
+          .filter(item => closureSuggestionKey(item) !== closureSuggestionKey(suggestion))
+      };
+    }
+    state.workbench.closure.cacheStatus = 'terminology-changed';
+    state.workbench.closure.dismissedSuggestions.delete(closureSuggestionKey(suggestion));
+    renderTerminologyUI();
+    if (!closureModal.hidden) renderClosureModal();
+    renderWeeklyWorkbench();
+    toast(`已记住：${suggestion.alias} → ${suggestion.canonical_name}`);
+  })();
+}
+
+function dismissClosureSuggestion(suggestion) {
+  state.workbench.closure.dismissedSuggestions.add(closureSuggestionKey(suggestion));
+  renderTerminologyUI();
+  if (!closureModal.hidden) renderClosureModal();
+  renderWeeklyWorkbench();
+}
+
+closureModalClose.addEventListener('click', closeClosureModal);
+closureModal.addEventListener('click', event => {
+  if (event.target === closureModal) closeClosureModal();
+});
+document.addEventListener('keydown', event => {
+  if (event.key === 'Escape' && !closureModal.hidden) closeClosureModal();
+});
+
+window.api.onClosureProgress(progress => {
+  const closure = state.workbench.closure;
+  if (!closure.generating || !progress) return;
+  let thinking = closure.thinking || createClosureThinking(true);
+  if (!thinking.visible) thinking.visible = true;
+  if (progress.phase === 'segment') {
+    thinking.phase = 'segment';
+    closure.progressNote = `正在分析历史记录第 ${progress.segment || 1}/${progress.totalSegments || 1} 批…`;
+  } else if (progress.phase === 'thinking') {
+    thinking.phase = 'thinking';
+    closure.progressNote = `AI 正在判断历史记录与本期记录的语义关系（第 ${progress.segment || 1}/${progress.totalSegments || 1} 批）…`;
+  } else if (progress.phase === 'writing') {
+    thinking.phase = 'writing';
+    closure.progressNote = `正在整理第 ${progress.segment || 1}/${progress.totalSegments || 1} 批结构化结果…`;
+  } else if (progress.phase === 'continuing' || progress.phase === 'recovering') {
+    thinking.phase = progress.phase;
+    closure.progressNote = '正在继续整理闭环结果…';
+  } else if (progress.phase === 'fallback') {
+    thinking.phase = 'fallback';
+    closure.progressNote = '正在继续分析闭环结果…';
+  } else if (progress.phase === 'segment-done') {
+    thinking.phase = 'segment-done';
+    closure.progressNote = `已完成第 ${progress.segment || 1}/${progress.totalSegments || 1} 批历史对照…`;
+  } else if (progress.phase === 'saved') {
+    thinking.phase = 'saved';
+    closure.progressNote = '近期闭环已保存。';
+  } else if (progress.phase === 'error') {
+    thinking.phase = 'error';
+    closure.error = progress.error || '近期闭环生成失败';
+    closure.progressNote = closure.error;
+  }
+  closure.thinking = thinkingState.appendThinkingProgress(thinking, {
+    ...progress,
+    text: progress.phase === 'thinking' ? progress.text : ''
+  });
+  closure.thinking.progressNote = closure.progressNote;
+  renderWeeklyWorkbench();
+});
+
+syncWeeklyWorkbenchViewport();
 
 // range 为 null 表示切换/取消当前聚焦
 function setRangeFocus(range) {
@@ -385,6 +2324,8 @@ function setRangeFocus(range) {
     state.filter.month = 'all';
     fYear.value = 'all';
     fMonth.value = 'all';
+    syncCustomSelect(fYear);
+    syncCustomSelect(fMonth);
   }
   renderRangeChip();
   renderList();
@@ -406,6 +2347,7 @@ function renderRangeChip() {
     x.textContent = '×';
     rangeChip.appendChild(x);
   }
+  syncDateFilterButton();
 }
 
 // 统计卡点击：今日/本周聚焦，累计=清除聚焦
@@ -425,48 +2367,152 @@ function bindStatCardClicks() {
   });
 }
 
-/* ---------- 活动图（近 14 天柱状，票03） ---------- */
+/* ---------- 活动图（GitHub 风格工作量热力图） ---------- */
 
 const activityChart = $('#activity-chart');
 
-function renderActivity() {
-  const days = DR.dayCounts(state.entries, Date.now(), 14);
-  const max = Math.max(1, ...days.map(d => d.count));
-  const today = dateStr(Date.now());
+function heatmapLevel(count, max) {
+  if (!count) return 0;
+  if (max <= 1) return 4;
+  return Math.max(1, Math.min(4, Math.ceil(count / max * 4)));
+}
 
-  activityChart.innerHTML = '';
+function renderHeatmapPanel(weeks) {
+  const cells = weeks.flat();
+  const max = Math.max(1, ...cells.map(cell => cell.count));
+  const total = cells.reduce((sum, cell) => sum + cell.count, 0);
+  const panel = document.createElement('section');
+  panel.className = 'activity-panel heatmap-panel';
+
+  const head = document.createElement('div');
+  head.className = 'activity-head';
   const title = document.createElement('div');
   title.className = 'activity-title';
-  title.textContent = '近 14 天';
+  title.textContent = '工作量 · 近 26 周';
+  const summary = document.createElement('span');
+  summary.className = 'activity-summary';
+  summary.textContent = `${total} 条记录`;
+  const headMeta = document.createElement('div');
+  headMeta.className = 'activity-head-meta';
+  headMeta.appendChild(summary);
+  head.append(title, headMeta);
+
+  const body = document.createElement('div');
+  body.className = 'activity-heatmap-body';
+  const labels = document.createElement('div');
+  labels.className = 'heatmap-weekdays';
+  ['一', '', '三', '', '五', '', '日'].forEach(label => {
+    const item = document.createElement('span');
+    item.textContent = label;
+    labels.appendChild(item);
+  });
+
+  const chart = document.createElement('div');
+  chart.className = 'heatmap-chart';
+  chart.style.setProperty('--heatmap-columns', String(weeks.length));
+  const months = document.createElement('div');
+  months.className = 'heatmap-months';
+  months.style.setProperty('--heatmap-columns', String(weeks.length));
+  let previousMonth = '';
+  weeks.forEach((week, column) => {
+    const label = document.createElement('span');
+    const month = week[0].date.slice(0, 7);
+    if (column === 0 || month !== previousMonth) label.textContent = `${Number(month.slice(5))}月`;
+    previousMonth = month;
+    months.appendChild(label);
+  });
+
+  const grid = document.createElement('div');
+  grid.className = 'heatmap-grid';
+  grid.style.setProperty('--heatmap-columns', String(weeks.length));
+  const today = dateStr(Date.now());
+  for (let row = 0; row < 7; row += 1) {
+    for (let column = 0; column < weeks.length; column += 1) {
+      const cell = weeks[column][row];
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = `heatmap-cell level-${heatmapLevel(cell.count, max)}`;
+      button.title = `${cell.date} · ${cell.count} 条记录`;
+      button.setAttribute('aria-label', button.title);
+      if (cell.date === today) button.classList.add('today');
+      button.addEventListener('click', () => setRangeFocus({ type: 'day', day: cell.date }));
+      grid.appendChild(button);
+    }
+  }
+  chart.append(months, grid);
+  body.append(labels, chart);
+
+  const legend = document.createElement('div');
+  legend.className = 'heatmap-legend';
+  legend.append('少');
+  for (let level = 0; level <= 4; level += 1) {
+    const sample = document.createElement('span');
+    sample.className = `heatmap-cell level-${level}`;
+    legend.appendChild(sample);
+  }
+  legend.append('多');
+  headMeta.prepend(legend);
+  panel.append(head, body);
+  return panel;
+}
+
+function renderHistogramPanel(days) {
+  const max = Math.max(1, ...days.map(day => day.count));
+  const total = days.reduce((sum, day) => sum + day.count, 0);
+  const today = dateStr(Date.now());
+  const panel = document.createElement('section');
+  panel.className = 'activity-panel histogram-panel';
+
+  const head = document.createElement('div');
+  head.className = 'activity-head';
+  const title = document.createElement('div');
+  title.className = 'activity-title';
+  title.textContent = '趋势 · 近 14 天';
+  const summary = document.createElement('span');
+  summary.className = 'activity-summary';
+  summary.textContent = `${total} 条记录`;
+  head.append(title, summary);
 
   const bars = document.createElement('div');
   bars.className = 'activity-bars';
-
-  days.forEach(d => {
-    const col = document.createElement('button');
-    col.className = 'activity-col';
-    col.title = `${d.date} · ${d.count} 条`;
-    if (d.date === today) col.classList.add('today');
+  days.forEach(day => {
+    const column = document.createElement('button');
+    column.type = 'button';
+    column.className = 'activity-col';
+    column.title = `${day.date} · ${day.count} 条`;
+    column.setAttribute('aria-label', column.title);
+    if (day.date === today) column.classList.add('today');
 
     const bar = document.createElement('span');
     bar.className = 'activity-bar';
-    bar.style.height = d.count === 0 ? '' : `${Math.round((d.count / max) * 100)}%`;
-    if (d.count === 0) bar.classList.add('zero');
+    bar.style.height = day.count === 0 ? '' : `${Math.round((day.count / max) * 100)}%`;
+    if (day.count === 0) bar.classList.add('zero');
 
-    const n = document.createElement('span');
-    n.className = 'activity-count';
-    n.textContent = d.count ? String(d.count) : '';
+    const count = document.createElement('span');
+    count.className = 'activity-count';
+    count.textContent = day.count ? String(day.count) : '';
 
-    const lbl = document.createElement('span');
-    lbl.className = 'activity-date';
-    lbl.textContent = String(Number(d.date.slice(8)));
+    const label = document.createElement('span');
+    label.className = 'activity-date';
+    label.textContent = String(Number(day.date.slice(8)));
 
-    col.append(n, bar, lbl);
-    col.addEventListener('click', () => setRangeFocus({ type: 'day', day: d.date }));
-    bars.appendChild(col);
+    column.append(count, bar, label);
+    column.addEventListener('click', () => setRangeFocus({ type: 'day', day: day.date }));
+    bars.appendChild(column);
   });
 
-  activityChart.append(title, bars);
+  panel.append(head, bars);
+  return panel;
+}
+
+function renderActivity() {
+  const weeks = DR.heatmapWeeks(state.entries, Date.now(), 26);
+  const days = DR.dayCounts(state.entries, Date.now(), 14);
+  const panels = document.createElement('div');
+  panels.className = 'activity-panels';
+  panels.append(renderHeatmapPanel(weeks), renderHistogramPanel(days));
+  activityChart.innerHTML = '';
+  activityChart.appendChild(panels);
 }
 
 /* ---------- 历史列表 ---------- */
@@ -475,6 +2521,7 @@ const listEl = $('#list-items');
 
 function renderList() {
   const list = filteredEntries();
+  syncFilterControls(list.length);
   listEl.innerHTML = '';
   listEl.classList.toggle('manage', state.manage);
   updateManageUI(list);
@@ -594,6 +2641,7 @@ function startEdit(el, e) {
   area.className = 'edit-area';
 
   const ta = document.createElement('textarea');
+  ta.dataset.resizable = 'true';
   ta.value = e.text;
 
   const foot = document.createElement('div');
@@ -625,6 +2673,7 @@ function startEdit(el, e) {
 
   foot.append(tsInput, spacer, cancel, save);
   area.append(ta, foot);
+  installTextareaResizer(ta);
   el.appendChild(area);
   ta.focus();
   ta.addEventListener('keydown', ev => {
@@ -651,6 +2700,7 @@ const mgDelete = $('#mg-delete');
 let armTimer = null;
 
 btnManage.addEventListener('click', () => {
+  closeMoreMenu();
   state.manage = true;
   state.selected.clear();
   renderList();
@@ -709,6 +2759,128 @@ const themeSeg = $('#theme-seg');
 const autoStart = $('#set-autostart');
 const silentStart = $('#set-silent');
 const rowSilent = $('#row-silentstart');
+const aiKey = $('#ai-key');
+const aiKeyToggle = $('#ai-key-toggle');
+const aiModel = $('#ai-model');
+const aiClosureModel = $('#ai-closure-model');
+const aiReasoningEffort = $('#ai-reasoning-effort');
+const aiClosureReasoningEffort = $('#ai-closure-reasoning-effort');
+const aiStateBadge = $('#ai-state-badge');
+const aiModelSub = $('#ai-model-sub');
+const aiClosureModelSub = $('#ai-closure-model-sub');
+const aiReasoningSub = $('#ai-reasoning-sub');
+const aiClosureReasoningSub = $('#ai-closure-reasoning-sub');
+const aiMsg = $('#ai-msg');
+const aiSave = $('#ai-save');
+const aiTest = $('#ai-test');
+const aiEntryState = $('#ai-entry-state');
+const templateSeg = $('#template-seg');
+const templateText = $('#template-text');
+const templateMsg = $('#template-msg');
+const closurePromptText = $('#closure-prompt-text');
+const closurePromptMsg = $('#closure-prompt-msg');
+const terminologyPromptText = $('#terminology-prompt-text');
+const terminologyPromptMsg = $('#terminology-prompt-msg');
+const terminologyPromptSave = $('#terminology-prompt-save');
+const terminologyPromptReset = $('#terminology-prompt-reset');
+const terminologyDiscoveryStatus = $('#terminology-discovery-status');
+const terminologyDiscover = $('#terminology-discover');
+const terminologyThinking = $('#terminology-thinking');
+const terminologyThinkingStatus = $('#terminology-thinking-status');
+const terminologyThinkingToggle = $('#terminology-thinking-toggle');
+const terminologyThinkingNote = $('#terminology-thinking-note');
+const terminologyThinkingContent = $('#terminology-thinking-content');
+const terminologyPending = $('#terminology-pending');
+const terminologyPendingCount = $('#terminology-pending-count');
+const terminologyPendingList = $('#terminology-pending-list');
+const terminologyList = $('#terminology-list');
+const terminologyListCount = $('#terminology-list-count');
+const terminologySearch = $('#terminology-search');
+const terminologySearchClear = $('#terminology-search-clear');
+const terminologyEditorTitle = $('#terminology-editor-title');
+const termCanonical = $('#term-canonical');
+const termScope = $('#term-scope');
+const termAliases = $('#term-aliases');
+const termNote = $('#term-note');
+const termMsg = $('#term-msg');
+const termSave = $('#term-save');
+const termCancel = $('#term-cancel');
+let editingTerminologyId = '';
+let templateType = 'week';
+let terminologyDiscoveryRequest = null;
+let terminologyThinkingTimer = null;
+let aiStartupCheckPromise = null;
+let aiStartupCheckCompleted = false;
+let aiStartupCheckEpoch = 0;
+let aiConnectionChecking = false;
+
+const DEFAULT_TEMPLATES = {
+  day: '请生成一份当天工作总结，按工作事项整理，说明完成内容、当前进展和需要关注的问题。语言简洁、事实准确，不要补充原始记录中没有的信息。',
+  week: '请生成一份本周工作总结，优先按任务或工作主题归纳，包含本周完成、进行中事项、问题与风险、下一步计划。语言可以润色，但不得遗漏任何原始记录中的事实。',
+  month: '请生成一份本月工作总结，按工作主题归纳主要进展、阶段性成果、问题与风险及下一阶段计划。保留具体任务细节，不要泛化或编造。',
+  custom: '请按照用户指定的周期和模板生成工作总结。可以调整语言和结构，但必须保留所有原始记录中的事实、任务细节和时间线。'
+};
+
+const DEFAULT_CLOSURE_PROMPT = '请整理当前周期内近期完成或取得阶段性进展的工作闭环。优先把历史记录中的问题、测试或待处理事项，与当前周期记录中的解决、完成或验证结果对应起来。名称尽量使用术语规范中的规范名称；细分信息不明确时使用宏观表述。输出应简洁、事实准确，并保留历史依据和近期依据。';
+const DEFAULT_TERMINOLOGY_DISCOVERY_PROMPT = [
+  '请从日报原文中识别“可能指向同一件事情”的不同叫法，并建立可供后续报告使用的术语对照。',
+  '规范输出名称应当是记录中有证据支持、稳定且简洁的名称；常用说法必须保留用户在日报里实际使用过的原话、简称、口语、缩写、错写或新造词。',
+  '只有在结合完整记录、产品上下文和任务动作后能够合理判断为同一事项时才合并，不能只因为字面相似就合并。',
+  '同一个产品可能存在不同功率段、版本或子任务；如果细分信息没有被稳定、明确地记录，使用产品族或更宏观的规范名称，不要猜测具体功率段。',
+  '不要总结项目进度，不要补充日报之外的背景，不要把仅仅相关但不是同一事项的词语放进同一组。',
+  '如果没有足够证据形成可靠对照，可以返回空数组。'
+].join('\n');
+
+const EYE_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6S2 12 2 12z"/><circle cx="12" cy="12" r="2.5"/></svg>';
+const EYE_OFF_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3l18 18"/><path d="M10.6 5.1A10.9 10.9 0 0 1 12 5c6.5 0 10 7 10 7a18.3 18.3 0 0 1-3.1 3.8"/><path d="M6.2 6.2C3.5 8.1 2 12 2 12s3.5 7 10 7a9.8 9.8 0 0 0 3.4-.6"/></svg>';
+
+function renderAiKeyToggle(visible) {
+  aiKeyToggle.innerHTML = visible ? EYE_OFF_ICON : EYE_ICON;
+  aiKeyToggle.title = visible ? '隐藏 API Key' : '显示 API Key';
+  aiKeyToggle.setAttribute('aria-label', aiKeyToggle.title);
+}
+
+function setMaskedAiKey(ai) {
+  const configured = !!ai?.configured && !!ai?.maskedApiKey;
+  aiKey.type = 'password';
+  aiKey.value = configured ? ai.maskedApiKey : '';
+  aiKey.dataset.masked = String(configured);
+  aiKey.dataset.saved = String(configured);
+  renderAiKeyToggle(false);
+}
+
+aiKey.addEventListener('focus', () => {
+  if (aiKey.dataset.masked !== 'true') return;
+  aiKey.value = '';
+  aiKey.dataset.masked = 'false';
+  aiKey.dataset.saved = 'true';
+  renderAiKeyToggle(false);
+});
+
+aiKey.addEventListener('input', () => {
+  aiKey.dataset.masked = 'false';
+  aiKey.dataset.saved = 'false';
+});
+
+aiKey.addEventListener('blur', () => {
+  if (!aiKey.value.trim() && state.settings?.ai?.configured) setMaskedAiKey(state.settings.ai);
+});
+
+aiKeyToggle.addEventListener('click', async () => {
+  if (aiKey.dataset.masked === 'true' || (!aiKey.value && state.settings?.ai?.configured)) {
+    const res = await window.api.revealAiKey();
+    if (!res.ok) { toast(res.error || '无法读取 API Key'); return; }
+    aiKey.value = res.apiKey;
+    aiKey.type = 'text';
+    aiKey.dataset.masked = 'false';
+    aiKey.dataset.saved = 'true';
+    renderAiKeyToggle(true);
+    return;
+  }
+  const visible = aiKey.type !== 'password';
+  aiKey.type = visible ? 'password' : 'text';
+  renderAiKeyToggle(!visible);
+});
 
 function syncSilentRow() {
   // 常显 + 未开自启时置灰（避免"选项藏起来找不到"）
@@ -717,16 +2889,342 @@ function syncSilentRow() {
 
 async function loadSettingsUI() {
   const s = await window.api.getSettings();
+  state.terminologyDiscovery.thinking = thinkingState.preserveThinking(state.terminologyDiscovery.thinking);
   state.settings = s;
+  state.savedFilters = Array.isArray(s.savedFilters) ? s.savedFilters : [];
+  renderSavedFilterOptions();
   hkDisplay.textContent = s.hotkey || '未设置';
   $('#hotkey-tip').textContent = s.hotkey || '--';
   $('#set-datapath').textContent = s.dataFile;
   autoStart.checked = s.openAtLogin;
   silentStart.checked = !!s.silentStart;
+  setMaskedAiKey(s.ai);
+  syncAiSettingsUI(s.ai);
+  syncTemplateUI();
+  syncClosurePromptUI();
+  syncTerminologyPromptUI();
+  renderTerminologyUI();
+  renderTerminologyDiscoveryUI();
+  syncAiEntry();
   syncSilentRow();
   hkMsg.textContent = '';
   syncThemeSeg();
+  renderWeeklyWorkbench();
+  loadWorkbenchClosure();
+  autoTestAiOnStartup().finally(() => {
+    // 首次启动的连接检查结束后再启动术语识别，避免两个请求同时抢占同一份 AI 配置。
+    ensureTerminologyDiscovery();
+  });
 }
+
+function fillAiModelSelect(select, ai, selected) {
+  const models = Array.isArray(ai?.models) ? ai.models : [];
+  select.innerHTML = '';
+  if (!models.length) {
+    const o = document.createElement('option');
+    o.value = selected || '';
+    o.textContent = selected || '请先测试连接';
+    select.appendChild(o);
+  } else {
+    for (const model of models) {
+      const o = document.createElement('option');
+      o.value = model;
+      o.textContent = model;
+      select.appendChild(o);
+    }
+  }
+  select.value = selected || '';
+  select.disabled = !ai?.configured || !models.length;
+  syncCustomSelect(select);
+}
+
+function syncAiModels(ai) {
+  fillAiModelSelect(aiModel, ai, ai?.model || '');
+  fillAiModelSelect(aiClosureModel, ai, ai?.closureModel || '');
+}
+
+function syncAiSettingsUI(ai = state.settings?.ai) {
+  const configured = !!ai?.configured;
+  const reasoningEffort = ['auto', 'low', 'high', 'max'].includes(ai?.reasoningEffort)
+    ? ai.reasoningEffort
+    : 'auto';
+  const reasoningNotes = {
+    auto: '自动：普通周期优先快速处理，长周期分段时自动提高；修改后仅影响下一次重新生成。',
+    low: '快速：优先响应速度，适合简短日报；修改后仅影响下一次重新生成。',
+    high: '标准：更适合周报、月报和需要归类的复杂总结；修改后仅影响下一次重新生成。',
+    max: '深度：适合复杂总结，可能更慢、消耗更多；修改后仅影响下一次重新生成。'
+  };
+  const closureReasoningEffort = ['auto', 'low', 'high', 'max'].includes(ai?.closureReasoningEffort)
+    ? ai.closureReasoningEffort
+    : 'auto';
+  const closureReasoningNotes = {
+    auto: '自动：优先判断历史与近期记录的语义关系；仅影响下一次近期闭环生成。',
+    low: '快速：适合记录较少的周期；仅影响下一次近期闭环生成。',
+    high: '标准：适合叫法不一致、需要前后对照的闭环分析。',
+    max: '深度：适合关系复杂的记录，可能更慢、消耗更多。'
+  };
+  const connectionLabel = !configured
+    ? '未配置'
+    : aiConnectionChecking
+    ? '正在检查…'
+    : ai.lastTestOk
+    ? '已连接'
+    : ai.lastError
+    ? '连接失败'
+    : '已配置';
+  aiStateBadge.textContent = connectionLabel;
+  aiStateBadge.classList.toggle('ok', configured && !!ai.lastTestOk);
+  if (aiEntryState) {
+    aiEntryState.textContent = connectionLabel;
+    aiEntryState.classList.toggle('ok', configured && !!ai.lastTestOk);
+  }
+  aiModelSub.textContent = aiConnectionChecking
+    ? '正在自动检查连接并读取当前可用模型…'
+    : ai?.lastError
+    || (ai?.lastTestAt
+      ? `最近测试：${new Date(ai.lastTestAt).toLocaleString()}`
+      : configured
+      ? '已保存配置，软件启动时会自动检查连接'
+      : '点击测试连接后自动读取当前可用模型');
+  aiClosureModelSub.textContent = ai?.closureModel
+    ? `当前用于近期闭环；与周期报告模型独立。`
+    : '测试连接后会自动选择更适合语义判断的模型；也可单独切换。';
+  aiReasoningEffort.value = reasoningEffort;
+  syncCustomSelect(aiReasoningEffort);
+  aiReasoningSub.textContent = reasoningNotes[reasoningEffort];
+  aiClosureReasoningEffort.value = closureReasoningEffort;
+  syncCustomSelect(aiClosureReasoningEffort);
+  aiClosureReasoningSub.textContent = closureReasoningNotes[closureReasoningEffort];
+  syncAiModels(ai);
+  if (aiTest) aiTest.disabled = aiConnectionChecking;
+  aiMsg.textContent = '';
+}
+
+const aiNavItems = [...document.querySelectorAll('.ai-nav-item')];
+const aiSettingsPanels = [...document.querySelectorAll('.ai-settings-panel')];
+
+function setAiSettingsPanel(name) {
+  for (const item of aiNavItems) {
+    const active = item.dataset.aiPanel === name;
+    item.classList.toggle('active', active);
+    item.setAttribute('aria-selected', String(active));
+  }
+  for (const panel of aiSettingsPanels) panel.hidden = panel.dataset.aiPanel !== name;
+}
+
+for (const item of aiNavItems) {
+  item.addEventListener('click', () => setAiSettingsPanel(item.dataset.aiPanel));
+}
+
+function syncTemplateUI() {
+  const templates = state.settings?.reportTemplates || DEFAULT_TEMPLATES;
+  for (const b of templateSeg.querySelectorAll('button[data-v]')) b.classList.toggle('active', b.dataset.v === templateType);
+  templateText.value = templates[templateType] || DEFAULT_TEMPLATES[templateType];
+  templateMsg.textContent = '';
+}
+
+function syncClosurePromptUI() {
+  closurePromptText.value = state.settings?.closurePrompt || state.settings?.closurePromptDefault || DEFAULT_CLOSURE_PROMPT;
+  closurePromptMsg.textContent = '';
+  closurePromptMsg.className = 'set-msg';
+}
+
+function syncTerminologyPromptUI() {
+  if (!terminologyPromptText) return;
+  terminologyPromptText.value = state.settings?.terminologyDiscoveryPrompt
+    || state.settings?.terminologyDiscoveryPromptDefault
+    || DEFAULT_TERMINOLOGY_DISCOVERY_PROMPT;
+  terminologyPromptMsg.textContent = '';
+  terminologyPromptMsg.className = 'set-msg';
+}
+
+function renderTerminologyThinking() {
+  if (!terminologyThinking || !terminologyThinkingStatus || !terminologyThinkingToggle || !terminologyThinkingContent) return;
+  const thinking = state.terminologyDiscovery.thinking || createTerminologyThinking();
+  terminologyThinking.hidden = !thinking.visible;
+  terminologyThinkingContent.hidden = !thinking.open;
+  terminologyThinkingToggle.textContent = thinking.open ? '收起详细过程' : '查看详细过程';
+  terminologyThinkingToggle.setAttribute('aria-expanded', String(thinking.open));
+  terminologyThinkingNote.textContent = thinking.progressNote
+    || '实时状态代表术语识别进度；详细过程默认收起，不会修改原始日报。';
+
+  const elapsed = thinkingState.elapsedSeconds(thinking);
+  const batchLabel = thinking.totalSegments > 1 && thinking.segment
+    ? ` · 第 ${thinking.segment}/${thinking.totalSegments} 批`
+    : '';
+  const outputLength = thinking.content.length || thinking.contentLength;
+  const outputLabel = outputLength > 0 ? ` · 已收到 ${outputLength} 字` : '';
+  if (thinking.phase === 'segment') terminologyThinkingStatus.textContent = `准备识别日报${batchLabel} · ${elapsed}s`;
+  else if (thinking.phase === 'thinking') terminologyThinkingStatus.textContent = `AI 正在思考${batchLabel} · ${elapsed}s`;
+  else if (thinking.phase === 'writing') terminologyThinkingStatus.textContent = `正在整理 AI 输出${batchLabel}${outputLabel} · ${elapsed}s`;
+  else if (thinking.phase === 'segment-done') terminologyThinkingStatus.textContent = `第 ${thinking.segment || 1} 批识别完成 · ${elapsed}s`;
+  else if (thinking.phase === 'saved') terminologyThinkingStatus.textContent = `术语词典已保存 · ${elapsed}s`;
+  else if (thinking.phase === 'error') terminologyThinkingStatus.textContent = '识别失败';
+  else terminologyThinkingStatus.textContent = `AI 正在处理${batchLabel} · ${elapsed}s`;
+
+  const blocks = [];
+  if (thinking.text) blocks.push(`思考过程：\n${thinking.text}`);
+  if (thinking.content) blocks.push(`AI 输出：\n${thinking.content}`);
+  if (!blocks.length) {
+    const waiting = ['segment', 'thinking', 'writing', 'continuing', 'recovering', 'fallback'].includes(thinking.phase);
+    blocks.push(waiting
+      ? '正在等待 AI 返回内容；返回后会在这里实时显示。'
+      : thinking.phase === 'error'
+        ? '本次未收到可展示的 AI 输出。'
+        : '本次没有可展示的 AI 输出。');
+  }
+  terminologyThinkingContent.textContent = blocks.join('\n\n');
+  if (thinking.open) terminologyThinkingContent.scrollTop = terminologyThinkingContent.scrollHeight;
+}
+
+function renderTerminologyDiscoveryUI() {
+  renderTerminologyThinking();
+  if (!terminologyDiscoveryStatus || !terminologyDiscover) return;
+  const discovery = state.settings?.terminologyDiscovery || {};
+  const ui = state.terminologyDiscovery;
+  const configured = !!state.settings?.ai?.configured;
+  terminologyDiscover.disabled = !configured || ui.running;
+  terminologyDiscover.textContent = discovery.initialized ? '重新识别并合并' : '识别全部日报';
+
+  if (ui.running) {
+    terminologyDiscoveryStatus.textContent = ui.note || '正在读取全部日报；不会修改原始记录。';
+    return;
+  }
+  if (ui.error) {
+    terminologyDiscoveryStatus.textContent = ui.error;
+    return;
+  }
+  if (!configured) {
+    terminologyDiscoveryStatus.textContent = '连接 AI 后自动开始；不会修改任何原始记录。';
+    return;
+  }
+  if (discovery.initialized) {
+    const when = discovery.lastRunAt ? new Date(discovery.lastRunAt).toLocaleString() : '已完成';
+    terminologyDiscoveryStatus.textContent = `已读取 ${discovery.recordCount || 0} 条日报，形成 ${discovery.termCount || 0} 组术语；上次识别：${when}。可再次识别并合并。`;
+    return;
+  }
+  terminologyDiscoveryStatus.textContent = '连接已就绪，首次识别会读取全部日报；不会修改任何原始记录。';
+}
+
+async function discoverTerminology(force = false, { silent = false } = {}) {
+  if (terminologyDiscoveryRequest) return terminologyDiscoveryRequest;
+  if (!state.settings?.ai?.configured) return null;
+
+  clearInterval(terminologyThinkingTimer);
+  state.terminologyDiscovery.thinking = createTerminologyThinking(true);
+  state.terminologyDiscovery.running = true;
+  state.terminologyDiscovery.error = '';
+  state.terminologyDiscovery.note = force ? '正在重新读取全部日报…' : '正在读取全部日报…';
+  state.terminologyDiscovery.thinking.progressNote = state.terminologyDiscovery.note;
+  renderTerminologyDiscoveryUI();
+  terminologyThinkingTimer = setInterval(renderTerminologyThinking, 1000);
+
+  const request = window.api.discoverTerminology({ force });
+  terminologyDiscoveryRequest = request.then(res => {
+    if (!res.ok) {
+      state.terminologyDiscovery.error = res.error || '术语识别失败';
+      state.terminologyDiscovery.note = '';
+      state.terminologyDiscovery.thinking = thinkingState.finalizeThinkingState(
+        state.terminologyDiscovery.thinking,
+        'error'
+      );
+      state.terminologyDiscovery.thinking.progressNote = state.terminologyDiscovery.error;
+      if (!silent) toast(state.terminologyDiscovery.error);
+      return res;
+    }
+    if (state.settings) {
+      if (res.ai) state.settings.ai = res.ai;
+      state.settings.terminology = Array.isArray(res.terminology) ? res.terminology : [];
+      state.settings.terminologyDiscovery = res.discovery || state.settings.terminologyDiscovery;
+    }
+    state.terminologyDiscovery.error = '';
+    state.terminologyDiscovery.note = res.skipped
+      ? '词典已经初始化，继续使用已保存的对照关系。'
+      : `已完成全部日报识别，共形成 ${res.terminology?.length || 0} 组术语。`;
+    state.terminologyDiscovery.thinking = thinkingState.finalizeThinkingState(
+      state.terminologyDiscovery.thinking,
+      'saved'
+    );
+    state.terminologyDiscovery.thinking.progressNote = res.skipped
+      ? '词典已经初始化，继续使用已保存的对照关系；详细过程默认收起。'
+      : '术语词典已保存；详细过程默认收起。';
+    if (res.ai) {
+      syncAiSettingsUI(res.ai);
+      syncAiEntry();
+    }
+    renderTerminologyUI();
+    renderTerminologyDiscoveryUI();
+    if (!silent && !res.skipped) {
+      toast(res.stats?.consolidationFallback
+        ? '术语已识别；归并阶段暂未完成，候选结果已保留，可再次识别并合并'
+        : `术语词典已更新，共 ${res.terminology?.length || 0} 组`);
+    }
+    return res;
+  }).catch(error => {
+    state.terminologyDiscovery.error = error?.message || '术语识别失败';
+    state.terminologyDiscovery.note = '';
+    state.terminologyDiscovery.thinking = thinkingState.finalizeThinkingState(
+      state.terminologyDiscovery.thinking,
+      'error'
+    );
+    state.terminologyDiscovery.thinking.progressNote = state.terminologyDiscovery.error;
+    if (!silent) toast(state.terminologyDiscovery.error);
+    return { ok: false, error: state.terminologyDiscovery.error };
+  }).finally(() => {
+    clearInterval(terminologyThinkingTimer);
+    terminologyThinkingTimer = null;
+    state.terminologyDiscovery.running = false;
+    renderTerminologyDiscoveryUI();
+    terminologyDiscoveryRequest = null;
+  });
+  return terminologyDiscoveryRequest;
+}
+
+function ensureTerminologyDiscovery() {
+  if (!state.settings?.ai?.configured || state.settings?.terminologyDiscovery?.initialized) {
+    renderTerminologyDiscoveryUI();
+    return null;
+  }
+  return discoverTerminology(false, { silent: true });
+}
+
+window.api.onTerminologyProgress(progress => {
+  if (!state.terminologyDiscovery.running || !progress) return;
+  const mappedPhase = {
+    started: 'segment',
+    extracting: 'segment',
+    thinking: 'thinking',
+    writing: 'writing',
+    'batch-done': 'segment-done',
+    consolidating: 'thinking',
+    saved: 'saved',
+    error: 'error'
+  }[progress.phase] || progress.phase;
+  let thinking = state.terminologyDiscovery.thinking || createTerminologyThinking(true);
+  thinking = thinkingState.appendThinkingProgress(thinking, { ...progress, phase: mappedPhase });
+  if (progress.phase === 'started') {
+    state.terminologyDiscovery.note = `开始扫描全部 ${progress.recordCount || 0} 条日报…`;
+  } else if (progress.phase === 'extracting') {
+    state.terminologyDiscovery.note = `正在识别第 ${progress.batch || 1}/${progress.totalBatches || 1} 批日报…`;
+  } else if (progress.phase === 'thinking') {
+    state.terminologyDiscovery.note = `AI 正在分析第 ${progress.batch || 1}/${progress.totalBatches || 1} 批日报…`;
+  } else if (progress.phase === 'writing') {
+    state.terminologyDiscovery.note = `正在整理第 ${progress.batch || 1}/${progress.totalBatches || 1} 批 AI 输出…`;
+  } else if (progress.phase === 'batch-done') {
+    state.terminologyDiscovery.note = `已完成第 ${progress.batch || 1}/${progress.totalBatches || 1} 批，正在保留候选术语…`;
+  } else if (progress.phase === 'consolidating') {
+    state.terminologyDiscovery.note = '正在合并跨批次的同义叫法…';
+  } else if (progress.phase === 'saved') {
+    state.terminologyDiscovery.note = `词典已保存，共 ${progress.termCount || 0} 组术语。`;
+  } else if (progress.phase === 'error') {
+    state.terminologyDiscovery.error = progress.error || '术语识别失败';
+  }
+  thinking.reasoningLength = thinking.text.length;
+  thinking.contentLength = thinking.content.length;
+  thinking.progressNote = state.terminologyDiscovery.error || state.terminologyDiscovery.note;
+  state.terminologyDiscovery.thinking = thinking;
+  renderTerminologyDiscoveryUI();
+});
 
 function syncThemeSeg() {
   const active = state.settings ? state.settings.theme : 'auto';
@@ -759,6 +3257,472 @@ silentStart.addEventListener('change', async () => {
 });
 
 $('#set-openfolder').addEventListener('click', () => window.api.openDataFolder());
+
+const dataMsg = $('#data-msg');
+const dataBackup = $('#set-backup');
+const dataRestore = $('#set-restore');
+
+dataBackup.addEventListener('click', async () => {
+  if (dataBackup.disabled) return;
+  dataBackup.disabled = true;
+  dataMsg.className = 'set-msg';
+  dataMsg.textContent = '正在整理日报、总结和设置…';
+  try {
+    const res = await window.api.exportBackup();
+    if (!res.ok) {
+      dataMsg.textContent = res.canceled ? '' : (res.error || '备份导出失败');
+      return;
+    }
+    dataMsg.className = 'set-msg success';
+    dataMsg.textContent = `备份已导出：${res.summary.entries} 条记录，${res.summary.reports} 份总结，${res.summary.closureSummaries || 0} 份闭环结果`;
+    toast('完整备份已导出');
+  } catch (error) {
+    dataMsg.textContent = `备份导出失败：${error?.message || '无法连接本地数据服务'}`;
+  } finally {
+    dataBackup.disabled = false;
+  }
+});
+
+dataRestore.addEventListener('click', async () => {
+  if (dataRestore.disabled) return;
+  if (reportGenerationManager.hasActiveJobs()) {
+    dataMsg.textContent = 'AI 总结正在生成，请完成后再恢复备份。';
+    return;
+  }
+  const confirmed = await askConfirmation(
+    '恢复备份会替换当前日报、周期总结、近期闭环、模板、术语和筛选配置。恢复前软件会自动生成一份安全备份，确定继续吗？',
+    { title: '恢复备份', confirmLabel: '继续恢复', danger: true }
+  );
+  if (!confirmed) return;
+  dataRestore.disabled = true;
+  dataMsg.className = 'set-msg';
+  dataMsg.textContent = '正在校验并恢复备份…';
+  try {
+    const res = await window.api.restoreBackup();
+    if (!res.ok) {
+      dataMsg.textContent = res.canceled ? '' : (res.error || '备份恢复失败');
+      return;
+    }
+    state.manage = false;
+    state.selected.clear();
+    state.report.data = null;
+    state.report.cacheStatus = 'missing';
+    state.report.editing = false;
+    reportGenerationManager.reset();
+    reportThinkingCache.clear();
+    hideReportThinking();
+    state.workbench.closure.data = null;
+    state.workbench.closure.cacheStatus = 'missing';
+    state.workbench.closure.error = '';
+    state.workbench.closure.progressNote = '';
+    state.workbench.closure.thinking = createClosureThinking();
+    state.workbench.closure.dismissedSuggestions.clear();
+    clearInterval(terminologyThinkingTimer);
+    terminologyThinkingTimer = null;
+    state.terminologyDiscovery.thinking = createTerminologyThinking();
+    resetFilters();
+    await loadSettingsUI();
+    await refresh();
+    dataMsg.className = 'set-msg success';
+    dataMsg.textContent = `恢复完成：${res.summary.entries} 条记录，${res.summary.reports} 份总结；恢复前安全备份已自动保留。`;
+    toast('备份已恢复');
+  } catch (error) {
+    dataMsg.textContent = `备份恢复失败：${error?.message || '无法连接本地数据服务'}`;
+  } finally {
+    dataRestore.disabled = false;
+  }
+});
+
+$('#ai-test').addEventListener('click', async () => {
+  const button = $('#ai-test');
+  button.disabled = true;
+  aiMsg.className = 'set-msg';
+  aiMsg.textContent = '正在测试连接并读取模型…';
+  const enteredKey = aiKey.dataset.masked === 'true' ? '' : aiKey.value.trim();
+  const res = await window.api.testAi(enteredKey);
+  button.disabled = false;
+  if (!res.ok) {
+    aiMsg.textContent = res.error || '连接失败';
+    if (state.settings?.ai) state.settings.ai = res.ai || state.settings.ai;
+    syncAiSettingsUI(state.settings?.ai);
+    if (!aiKey.value.trim() || aiKey.dataset.masked === 'true') setMaskedAiKey(state.settings?.ai);
+    syncAiEntry();
+    return;
+  }
+  // 测试结果先留在当前页面，明确等用户点击“保存配置”后再落盘。
+  state.settings.ai = { ...res.ai, configured: true };
+  syncAiSettingsUI(state.settings.ai);
+  syncAiEntry();
+  loadWorkbenchClosure();
+  ensureTerminologyDiscovery();
+  aiMsg.className = 'set-msg success';
+  aiMsg.textContent = res.modelChanged || res.closureModelChanged
+    ? `连接成功，周期报告模型：${res.ai.model}；闭环模型：${res.ai.closureModel}，请保存配置`
+    : `连接成功，发现 ${res.ai.models.length} 个可用模型，请保存配置`;
+  toast('连接成功，请保存配置');
+});
+
+aiSave.addEventListener('click', async () => {
+  aiSave.disabled = true;
+  aiMsg.className = 'set-msg';
+  aiMsg.textContent = '正在保存 AI 配置…';
+  const enteredKey = aiKey.dataset.masked === 'true' ? '' : aiKey.value.trim();
+  const res = await window.api.saveAi(enteredKey);
+  aiSave.disabled = false;
+  if (!res.ok) {
+    aiMsg.textContent = res.error || 'AI 配置保存失败';
+    return;
+  }
+  state.settings.ai = res.ai;
+  setMaskedAiKey(res.ai);
+  syncAiSettingsUI(res.ai);
+  syncAiEntry();
+  loadWorkbenchClosure();
+  ensureTerminologyDiscovery();
+  aiMsg.className = 'set-msg success';
+  aiMsg.textContent = 'AI 配置已保存';
+  toast('AI 配置已保存');
+});
+
+aiModel.addEventListener('change', async () => {
+  if (!aiModel.value || !state.settings?.ai) return;
+  const res = await window.api.setAiModel(aiModel.value);
+  if (res.ok) {
+    state.settings.ai = res.ai;
+    syncAiSettingsUI(res.ai);
+    syncAiEntry();
+    aiMsg.textContent = '模型已更换，请重新测试连接';
+  } else aiMsg.textContent = res.error || '模型更新失败';
+});
+
+aiClosureModel.addEventListener('change', async () => {
+  if (!aiClosureModel.value || !state.settings?.ai) return;
+  const res = await window.api.setAiClosureModel(aiClosureModel.value);
+  if (res.ok) {
+    state.settings.ai = res.ai;
+    syncAiSettingsUI(res.ai);
+    syncAiEntry();
+    aiMsg.textContent = '闭环模型已更换，请重新测试连接';
+  } else aiMsg.textContent = res.error || '闭环模型更新失败';
+});
+
+aiReasoningEffort.addEventListener('change', async () => {
+  if (!state.settings?.ai) return;
+  const previous = ['auto', 'low', 'high', 'max'].includes(state.settings.ai.reasoningEffort)
+    ? state.settings.ai.reasoningEffort
+    : 'auto';
+  const next = aiReasoningEffort.value;
+  aiReasoningEffort.disabled = true;
+  syncCustomSelect(aiReasoningEffort);
+  const res = await window.api.setAiReasoningEffort(next);
+  aiReasoningEffort.disabled = false;
+  syncCustomSelect(aiReasoningEffort);
+  if (!res.ok) {
+    aiReasoningEffort.value = previous;
+    syncCustomSelect(aiReasoningEffort);
+    aiMsg.textContent = res.error || '思考强度保存失败';
+    return;
+  }
+  state.settings.ai = res.ai;
+  syncAiSettingsUI(res.ai);
+  toast('思考强度已保存，仅影响下一次重新生成');
+});
+
+aiClosureReasoningEffort.addEventListener('change', async () => {
+  if (!state.settings?.ai) return;
+  const previous = ['auto', 'low', 'high', 'max'].includes(state.settings.ai.closureReasoningEffort)
+    ? state.settings.ai.closureReasoningEffort
+    : 'auto';
+  const next = aiClosureReasoningEffort.value;
+  aiClosureReasoningEffort.disabled = true;
+  syncCustomSelect(aiClosureReasoningEffort);
+  const res = await window.api.setAiClosureReasoningEffort(next);
+  aiClosureReasoningEffort.disabled = false;
+  syncCustomSelect(aiClosureReasoningEffort);
+  if (!res.ok) {
+    aiClosureReasoningEffort.value = previous;
+    syncCustomSelect(aiClosureReasoningEffort);
+    aiMsg.textContent = res.error || '闭环思考强度保存失败';
+    return;
+  }
+  state.settings.ai = res.ai;
+  syncAiSettingsUI(res.ai);
+  toast('闭环思考强度已保存，仅影响下一次近期闭环生成');
+});
+
+$('#ai-clear').addEventListener('click', async () => {
+  if (!state.settings?.ai?.configured) return;
+  const confirmed = await askConfirmation('清除 DeepSeek 配置后，AI 总结功能将隐藏。确定继续吗？', {
+    title: '清除 AI 配置',
+    confirmLabel: '清除配置',
+    danger: true
+  });
+  if (!confirmed) return;
+  const res = await window.api.clearAi();
+  if (res.ok) {
+    aiStartupCheckEpoch += 1;
+    aiStartupCheckPromise = null;
+    aiStartupCheckCompleted = false;
+    aiConnectionChecking = false;
+    state.settings.ai = res.ai;
+    syncAiSettingsUI(res.ai);
+    setMaskedAiKey(res.ai);
+    syncAiEntry();
+    clearInterval(terminologyThinkingTimer);
+    terminologyThinkingTimer = null;
+    state.terminologyDiscovery.thinking = createTerminologyThinking();
+    renderTerminologyDiscoveryUI();
+    loadWorkbenchClosure({ preserveThinking: false });
+    toast('AI 配置已清除');
+  }
+});
+
+templateSeg.addEventListener('click', ev => {
+  const btn = ev.target.closest('button[data-v]');
+  if (!btn) return;
+  templateType = btn.dataset.v;
+  syncTemplateUI();
+});
+
+$('#template-save').addEventListener('click', async () => {
+  const value = templateText.value.trim();
+  const res = await window.api.setReportTemplate(templateType, value);
+  if (!res.ok) { templateMsg.textContent = res.error || '模板保存失败'; return; }
+  state.settings.reportTemplates[templateType] = value;
+  templateMsg.className = 'set-msg success';
+  templateMsg.textContent = '模板已保存';
+  toast('总结模板已保存');
+});
+
+$('#template-reset').addEventListener('click', async () => {
+  const value = DEFAULT_TEMPLATES[templateType];
+  const res = await window.api.setReportTemplate(templateType, value);
+  if (!res.ok) { templateMsg.textContent = res.error || '恢复失败'; return; }
+  state.settings.reportTemplates[templateType] = value;
+  syncTemplateUI();
+  toast('已恢复默认模板');
+});
+
+$('#closure-prompt-save').addEventListener('click', async () => {
+  const value = closurePromptText.value.trim();
+  const res = await window.api.setClosurePrompt(value);
+  if (!res.ok) {
+    closurePromptMsg.textContent = res.error || '闭环提示词保存失败';
+    return;
+  }
+  state.settings.closurePrompt = res.prompt;
+  closurePromptMsg.className = 'set-msg success';
+  closurePromptMsg.textContent = '闭环提示词已保存';
+  await loadWorkbenchClosure();
+  toast('近期闭环提示词已保存');
+});
+
+$('#closure-prompt-reset').addEventListener('click', async () => {
+  const value = state.settings?.closurePromptDefault || DEFAULT_CLOSURE_PROMPT;
+  const res = await window.api.setClosurePrompt(value);
+  if (!res.ok) {
+    closurePromptMsg.textContent = res.error || '恢复默认提示词失败';
+    return;
+  }
+  state.settings.closurePrompt = res.prompt;
+  syncClosurePromptUI();
+  await loadWorkbenchClosure();
+  toast('近期闭环提示词已恢复默认');
+});
+
+terminologyPromptSave.addEventListener('click', async () => {
+  const value = terminologyPromptText.value.trim();
+  const res = await window.api.setTerminologyDiscoveryPrompt(value);
+  if (!res.ok) {
+    terminologyPromptMsg.textContent = res.error || '术语识别提示词保存失败';
+    return;
+  }
+  state.settings.terminologyDiscoveryPrompt = res.prompt;
+  terminologyPromptMsg.className = 'set-msg success';
+  terminologyPromptMsg.textContent = '术语识别提示词已保存';
+  toast('术语识别提示词已保存');
+});
+
+terminologyPromptReset.addEventListener('click', async () => {
+  const value = state.settings?.terminologyDiscoveryPromptDefault || DEFAULT_TERMINOLOGY_DISCOVERY_PROMPT;
+  const res = await window.api.setTerminologyDiscoveryPrompt(value);
+  if (!res.ok) {
+    terminologyPromptMsg.textContent = res.error || '恢复默认提示词失败';
+    return;
+  }
+  state.settings.terminologyDiscoveryPrompt = res.prompt;
+  syncTerminologyPromptUI();
+  toast('术语识别提示词已恢复默认');
+});
+
+terminologyDiscover.addEventListener('click', () => {
+  discoverTerminology(true);
+});
+
+terminologyThinkingToggle?.addEventListener('click', () => {
+  const thinking = state.terminologyDiscovery.thinking;
+  if (!thinking?.visible) return;
+  state.terminologyDiscovery.thinking = thinkingState.toggleThinking(thinking);
+  renderTerminologyThinking();
+});
+
+function resetTerminologyForm() {
+  editingTerminologyId = '';
+  termCanonical.value = '';
+  termScope.value = '';
+  termAliases.value = '';
+  termNote.value = '';
+  termMsg.textContent = '';
+  termMsg.className = 'set-msg';
+  termSave.textContent = '添加术语';
+  termCancel.hidden = true;
+  if (terminologyEditorTitle) terminologyEditorTitle.textContent = '新增术语';
+}
+
+function renderTerminologyPending() {
+  if (!terminologyPending || !terminologyPendingList) return;
+  const data = state.workbench?.closure?.data;
+  const dismissed = state.workbench?.closure?.dismissedSuggestions || new Set();
+  const suggestions = (Array.isArray(data?.needs_confirmation) ? data.needs_confirmation : [])
+    .filter(item => !dismissed.has(closureSuggestionKey(item)));
+
+  terminologyPending.hidden = !suggestions.length;
+  terminologyPendingList.innerHTML = '';
+  if (terminologyPendingCount) terminologyPendingCount.textContent = suggestions.length ? `${suggestions.length} 项` : '';
+  if (suggestions.length) {
+    appendClosureSuggestions(terminologyPendingList, { needs_confirmation: suggestions }, false, false);
+  }
+}
+
+function renderTerminologyUI() {
+  renderTerminologyPending();
+  if (!terminologyList) return;
+  terminologyList.innerHTML = '';
+  const allTerms = Array.isArray(state.settings?.terminology) ? state.settings.terminology : [];
+  const query = terminologySearch?.value?.trim() || '';
+  const terms = query
+    ? allTerms.filter(term => window.DRTextSearch.matchesSearch([
+      term.canonicalName,
+      ...(Array.isArray(term.aliases) ? term.aliases : []),
+      term.scope,
+      term.note
+    ].filter(Boolean).join(' '), query))
+    : allTerms;
+  if (terminologyListCount) {
+    terminologyListCount.textContent = query
+      ? `匹配 ${terms.length} / ${allTerms.length} 组术语`
+      : `${allTerms.length} 组术语`;
+  }
+  if (terminologySearchClear) terminologySearchClear.hidden = !query;
+  if (!allTerms.length) {
+    terminologyList.appendChild(wbNode('div', 'terminology-empty', '还没有可用的术语对照；首次识别完成后会显示在这里，也可以手动添加。'));
+    return;
+  }
+  if (!terms.length) {
+    terminologyList.appendChild(wbNode('div', 'terminology-empty', `没有找到与“${query}”匹配的术语；可以直接在上方新增术语。`));
+    return;
+  }
+  for (const term of terms) {
+    const row = document.createElement('div');
+    row.className = 'terminology-item';
+    const copy = document.createElement('div');
+    copy.className = 'terminology-copy';
+    const name = document.createElement('div');
+    name.className = 'terminology-name';
+    name.textContent = term.canonicalName;
+    const aliases = document.createElement('div');
+    aliases.className = 'terminology-aliases';
+    aliases.textContent = term.aliases?.length ? `常用说法：${term.aliases.join('、')}` : '尚未添加常用说法';
+    copy.append(name, aliases);
+    if (term.scope || term.note) {
+      const note = document.createElement('div');
+      note.className = 'terminology-note';
+      note.textContent = [term.scope ? `范围：${term.scope}` : '', term.note || ''].filter(Boolean).join(' · ');
+      copy.appendChild(note);
+    }
+    const actions = document.createElement('div');
+    actions.className = 'terminology-item-actions';
+    const edit = document.createElement('button');
+    edit.type = 'button';
+    edit.className = 'link-btn';
+    edit.textContent = '编辑';
+    edit.addEventListener('click', () => {
+      editingTerminologyId = term.id;
+      termCanonical.value = term.canonicalName;
+      termScope.value = term.scope || '';
+      termAliases.value = (term.aliases || []).join('\n');
+      termNote.value = term.note || '';
+      termSave.textContent = '保存修改';
+      termCancel.hidden = false;
+      termMsg.textContent = '';
+      if (terminologyEditorTitle) terminologyEditorTitle.textContent = '编辑术语';
+      termCanonical.focus();
+    });
+    const remove = document.createElement('button');
+    remove.type = 'button';
+    remove.className = 'link-btn danger-link';
+    remove.textContent = '删除';
+    remove.addEventListener('click', async () => {
+      const confirmed = await askConfirmation(`删除术语“${term.canonicalName}”？之后 AI 不再优先使用这组规范。`, {
+        title: '删除术语',
+        confirmLabel: '删除',
+        danger: true
+      });
+      if (!confirmed) return;
+      const res = await window.api.setTerminology(allTerms.filter(item => item.id !== term.id));
+      if (!res.ok) { termMsg.textContent = res.error || '术语删除失败'; return; }
+      state.settings.terminology = res.terminology;
+      if (state.settings.terminologyDiscovery) state.settings.terminologyDiscovery.termCount = state.settings.terminology.length;
+      if (editingTerminologyId === term.id) resetTerminologyForm();
+      renderTerminologyUI();
+      await loadWorkbenchClosure();
+      toast('术语已删除');
+    });
+    actions.append(edit, remove);
+    row.append(copy, actions);
+    terminologyList.appendChild(row);
+  }
+}
+
+terminologySearch?.addEventListener('input', renderTerminologyUI);
+terminologySearchClear?.addEventListener('click', () => {
+  terminologySearch.value = '';
+  renderTerminologyUI();
+  terminologySearch.focus();
+});
+
+function parseTerminologyAliases(value) {
+  return String(value || '').split(/[\n,，、;；]+/).map(item => item.trim()).filter(Boolean);
+}
+
+termSave.addEventListener('click', async () => {
+  const canonicalName = termCanonical.value.trim();
+  const aliases = parseTerminologyAliases(termAliases.value);
+  if (!canonicalName) { termMsg.textContent = '请填写规范输出名称'; termCanonical.focus(); return; }
+  if (!aliases.length) { termMsg.textContent = '请至少填写一个常用说法'; termAliases.focus(); return; }
+  const current = Array.isArray(state.settings?.terminology) ? state.settings.terminology : [];
+  const draft = {
+    id: editingTerminologyId || `term-${Date.now()}`,
+    canonicalName,
+    aliases,
+    scope: termScope.value.trim(),
+    note: termNote.value.trim()
+  };
+  const next = editingTerminologyId
+    ? current.map(item => item.id === editingTerminologyId ? draft : item)
+    : [draft, ...current];
+  const wasEditing = !!editingTerminologyId;
+  const res = await window.api.setTerminology(next);
+  if (!res.ok) { termMsg.textContent = res.error || '术语保存失败'; return; }
+  state.settings.terminology = res.terminology;
+  if (state.settings.terminologyDiscovery) state.settings.terminologyDiscovery.termCount = state.settings.terminology.length;
+  resetTerminologyForm();
+  renderTerminologyUI();
+  await loadWorkbenchClosure();
+  toast(wasEditing ? '术语已更新' : '术语已添加');
+});
+
+termCancel.addEventListener('click', resetTerminologyForm);
 
 /* ---------- 快捷键录制（带冲突检测） ---------- */
 
@@ -910,8 +3874,12 @@ function attachOverlayScrollbar(scroller, thumb) {
 
 const updateListThumb = attachOverlayScrollbar($('#list'), $('#list-thumb'));
 attachOverlayScrollbar($('.settings-scroll'), $('#settings-thumb'));
+updateWorkbenchThumb = attachOverlayScrollbar(weeklyWorkbench, $('#recent-summary-thumb'));
+document.querySelectorAll('textarea[data-resizable="true"]').forEach(installTextareaResizer);
 
 /* ---------- 初始化 ---------- */
+
+customSelect?.enhanceAll(document);
 
 async function refresh() {
   state.entries = await window.api.list();
@@ -920,6 +3888,10 @@ async function refresh() {
   renderActivity();
   populateYearOptions();
   renderList();
+  renderWeeklyWorkbench();
+  if (state.settings?.ai?.configured) {
+    loadWorkbenchClosure();
+  }
   renderExportPreview();
   if (typeof updateListThumb === 'function') updateListThumb();
 }
@@ -929,7 +3901,7 @@ async function refresh() {
   syncComposerTime();
   defaultRange();
   buildMonthOptions();
-  $('#list-toolbar').insertBefore(rangeChip, $('#f-count'));
+  dateFilterPopover.append(rangeChip);
   renderRangeChip();
   window.api.onEntriesChanged(refresh);
   loadSettingsUI();

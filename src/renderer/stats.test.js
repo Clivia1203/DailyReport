@@ -1,6 +1,6 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { statsFor, weekStart, filterByRange, rangeLabel, dayCounts, greeting } = require('./stats.js');
+const { statsFor, weekStart, filterByRange, rangeLabel, dayCounts, heatmapWeeks, greeting } = require('./stats.js');
 
 /* 时间口径说明：全部用本地时间构造，与产品口径一致（用户所在时区）。
    2026-09-01 是周二；2026-08-31 是周一；2026-08-30 是周日。 */
@@ -111,6 +111,29 @@ test('dayCounts: 同日多条合并、窗口外不计、跨月正确', () => {
   assert.equal(byDate['2026-09-01'], 1);
   assert.equal(byDate['2026-08-20'], 1);
   assert.equal(days[0].date, '2026-08-20');
+});
+
+/* ---------- heatmapWeeks：按周列出工作量 ---------- */
+
+test('heatmapWeeks: 每列从周一到周日，并覆盖当前未结束的一周', () => {
+  const now = day(2026, 9, 1, 12); // 周二
+  const entries = [
+    entry(day(2026, 8, 24, 9)),
+    entry(day(2026, 9, 1, 9)),
+    entry(day(2026, 9, 1, 18)),
+    entry(day(2026, 9, 7, 9)) // 当前周之后，不应出现在两周窗口
+  ];
+  const weeks = heatmapWeeks(entries, now, 2);
+
+  assert.equal(weeks.length, 2);
+  assert.equal(weeks[0].length, 7);
+  assert.equal(weeks[0][0].date, '2026-08-24');
+  assert.equal(weeks[0][6].date, '2026-08-30');
+  assert.equal(weeks[1][0].date, '2026-08-31');
+  assert.equal(weeks[1][1].date, '2026-09-01');
+  assert.equal(weeks[0][0].count, 1);
+  assert.equal(weeks[1][1].count, 2);
+  assert.equal(weeks[1][6].count, 0);
 });
 
 /* ---------- statsFor：今日 / 本周 / 累计 ---------- */

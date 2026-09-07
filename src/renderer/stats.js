@@ -81,6 +81,37 @@
     return counts;
   }
 
+  // GitHub 风格活动图：每列是一周，行顺序固定为周一到周日，最后一列是当前周。
+  // 用日期字段推进而不是按毫秒累加，避免夏令时切换导致某个格子偏移。
+  function heatmapWeeks(entries, now, weeks = 16) {
+    const count = Math.max(1, Math.floor(Number(weeks) || 16));
+    const first = new Date(weekStart(now || Date.now()));
+    first.setDate(first.getDate() - (count - 1) * 7);
+    const result = Array.from({ length: count }, () => []);
+    const index = new Map();
+
+    for (let column = 0; column < count; column += 1) {
+      for (let row = 0; row < 7; row += 1) {
+        const date = new Date(first);
+        date.setDate(first.getDate() + column * 7 + row);
+        const key = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+        const cell = { date: key, count: 0 };
+        result[column].push(cell);
+        index.set(key, cell);
+      }
+    }
+
+    for (const entry of entries || []) {
+      const date = new Date(entry.ts);
+      if (Number.isNaN(date.getTime())) continue;
+      const key = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+      const cell = index.get(key);
+      if (cell) cell.count += 1;
+    }
+
+    return result;
+  }
+
   // 五段时段问候（今日面板）
   function greeting(ts) {
     const h = new Date(ts).getHours();
@@ -91,5 +122,5 @@
     return '夜深了';
   }
 
-  return { weekStart, statsFor, filterByRange, rangeLabel, dayCounts, greeting };
+  return { weekStart, statsFor, filterByRange, rangeLabel, dayCounts, heatmapWeeks, greeting };
 });
