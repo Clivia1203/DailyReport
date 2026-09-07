@@ -2756,6 +2756,7 @@ function updateManageUI() {
 const hkDisplay = $('#hk-display');
 const hkMsg = $('#hk-msg');
 const themeSeg = $('#theme-seg');
+const localeSelect = $('#set-locale');
 const autoStart = $('#set-autostart');
 const silentStart = $('#set-silent');
 const rowSilent = $('#row-silentstart');
@@ -2889,6 +2890,9 @@ function syncSilentRow() {
 
 async function loadSettingsUI() {
   const s = await window.api.getSettings();
+  if (window.DRI18n && s.locale && window.DRI18n.locale !== s.locale) {
+    await window.DRI18n.setLocale(s.locale);
+  }
   state.terminologyDiscovery.thinking = thinkingState.preserveThinking(state.terminologyDiscovery.thinking);
   state.settings = s;
   state.savedFilters = Array.isArray(s.savedFilters) ? s.savedFilters : [];
@@ -2909,6 +2913,10 @@ async function loadSettingsUI() {
   syncSilentRow();
   hkMsg.textContent = '';
   syncThemeSeg();
+  if (localeSelect) {
+    localeSelect.value = s.locale || 'zh-CN';
+    syncCustomSelect(localeSelect);
+  }
   renderWeeklyWorkbench();
   loadWorkbenchClosure();
   autoTestAiOnStartup().finally(() => {
@@ -2916,6 +2924,25 @@ async function loadSettingsUI() {
     ensureTerminologyDiscovery();
   });
 }
+
+localeSelect?.addEventListener('change', async () => {
+  const next = localeSelect.value;
+  const res = await window.api.setSettings({ locale: next });
+  if (!res?.ok) {
+    toast(res?.error || '语言设置失败');
+    if (state.settings?.locale) {
+      localeSelect.value = state.settings.locale;
+      syncCustomSelect(localeSelect);
+    }
+  }
+});
+
+window.api.onLocaleChanged?.(locale => {
+  if (!locale || !window.DRI18n || window.DRI18n.locale === locale) return;
+  window.DRI18n.setLocale(locale).catch(() => {
+    // 语言包读取失败时保留当前界面，不让切换语言影响主页面内容。
+  });
+});
 
 function fillAiModelSelect(select, ai, selected) {
   const models = Array.isArray(ai?.models) ? ai.models : [];

@@ -32,6 +32,11 @@ const {
   resolveReasoningEffort
 } = require('./lib/reasoning-effort');
 const {
+  DEFAULT_LOCALE,
+  normalizeLocale,
+  localeFromInstallerLanguage
+} = require('./lib/locale');
+const {
   normalizeSavedFilters
 } = require('./lib/filter-presets');
 const {
@@ -109,7 +114,21 @@ function settingsFile() {
   return path.join(app.getPath('userData'), 'settings.json');
 }
 
+function installerLocaleFile() {
+  // NSIS 把安装器选择的语言写在应用安装目录；开发模式通常不存在该文件。
+  return path.join(path.dirname(process.execPath), 'installer-locale.txt');
+}
+
+function readInstallerLocale() {
+  try {
+    return localeFromInstallerLanguage(fs.readFileSync(installerLocaleFile(), 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
 const DEFAULT_SETTINGS = {
+  locale: DEFAULT_LOCALE,
   theme: 'auto',          // 'auto' | 'light' | 'dark'
   hotkey: DEFAULT_HOTKEY, // 唤起快速记录条的全局快捷键
   openAtLogin: false,     // 开机自启（写入系统启动项，默认关闭）
@@ -153,9 +172,15 @@ let settings = {
 };
 
 function loadSettings() {
+  let storedLocale = false;
   try {
     const s = JSON.parse(fs.readFileSync(settingsFile(), 'utf8'));
     if (s && typeof s === 'object') {
+      const locale = normalizeLocale(s.locale);
+      if (locale) {
+        settings.locale = locale;
+        storedLocale = true;
+      }
       if (['auto', 'light', 'dark'].includes(s.theme)) settings.theme = s.theme;
       if (typeof s.hotkey === 'string' && s.hotkey) settings.hotkey = s.hotkey;
       if (typeof s.openAtLogin === 'boolean') settings.openAtLogin = s.openAtLogin;
@@ -196,6 +221,14 @@ function loadSettings() {
       if (Array.isArray(s.savedFilters)) settings.savedFilters = normalizeSavedFilters(s.savedFilters);
     }
   } catch { /* 首次运行，使用默认设置 */ }
+
+  if (!storedLocale) {
+    const selectedLocale = readInstallerLocale();
+    if (selectedLocale) {
+      settings.locale = selectedLocale;
+      saveSettings();
+    }
+  }
 }
 
 function saveSettings() {
@@ -242,6 +275,49 @@ function broadcastTheme() {
     if (w && !w.isDestroyed()) w.webContents.send('theme:changed', t);
   }
   applyChromeOverlay();
+}
+
+function broadcastLocale() {
+  for (const w of [mainWindow, quickWindow]) {
+    if (w && !w.isDestroyed()) w.webContents.send('locale:changed', settings.locale);
+  }
+  refreshTrayMenu();
+}
+
+function mainText(key) {
+  const messages = {
+    'en-US': {
+      '快速记录': 'Quick entry',
+      '快速记录（未设置快捷键）': 'Quick entry (shortcut not set)',
+      '打开主界面': 'Open main window',
+      '退出': 'Exit',
+      '日报随手记': 'Daily Notes',
+      '快捷键注册失败': 'Shortcut registration failed',
+      '全局快捷键被其他程序占用，请打开主界面到设置中更换': 'The global shortcut is already used by another app. Open Settings to change it.',
+      '日报随手记已启动': 'Daily Notes started',
+      '随时记录一条，点击托盘图标也可以': 'Press the shortcut to add an entry, or click the tray icon.',
+      '导出完整备份': 'Export full backup',
+      '从备份恢复': 'Restore from backup',
+      '导出日报': 'Export entries',
+      '导出周期总结': 'Export periodic summary'
+    },
+    'ja-JP': {
+      '快速记录': 'クイック記録',
+      '快速记录（未设置快捷键）': 'クイック記録（ショートカット未設定）',
+      '打开主界面': 'メイン画面を開く',
+      '退出': '終了',
+      '日报随手记': 'Daily Notes',
+      '快捷键注册失败': 'ショートカットの登録に失敗しました',
+      '全局快捷键被其他程序占用，请打开主界面到设置中更换': 'グローバルショートカットが他のアプリで使用されています。設定から変更してください。',
+      '日报随手记已启动': 'Daily Notes を起動しました',
+      '随时记录一条，点击托盘图标也可以': 'ショートカットまたはトレイアイコンから記録できます。',
+      '导出完整备份': '完全バックアップをエクスポート',
+      '从备份恢复': 'バックアップから復元',
+      '导出日报': '記録をエクスポート',
+      '导出周期总结': '期間まとめをエクスポート'
+    }
+  };
+  return messages[settings.locale]?.[key] || key;
 }
 
 /* ---------------- 存储层：本地 JSON 文件 ---------------- */
@@ -382,6 +458,7 @@ function createSafetyBackup() {
 
 function normalizeRestoredSettings(snapshot) {
   const restored = restoreSettingsSnapshot(settings, snapshot, DEFAULT_SETTINGS);
+  restored.locale = normalizeLocale(restored.locale) || settings.locale || DEFAULT_LOCALE;
   restored.theme = ['auto', 'light', 'dark'].includes(restored.theme) ? restored.theme : DEFAULT_SETTINGS.theme;
   restored.hotkey = typeof restored.hotkey === 'string' && restored.hotkey.trim()
     ? restored.hotkey.trim()
@@ -1277,7 +1354,7 @@ ipcMain.handle('entries:deleteMany', (_e, { ids }) => {
 ipcMain.handle('data:backup', async () => {
   const payload = backupSnapshot();
   const { canceled, filePath } = await dialog.showSaveDialog(mainWindow, {
-    title: '导出完整备份',
+    title: mainText('导出完整备份'),
     defaultPath: `日报随手记_备份_${backupFileStamp()}.json`,
     filters: [{ name: '日报随手记备份', extensions: ['json'] }]
   });
@@ -1300,7 +1377,7 @@ ipcMain.handle('data:backup', async () => {
 
 ipcMain.handle('data:restore', async () => {
   const { canceled, filePaths } = await dialog.showOpenDialog(mainWindow, {
-    title: '从备份恢复',
+    title: mainText('从备份恢复'),
     properties: ['openFile'],
     filters: [{ name: '日报随手记备份', extensions: ['json'] }]
   });
@@ -1339,6 +1416,7 @@ ipcMain.handle('data:restore', async () => {
     applyLoginItem();
     refreshTrayMenu();
     broadcastTheme();
+    broadcastLocale();
     notifyMainChanged();
     return { ok: true, summary: checked.summary, safetyBackupPath };
   } catch (error) {
@@ -1384,7 +1462,7 @@ ipcMain.handle('export:run', async (_e, { start, end, format }) => {
   const content = buildExport(loadDB().entries, start, end, format);
   const ext = format === 'md' ? 'md' : 'txt';
   const { canceled, filePath } = await dialog.showSaveDialog(mainWindow, {
-    title: '导出日报',
+    title: mainText('导出日报'),
     defaultPath: `日报_${start}_${end}.${ext}`,
     filters: [{ name: format === 'md' ? 'Markdown 文件' : '纯文本文件', extensions: [ext] }]
   });
@@ -2071,7 +2149,7 @@ ipcMain.handle('report:export', async (_e, { id, format } = {}) => {
   const reportContentText = readReportContent(report);
   const content = isText ? markdownToText(reportContentText) : reportContentText;
   const { canceled, filePath } = await dialog.showSaveDialog(mainWindow, {
-    title: '导出周期总结',
+    title: mainText('导出周期总结'),
     defaultPath: `总结_${report.start}_${report.end}.${ext}`,
     filters: [{ name: isText ? '纯文本文件' : 'Markdown 文件', extensions: [ext] }]
   });
@@ -2110,7 +2188,23 @@ function applyLoginItem() {
   });
 }
 
+ipcMain.handle('locale:load', (_event, requestedLocale) => {
+  const locale = normalizeLocale(requestedLocale);
+  if (!locale) return { ok: false, error: '不支持的语言' };
+  const file = path.join(__dirname, 'renderer', 'locales', `${locale}.json`);
+  try {
+    const messages = JSON.parse(fs.readFileSync(file, 'utf8'));
+    if (!messages || typeof messages !== 'object' || Array.isArray(messages)) {
+      return { ok: false, error: '语言文件格式无效' };
+    }
+    return { ok: true, locale, messages };
+  } catch {
+    return { ok: false, error: '语言文件读取失败' };
+  }
+});
+
 ipcMain.handle('settings:get', () => ({
+  locale: settings.locale,
   theme: settings.theme,
   resolvedTheme: resolvedTheme(),
   hotkey: settings.hotkey,
@@ -2132,6 +2226,12 @@ ipcMain.handle('settings:get', () => ({
 ipcMain.handle('settings:set', (_e, patch) => {
   const result = { ok: true, error: null };
   if (patch && typeof patch === 'object') {
+    const nextLocale = normalizeLocale(patch.locale);
+    if (nextLocale && nextLocale !== settings.locale) {
+      settings.locale = nextLocale;
+      saveSettings();
+      broadcastLocale();
+    }
     if (['auto', 'light', 'dark'].includes(patch.theme)) {
       settings.theme = patch.theme;
       saveSettings();
@@ -2157,6 +2257,7 @@ ipcMain.handle('settings:set', (_e, patch) => {
     }
   }
   result.settings = {
+    locale: settings.locale,
     theme: settings.theme,
     hotkey: settings.hotkey,
     openAtLogin: settings.openAtLogin,
@@ -2331,8 +2432,8 @@ function initHotkey() {
     settings.hotkey = '';
     if (Notification.isSupported()) {
       new Notification({
-        title: '快捷键注册失败',
-        body: '全局快捷键被其他程序占用，请打开主界面到设置中更换',
+        title: mainText('快捷键注册失败'),
+        body: mainText('全局快捷键被其他程序占用，请打开主界面到设置中更换'),
         silent: true
       }).show();
     }
@@ -2526,10 +2627,10 @@ function watchDisplayMetrics() {
 
 function trayMenuTemplate() {
   return Menu.buildFromTemplate([
-    { label: settings.hotkey ? `快速记录（${settings.hotkey}）` : '快速记录（未设置快捷键）', click: () => showQuick({ ignoreBlur: true }) },
-    { label: '打开主界面', click: () => { if (mainWindow) { mainWindow.show(); mainWindow.focus(); } } },
+    { label: settings.hotkey ? `${mainText('快速记录')}（${settings.hotkey}）` : mainText('快速记录（未设置快捷键）'), click: () => showQuick({ ignoreBlur: true }) },
+    { label: mainText('打开主界面'), click: () => { if (mainWindow) { mainWindow.show(); mainWindow.focus(); } } },
     { type: 'separator' },
-    { label: '退出', click: () => { quitting = true; app.quit(); } }
+    { label: mainText('退出'), click: () => { quitting = true; app.quit(); } }
   ]);
 }
 
@@ -2543,7 +2644,7 @@ function createTray() {
   const trayIconPath = path.join(ASSETS, 'tray.png');
   const iconPath = fs.existsSync(trayIconPath) ? trayIconPath : path.join(ASSETS, 'icon.png');
   tray = new Tray(nativeImage.createFromPath(iconPath));
-  tray.setToolTip('日报随手记');
+  tray.setToolTip(mainText('日报随手记'));
   tray.on('click', () => showQuick({ ignoreBlur: true }));
   tray.setContextMenu(trayMenuTemplate());
 }
@@ -2575,8 +2676,8 @@ app.whenReady().then(() => {
 
   if (Notification.isSupported() && settings.hotkey && !startHidden) {
     const n = new Notification({
-      title: '日报随手记已启动',
-      body: `按 ${settings.hotkey} 随时记录一条，点击托盘图标也可以`,
+      title: mainText('日报随手记已启动'),
+      body: `${settings.locale === 'en-US' ? 'Press ' : settings.locale === 'ja-JP' ? '' : '按 '}${settings.hotkey}${settings.locale === 'en-US' ? ' to add an entry, or click the tray icon.' : settings.locale === 'ja-JP' ? ' で記録できます。トレイアイコンも使用できます。' : ' 随时记录一条，点击托盘图标也可以'}`,
       silent: true
     });
     n.on('click', () => showQuick());

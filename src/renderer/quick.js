@@ -6,6 +6,12 @@ const dt = document.getElementById('quick-dt');
 const applyTheme = t => { document.documentElement.dataset.theme = t; };
 window.api.getTheme().then(applyTheme);
 window.api.onThemeChanged(applyTheme);
+window.api.onLocaleChanged?.(locale => {
+  if (!locale || !window.DRI18n || window.DRI18n.locale === locale) return;
+  window.DRI18n.setLocale(locale).catch(() => {
+    // 语言包读取失败时保留当前快速记录条，不中断记录输入。
+  });
+});
 
 const pad = n => String(n).padStart(2, '0');
 

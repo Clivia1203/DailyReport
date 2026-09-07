@@ -6,7 +6,39 @@ const test = require('node:test');
 const mainSource = fs.readFileSync(path.join(__dirname, 'main.js'), 'utf8');
 const preloadSource = fs.readFileSync(path.join(__dirname, 'preload.js'), 'utf8');
 const appSource = fs.readFileSync(path.join(__dirname, 'renderer', 'app.js'), 'utf8');
+const indexSource = fs.readFileSync(path.join(__dirname, 'renderer', 'index.html'), 'utf8');
+const i18nSource = fs.readFileSync(path.join(__dirname, 'renderer', 'i18n.js'), 'utf8');
 const discovery = require('./lib/terminology-discovery');
+
+test('语言包从固定外部文件读取，切换语言不重载渲染页面', () => {
+  for (const locale of ['zh-CN', 'en-US', 'ja-JP']) {
+    const file = path.join(__dirname, 'renderer', 'locales', `${locale}.json`);
+    const messages = JSON.parse(fs.readFileSync(file, 'utf8'));
+    assert.equal(typeof messages, 'object');
+    assert.equal(typeof messages['日报随手记'], 'string');
+  }
+  assert.match(mainSource, /ipcMain\.handle\('locale:load'/);
+  assert.match(preloadSource, /loadLocale:\s*locale\s*=>\s*ipcRenderer\.invoke\('locale:load'/);
+  assert.match(i18nSource, /root\.api\?\.loadLocale/);
+  assert.match(indexSource, /切换后立即生效/);
+  assert.doesNotMatch(indexSource, /窗口会自动重新加载/);
+  assert.doesNotMatch(appSource, /window\.location\.reload\(\)/);
+  assert.doesNotMatch(fs.readFileSync(path.join(__dirname, 'renderer', 'quick.js'), 'utf8'), /window\.location\.reload\(\)/);
+});
+
+test('术语编辑示例使用通用占位内容，不暴露具体项目实例', () => {
+  const userSpecificExamples = /DP310-X2|步进驱动器|模切飞线问题|双轴、两轴/;
+  assert.match(indexSource, /项目编号或产品名称/);
+  assert.doesNotMatch(indexSource, userSpecificExamples);
+  for (const locale of ['zh-CN', 'en-US', 'ja-JP']) {
+    const messages = fs.readFileSync(
+      path.join(__dirname, 'renderer', 'locales', `${locale}.json`),
+      'utf8'
+    );
+    assert.doesNotMatch(messages, userSpecificExamples);
+  }
+  assert.doesNotMatch(fs.readFileSync(path.join(__dirname, 'lib', 'closure-utils.js'), 'utf8'), userSpecificExamples);
+});
 
 test('主进程默认设置使用的术语提示词必须从术语模块导入', () => {
   assert.equal(typeof discovery.DEFAULT_TERMINOLOGY_DISCOVERY_PROMPT, 'string');

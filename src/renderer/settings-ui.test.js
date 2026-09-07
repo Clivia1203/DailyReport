@@ -36,7 +36,7 @@ test('设置页将普通设置与 AI 设置分开，AI 设置提供左右项目�
 });
 
 test('所有原生下拉框统一由应用内自定义菜单呈现', () => {
-  assert.equal((htmlSource.match(/<select\b/g) || []).length, 10);
+  assert.equal((htmlSource.match(/<select\b/g) || []).length, 11);
   assert.match(htmlSource, /custom-select\.js[\s\S]*app\.js/);
   assert.match(appSource, /customSelect\?\.enhanceAll\(document\)/);
   assert.match(appSource, /function syncCustomSelect\(select\)/);
@@ -78,6 +78,27 @@ test('下拉选项之间保留间距，长文本不会突破选项边界', () =>
   assert.match(optionRule, /overflow:\s*hidden/);
   assert.match(optionRule, /text-overflow:\s*ellipsis/);
   assert.match(optionRule, /white-space:\s*nowrap/);
+});
+
+test('多语言文案变长时按钮和操作区不会溢出', () => {
+  const buttonRule = cssSource.match(/\.btn\s*\{([\s\S]*?)\n\}/)?.[1] || '';
+  const toolbarRule = cssSource.match(/\.list-toolbar\s*\{([\s\S]*?)\n\}/)?.[1] || '';
+  const menuRule = cssSource.match(/\.menu-item\s*\{([\s\S]*?)\n\}/)?.[1] || '';
+  const rowRule = cssSource.match(/\.set-row\s*\{([\s\S]*?)\n\}/)?.[1] || '';
+
+  assert.match(buttonRule, /max-width:\s*100%/);
+  assert.match(buttonRule, /overflow:\s*hidden/);
+  assert.match(buttonRule, /text-overflow:\s*ellipsis/);
+  assert.match(toolbarRule, /flex-wrap:\s*nowrap/);
+  assert.match(cssSource, /#btn-report\s*\{[^}]*width:\s*auto[^}]*flex:\s*0 0 auto/);
+  assert.match(cssSource, /\.more-group, #btn-more\s*\{[^}]*width:\s*auto[^}]*flex:\s*0 0 auto/);
+  assert.match(cssSource, /\.f-count\s*\{[\s\S]*flex:\s*0 1 76px[\s\S]*text-overflow:\s*ellipsis/);
+  assert.match(cssSource, /@media \(max-width: 1199px\)[\s\S]*\.list-toolbar \.search-wrap\s*\{[\s\S]*min-width:\s*0[\s\S]*flex-basis:\s*160px/);
+  assert.match(menuRule, /height:\s*auto/);
+  assert.match(menuRule, /white-space:\s*normal/);
+  assert.match(menuRule, /overflow-wrap:\s*anywhere/);
+  assert.match(rowRule, /flex-wrap:\s*wrap/);
+  assert.match(cssSource, /\.template-foot\s*\{[\s\S]*flex-wrap:\s*wrap/);
 });
 
 test('术语表输入控件使用统一圆角样式且双列表单顶端对齐', () => {

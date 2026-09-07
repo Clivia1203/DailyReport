@@ -1,7 +1,7 @@
 {
   "name": "daily-report",
   "productName": "日报随手记",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "随手记录每日工作，按日期范围导出日报",
   "main": "src/main.js",
   "author": "ddup5",
@@ -47,6 +47,13 @@
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
       "shortcutName": "日报随手记",
+      "displayLanguageSelector": true,
+      "installerLanguages": [
+        "zh_CN",
+        "en_US",
+        "ja_JP"
+      ],
+      "include": "build/installer.nsh",
       "language": "2052",
       "unicode": true
     }

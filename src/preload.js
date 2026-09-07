@@ -9,8 +9,14 @@ contextBridge.exposeInMainWorld('api', {
   deleteMany: ids => ipcRenderer.invoke('entries:deleteMany', { ids }),
 
   // 设置
+  loadLocale: locale => ipcRenderer.invoke('locale:load', locale),
   getSettings: () => ipcRenderer.invoke('settings:get'),
   setSettings: patch => ipcRenderer.invoke('settings:set', patch),
+  onLocaleChanged: cb => {
+    const h = (_e, locale) => cb(locale);
+    ipcRenderer.on('locale:changed', h);
+    return () => ipcRenderer.removeListener('locale:changed', h);
+  },
   openDataFolder: () => ipcRenderer.invoke('data:openFolder'),
   exportBackup: () => ipcRenderer.invoke('data:backup'),
   restoreBackup: () => ipcRenderer.invoke('data:restore'),
