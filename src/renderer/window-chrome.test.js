@@ -32,8 +32,9 @@ test('主窗口使用网页自绘标题栏，模态遮罩不再依赖原生覆�
 
 test('自绘窗口控制区保留拖拽边界和悬停反馈', () => {
   assert.match(styleSource, /\.window-controls[\s\S]*-webkit-app-region:\s*no-drag/);
+  assert.match(styleSource, /\.window-controls[\s\S]*border:\s*1px solid var\(--border\)/);
   assert.match(styleSource, /\.window-control:hover/);
-  assert.match(styleSource, /\.window-control\.close:hover/);
+  assert.match(styleSource, /\.window-control\.close:hover[\s\S]*background:\s*var\(--danger-soft\)[\s\S]*color:\s*var\(--danger\)/);
   assert.match(styleSource, /\.window-control\.is-maximized/);
   assert.match(styleSource, /\.modal-backdrop[\s\S]*z-index:\s*80/);
 });
