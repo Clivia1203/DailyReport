@@ -107,6 +107,9 @@ test('AI 服务将连接测试与配置保存拆成两个明确动作', () => {
   const serviceStart = htmlSource.indexOf('<section class="card set-group ai-settings-panel" data-ai-panel="service"');
   const serviceEnd = htmlSource.indexOf('<section class="card set-group ai-settings-panel" data-ai-panel="report"', serviceStart);
   const service = htmlSource.slice(serviceStart, serviceEnd === -1 ? htmlSource.length : serviceEnd);
+  const testHandlerStart = appSource.indexOf("$('#ai-test').addEventListener('click'");
+  const testHandlerEnd = appSource.indexOf('aiSave.addEventListener', testHandlerStart);
+  const testHandler = appSource.slice(testHandlerStart, testHandlerEnd === -1 ? appSource.length : testHandlerEnd);
 
   assert.match(service, /id="ai-test"[^>]*>测试连接<\/button>/);
   assert.match(service, /id="ai-save"[^>]*>保存配置<\/button>/);
@@ -118,18 +121,31 @@ test('AI 服务将连接测试与配置保存拆成两个明确动作', () => {
   assert.doesNotMatch(service, /测试连接并保存/);
   assert.match(appSource, /\$\('#ai-test'\)\.addEventListener\('click'[\s\S]*window\.api\.testAi/);
   assert.match(appSource, /window\.api\.testAi\(\{[\s\S]*providerId:[\s\S]*baseUrl:/);
+  assert.match(testHandler, /const requestId = aiTestController\.start\(\)/);
+  assert.ok(
+    testHandler.indexOf('syncAiEntry();') < testHandler.indexOf('const enteredKey'),
+    '开始测试前应只更新状态，不能用旧设置覆盖用户刚选择的平台'
+  );
+  assert.doesNotMatch(
+    testHandler.slice(0, testHandler.indexOf('const enteredKey')),
+    /syncAiSettingsUI\(/,
+    '开始测试前不能重绘整个设置表单'
+  );
   assert.match(appSource, /const aiSave = \$\('#ai-save'\)/);
   assert.match(appSource, /aiSave\.addEventListener\('click'[\s\S]*window\.api\.saveAi/);
   assert.match(appSource, /window\.api\.saveAi\(\{[\s\S]*providerId:[\s\S]*baseUrl:/);
   assert.match(preloadSource, /saveAi:\s*config\s*=>\s*ipcRenderer\.invoke\('ai:save'/);
   assert.match(preloadSource, /testAi:\s*config\s*=>\s*ipcRenderer\.invoke\('ai:test'/);
+  assert.match(preloadSource, /cancelAiTest:\s*\(\)\s*=>\s*ipcRenderer\.send\('ai:test:cancel'\)/);
 });
 
 test('软件启动时自动检查已保存的 AI 配置，且同一会话不会重复检查', () => {
   assert.match(appSource, /let aiStartupCheckPromise\s*=\s*null/);
   assert.match(appSource, /function autoTestAiOnStartup\(\)/);
   assert.match(appSource, /if \(aiStartupCheckPromise\) return aiStartupCheckPromise/);
-  assert.match(appSource, /window\.api\.testAi\(''\)/);
+  assert.match(appSource, /window\.api\.testAi\(\{\s*requestId\s*\}\)/);
+  assert.match(appSource, /aiTestController\.isCurrent\(requestId\)/);
+  assert.match(preloadSource, /cancelAiTest:\s*\(\)\s*=>\s*ipcRenderer\.send\('ai:test:cancel'\)/);
   assert.match(appSource, /loadSettingsUI\(\)[\s\S]*autoTestAiOnStartup/);
   assert.doesNotMatch(appSource, /AI 已配置，待测试/);
 });

@@ -36,6 +36,7 @@ contextBridge.exposeInMainWorld('api', {
   getAiStatus: () => ipcRenderer.invoke('ai:status'),
   revealAiKey: () => ipcRenderer.invoke('ai:reveal'),
   testAi: config => ipcRenderer.invoke('ai:test', typeof config === 'string' ? { apiKey: config } : (config || {})),
+  cancelAiTest: () => ipcRenderer.send('ai:test:cancel'),
   saveAi: config => ipcRenderer.invoke('ai:save', typeof config === 'string' ? { apiKey: config } : (config || {})),
   clearAi: () => ipcRenderer.invoke('ai:clear'),
   setAiModel: model => ipcRenderer.invoke('ai:setModel', { model }),

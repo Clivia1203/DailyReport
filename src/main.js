@@ -771,11 +771,14 @@ function applyAiConnection(connection) {
   return changed;
 }
 
-async function aiRequest(endpoint, apiKey, init = {}, connection = null) {
+async function aiRequest(endpoint, apiKey, init = {}, connection = null, externalSignal = null) {
   if (typeof fetch !== 'function') throw new Error('当前运行环境不支持网络请求');
   const target = connection || aiConnection();
   const base = target.baseUrl;
   const controller = new AbortController();
+  const abortFromExternal = () => controller.abort();
+  if (externalSignal?.aborted) controller.abort();
+  else externalSignal?.addEventListener('abort', abortFromExternal, { once: true });
   const timer = setTimeout(() => controller.abort(), AI_TIMEOUT_MS);
   try {
     const response = await fetch(base + endpoint, {
@@ -796,10 +799,16 @@ async function aiRequest(endpoint, apiKey, init = {}, connection = null) {
     }
     return data;
   } catch (error) {
+    if (externalSignal?.aborted) {
+      const canceled = new Error('AI 连接测试已取消');
+      canceled.code = 'AI_TEST_CANCELED';
+      throw canceled;
+    }
     if (error?.name === 'AbortError') throw new Error('请求超时，请检查网络或稍后重试');
     throw error;
   } finally {
     clearTimeout(timer);
+    externalSignal?.removeEventListener('abort', abortFromExternal);
   }
 }
 
@@ -881,8 +890,8 @@ async function aiStream(endpoint, apiKey, init = {}, onDelta = () => {}, connect
   }
 }
 
-async function fetchAvailableModels(apiKey, connection = null) {
-  const data = await aiRequest('/models', apiKey, {}, connection);
+async function fetchAvailableModels(apiKey, connection = null, externalSignal = null) {
+  const data = await aiRequest('/models', apiKey, {}, connection, externalSignal);
   const models = extractModelIds(data);
   if (!models.length) throw new Error('接口已连接，但没有返回可用模型');
   return [...new Set(models)];
@@ -1678,47 +1687,77 @@ ipcMain.handle('ai:reveal', () => {
   return key ? { ok: true, apiKey: key } : { ok: false, error: '本机安全存储中没有可读取的 API Key' };
 });
 
-ipcMain.handle('ai:test', async (_e, payload = {}) => {
+const aiTestRequests = new Map();
+
+function beginAiTestRequest(senderId, requestId) {
+  const previous = aiTestRequests.get(senderId);
+  previous?.controller.abort();
+  const request = { requestId, controller: new AbortController() };
+  aiTestRequests.set(senderId, request);
+  return request;
+}
+
+function finishAiTestRequest(senderId, request) {
+  if (aiTestRequests.get(senderId) === request) aiTestRequests.delete(senderId);
+}
+
+ipcMain.on('ai:test:cancel', event => {
+  aiTestRequests.get(event.sender.id)?.controller.abort();
+});
+
+ipcMain.handle('ai:test', async (event, payload = {}) => {
   const input = typeof payload === 'string' ? { apiKey: payload } : (payload || {});
-  let connection;
   try {
-    connection = aiConnection(input);
+    const request = beginAiTestRequest(event.sender.id, input.requestId);
+    try {
+      let connection;
+      try {
+        connection = aiConnection(input);
+      } catch (error) {
+        return { ok: false, error: error?.message || 'AI 连接配置无效', ai: aiPublicState() };
+      }
+      const suppliedKey = String(input.apiKey || '').trim();
+      const connectionChanged = settings.ai.providerId !== connection.providerId
+        || settings.ai.baseUrl !== connection.baseUrl;
+      if (connectionChanged && !suppliedKey) {
+        return { ok: false, error: '切换 AI 平台后请重新填写 API Key', ai: aiPublicState() };
+      }
+      applyAiConnection(connection);
+      const key = suppliedKey || apiKeyFromStorage();
+      if (!key) return { ok: false, error: '请先填写 API Key', ai: aiPublicState() };
+
+      const models = await fetchAvailableModels(key, connection, request.controller.signal);
+      if (request.controller.signal.aborted) return { ok: false, canceled: true, ai: aiPublicState() };
+      const selected = chooseModel(models, settings.ai.model);
+      const closureSelected = chooseClosureModel(models, settings.ai.closureModel);
+      const modelChanged = selected !== settings.ai.model;
+      const closureModelChanged = closureSelected !== settings.ai.closureModel;
+      settings.ai.models = models;
+      settings.ai.model = selected;
+      settings.ai.closureModel = closureSelected;
+      settings.ai.lastTestAt = Date.now();
+      settings.ai.lastTestOk = true;
+      settings.ai.lastError = '';
+      // 测试只更新当前会话中的草稿和模型目录；API Key 由独立的“保存配置”动作落盘。
+      return {
+        ok: true,
+        modelChanged,
+        closureModelChanged,
+        ai: { ...aiPublicState(models), configured: true }
+      };
+    } catch (error) {
+      if (request.controller.signal.aborted || error?.code === 'AI_TEST_CANCELED') {
+        return { ok: false, canceled: true, ai: aiPublicState() };
+      }
+      settings.ai.lastTestAt = Date.now();
+      settings.ai.lastTestOk = false;
+      settings.ai.lastError = error?.message || '连接失败';
+      return { ok: false, error: settings.ai.lastError, ai: aiPublicState() };
+    } finally {
+      finishAiTestRequest(event.sender.id, request);
+    }
   } catch (error) {
-    return { ok: false, error: error?.message || 'AI 连接配置无效', ai: aiPublicState() };
-  }
-  const suppliedKey = String(input.apiKey || '').trim();
-  const connectionChanged = settings.ai.providerId !== connection.providerId
-    || settings.ai.baseUrl !== connection.baseUrl;
-  if (connectionChanged && !suppliedKey) {
-    return { ok: false, error: '切换 AI 平台后请重新填写 API Key', ai: aiPublicState() };
-  }
-  applyAiConnection(connection);
-  const key = suppliedKey || apiKeyFromStorage();
-  if (!key) return { ok: false, error: '请先填写 API Key', ai: aiPublicState() };
-  try {
-    const models = await fetchAvailableModels(key, connection);
-    const selected = chooseModel(models, settings.ai.model);
-    const closureSelected = chooseClosureModel(models, settings.ai.closureModel);
-    const modelChanged = selected !== settings.ai.model;
-    const closureModelChanged = closureSelected !== settings.ai.closureModel;
-    settings.ai.models = models;
-    settings.ai.model = selected;
-    settings.ai.closureModel = closureSelected;
-    settings.ai.lastTestAt = Date.now();
-    settings.ai.lastTestOk = true;
-    settings.ai.lastError = '';
-    // 测试只更新当前会话中的草稿和模型目录；API Key 由独立的“保存配置”动作落盘。
-    return {
-      ok: true,
-      modelChanged,
-      closureModelChanged,
-      ai: { ...aiPublicState(models), configured: true }
-    };
-  } catch (error) {
-    settings.ai.lastTestAt = Date.now();
-    settings.ai.lastTestOk = false;
-    settings.ai.lastError = error?.message || '连接失败';
-    return { ok: false, error: settings.ai.lastError, ai: aiPublicState() };
+    return { ok: false, error: error?.message || 'AI 连接测试失败', ai: aiPublicState() };
   }
 });
 

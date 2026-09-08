@@ -4,6 +4,9 @@ const thinkingSnapshot = window.DRThinkingSnapshot;
 const customSelect = window.DRCustomSelect;
 const reportPeriodRules = window.DRReportPeriod;
 const aiProviders = window.DRAiProviders;
+const aiTestController = window.DRAiTestController.createAiTestController({
+  onCancel: () => window.api.cancelAiTest?.()
+});
 
 // 所有由应用生成的界面文案都从本地化层取值；日报原文、用户自定义提示词和 AI 正文不经过这里改写。
 function uiText(value) {
@@ -1582,14 +1585,15 @@ function autoTestAiOnStartup() {
   if (aiStartupCheckPromise) return aiStartupCheckPromise;
   if (aiStartupCheckCompleted || !state.settings?.ai?.configured) return Promise.resolve(null);
 
+  const requestId = aiTestController.start();
   aiConnectionChecking = true;
   syncAiSettingsUI(state.settings.ai);
   syncAiEntry();
   const epoch = aiStartupCheckEpoch;
   aiStartupCheckPromise = Promise.resolve()
-    .then(() => window.api.testAi(''))
+    .then(() => window.api.testAi({ requestId }))
     .then(res => {
-      if (epoch !== aiStartupCheckEpoch || !state.settings?.ai) return res;
+      if (epoch !== aiStartupCheckEpoch || !aiTestController.isCurrent(requestId) || !state.settings?.ai) return res;
       const configured = !!state.settings.ai.configured;
       state.settings.ai = {
         ...state.settings.ai,
@@ -1605,7 +1609,7 @@ function autoTestAiOnStartup() {
     })
     .catch(error => {
       const message = error?.message || 'AI 连接检查失败';
-      if (epoch === aiStartupCheckEpoch && state.settings?.ai) {
+      if (epoch === aiStartupCheckEpoch && aiTestController.isCurrent(requestId) && state.settings?.ai) {
         state.settings.ai.lastTestAt = Date.now();
         state.settings.ai.lastTestOk = false;
         state.settings.ai.lastError = message;
@@ -1613,7 +1617,8 @@ function autoTestAiOnStartup() {
       return { ok: false, error: message };
     })
     .finally(() => {
-      if (epoch !== aiStartupCheckEpoch) return;
+      if (epoch !== aiStartupCheckEpoch || !aiTestController.isCurrent(requestId)) return;
+      aiTestController.finish(requestId);
       aiConnectionChecking = false;
       aiStartupCheckCompleted = true;
       syncAiSettingsUI(state.settings?.ai);
@@ -3290,6 +3295,21 @@ let aiStartupCheckCompleted = false;
 let aiStartupCheckEpoch = 0;
 let aiConnectionChecking = false;
 
+function cancelAiTestRun() {
+  const startupActive = aiConnectionChecking && !aiStartupCheckCompleted && !!aiStartupCheckPromise;
+  const canceled = aiTestController.cancel();
+  if (!canceled && !startupActive) return false;
+  if (startupActive) {
+    aiStartupCheckEpoch += 1;
+    aiStartupCheckPromise = null;
+    aiStartupCheckCompleted = true;
+  }
+  aiConnectionChecking = false;
+  if (aiTest) aiTest.disabled = false;
+  syncAiEntry();
+  return true;
+}
+
 const DEFAULT_TEMPLATES = {
   day: '请生成一份当天工作总结，按工作事项整理，说明完成内容、当前进展和需要关注的问题。语言简洁、事实准确，不要补充原始记录中没有的信息。',
   week: '请生成一份本周工作总结，优先按任务或工作主题归纳，包含本周完成、进行中事项、问题与风险、下一步计划。语言可以润色，但不得遗漏任何原始记录中的事实。',
@@ -3575,11 +3595,20 @@ function setAiSettingsPanel(name) {
 }
 
 aiProvider?.addEventListener('change', () => {
+  cancelAiTestRun();
   const provider = aiProviders?.getProvider(aiProvider.value);
   if (aiBaseUrl && provider) aiBaseUrl.value = provider.defaultBaseUrl || '';
   aiMsg.textContent = '';
   fillAiModelSelect(aiModel, { configured: false, models: [] }, '');
   fillAiModelSelect(aiClosureModel, { configured: false, models: [] }, '');
+});
+
+aiBaseUrl?.addEventListener('input', () => {
+  cancelAiTestRun();
+});
+
+aiKey?.addEventListener('input', () => {
+  cancelAiTestRun();
 });
 
 for (const item of aiNavItems) {
@@ -3930,15 +3959,27 @@ dataRestore.addEventListener('click', async () => {
 
 $('#ai-test').addEventListener('click', async () => {
   const button = $('#ai-test');
+  const requestId = aiTestController.start();
+  aiConnectionChecking = true;
+  syncAiEntry();
   button.disabled = true;
   aiMsg.className = 'set-msg';
   aiMsg.textContent = uiText('正在测试连接并读取模型…');
   const enteredKey = aiKey.dataset.masked === 'true' ? '' : aiKey.value.trim();
-  const res = await window.api.testAi({
-    providerId: aiProvider?.value || 'deepseek',
-    baseUrl: aiBaseUrl?.value.trim() || '',
-    apiKey: enteredKey
-  });
+  let res;
+  try {
+    res = await window.api.testAi({
+      requestId,
+      providerId: aiProvider?.value || 'deepseek',
+      baseUrl: aiBaseUrl?.value.trim() || '',
+      apiKey: enteredKey
+    });
+  } catch (error) {
+    res = { ok: false, error: error?.message || '连接失败' };
+  }
+  if (!aiTestController.isCurrent(requestId)) return;
+  aiTestController.finish(requestId);
+  aiConnectionChecking = false;
   button.disabled = false;
   if (!res.ok) {
     aiMsg.textContent = uiText(res.error || '连接失败');
@@ -4061,6 +4102,7 @@ $('#ai-clear').addEventListener('click', async () => {
     danger: true
   });
   if (!confirmed) return;
+  cancelAiTestRun();
   const res = await window.api.clearAi();
   if (res.ok) {
     aiStartupCheckEpoch += 1;

@@ -147,6 +147,21 @@ test('AI 连接测试不落盘，配置由独立保存动作持久化', () => {
   assert.match(mainSource, /ipcMain\.handle\('ai:save'[\s\S]*saveSettings\(\)/);
 });
 
+test('切换 AI 平台时会取消旧连接测试，避免旧请求阻塞新测试', () => {
+  const testStart = mainSource.indexOf("ipcMain.handle('ai:test'");
+  const testEnd = mainSource.indexOf("ipcMain.handle('ai:save'", testStart);
+  const testHandler = mainSource.slice(testStart, testEnd === -1 ? mainSource.length : testEnd);
+
+  assert.match(mainSource, /const aiTestRequests = new Map\(\)/);
+  assert.match(mainSource, /previous\?\.controller\.abort\(\)/);
+  assert.match(mainSource, /ipcMain\.on\('ai:test:cancel'/);
+  assert.match(testHandler, /fetchAvailableModels\(key, connection, request\.controller\.signal\)/);
+  assert.match(testHandler, /request\.controller\.signal\.aborted/);
+  assert.match(appSource, /const requestId = aiTestController\.start\(\)/);
+  assert.match(appSource, /if \(!aiTestController\.isCurrent\(requestId\)\) return/);
+  assert.match(appSource, /aiProvider\?\.addEventListener\('change',[\s\S]*cancelAiTestRun\(\)/);
+});
+
 test('快速记录条按唤起代次隔离退出事件，避免托盘重呼出后被旧回调隐藏', () => {
   const hideStart = mainSource.indexOf("ipcMain.on('quick:hide'");
   const hideEnd = mainSource.indexOf("ipcMain.on('window:minimize'", hideStart);
