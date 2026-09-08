@@ -33,3 +33,9 @@ test('AI 设置入口在宽而矮的窗口中不会被纵向 flex 压缩', () =>
 test('AI 设置入口在所有窗口尺寸共用同一条页面跳转逻辑', () => {
   assert.match(appSource, /#btn-ai-settings'\)\.addEventListener\('click',[\s\S]*showView\('ai-settings'\)/);
 });
+
+test('进入设置页隐藏无作用的顶栏设置按钮，返回主界面后恢复', () => {
+  assert.match(appSource, /const btnSettings = \$\('#btn-settings'\);/);
+  assert.match(appSource, /btnSettings\.hidden = name === 'settings' \|\| name === 'ai-settings';/);
+  assert.match(appSource, /btnSettings\.addEventListener\('click',[\s\S]*showView\('settings'\)/);
+});
