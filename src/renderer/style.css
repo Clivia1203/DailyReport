@@ -1684,6 +1684,18 @@ body.textarea-resizing * { cursor: nwse-resize !important; user-select: none !im
 .report-period select, .report-period .custom-select { min-width: 92px; }
 .report-dates { color: var(--text-3); }
 .report-dates[hidden] { display:none; }
+.report-jump {
+  display:flex; align-items:center; gap:7px; height:32px; padding:0 9px;
+  border:1px solid var(--border); border-radius:9px; background:var(--input-bg); color:var(--text-2);
+  transition: border-color .16s ease, background .16s ease, box-shadow .16s ease;
+}
+.report-jump:hover { border-color:var(--border-strong); }
+.report-jump:focus-within { border-color:var(--accent); box-shadow:0 0 0 3px color-mix(in srgb, var(--accent) 14%, transparent); }
+.report-jump svg { width:15px; height:15px; flex:none; }
+.report-jump input { width:116px; min-width:0; height:30px; padding:0; border:0; border-radius:0; outline:none; background:transparent; color:var(--text); }
+.report-jump input:disabled { opacity:.62; cursor:not-allowed; }
+.report-jump input::-webkit-calendar-picker-indicator { cursor:pointer; opacity:.72; }
+.report-jump[hidden] { display:none; }
 .report-actions { display:flex; align-items:center; justify-content:flex-end; gap:10px; margin-left:auto; max-width:100%; flex-wrap:wrap; }
 .report-actions .custom-select { flex: none; }
 .small-icon { width:32px; height:32px; font-size:16px; }

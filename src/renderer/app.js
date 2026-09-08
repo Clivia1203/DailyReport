@@ -659,6 +659,8 @@ $('#btn-export').addEventListener('click', async () => {
 const reportType = $('#report-type');
 const reportPrev = $('#report-prev');
 const reportNext = $('#report-next');
+const reportJump = $('#report-jump');
+const reportAnchor = $('#report-anchor');
 const reportStart = $('#report-start');
 const reportEnd = $('#report-end');
 const reportDates = $('#report-dates');
@@ -728,6 +730,14 @@ function periodBounds(type, anchor = Date.now()) {
   const sunday = new Date(monday);
   sunday.setDate(sunday.getDate() + 6);
   return { start: dateStringFromDate(monday), end: dateStringFromDate(sunday), label: `${dateStringFromDate(monday)} 至 ${dateStringFromDate(sunday)}` };
+}
+
+function reportPeriodForAnchor(value) {
+  if (!value) return null;
+  const date = localDateFromString(value);
+  if (Number.isNaN(date.getTime())) return null;
+  const bounds = periodBounds(state.report.type, localDateFromString(value).getTime());
+  return { type: state.report.type, start: bounds.start, end: bounds.end };
 }
 
 function reportPeriodLabel() {
@@ -855,6 +865,11 @@ function syncReportControls() {
   reportNext.title = uiText(nextPeriodBlocked ? '未来空周期没有日报记录，无法查看。' : '下一周期');
   reportNext.setAttribute('aria-label', reportNext.title);
   reportGenerate.disabled = busy;
+  reportJump.hidden = state.report.type === 'custom';
+  reportAnchor.disabled = editing || state.report.type === 'custom';
+  reportAnchor.title = uiText('跳转日期');
+  reportAnchor.setAttribute('aria-label', reportAnchor.title);
+  if (state.report.type !== 'custom') reportAnchor.value = state.report.start || '';
   syncCustomSelect(reportType);
   reportGenerate.textContent = uiText(busy
     ? (job.status === 'queued' ? '排队中…' : '生成中…')
@@ -1549,6 +1564,21 @@ $('#btn-report').addEventListener('click', openReportView);
 reportType.addEventListener('change', () => {
   if (state.report.editing) return;
   setReportPeriod(reportType.value);
+  reloadReportContent();
+});
+reportAnchor.addEventListener('change', () => {
+  if (state.report.editing || reportType.value === 'custom') return;
+  const bounds = reportPeriodForAnchor(reportAnchor.value);
+  if (!bounds) {
+    reportAnchor.value = state.report.start || '';
+    return;
+  }
+  if (!canViewReportPeriod(bounds)) {
+    reportAnchor.value = state.report.start || '';
+    toast(uiText('未来空周期没有日报记录，无法查看。'));
+    return;
+  }
+  setReportPeriod(bounds.type, bounds.start, bounds.end);
   reloadReportContent();
 });
 reportStart.addEventListener('change', () => {
