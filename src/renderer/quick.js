@@ -2,7 +2,41 @@ const input = document.getElementById('quick-input');
 const status = document.getElementById('quick-status');
 const dt = document.getElementById('quick-dt');
 
+const QUICK_WINDOW_BASE_HEIGHT = 176;
+const QUICK_INPUT_MAX_HEIGHT = 160;
+let quickInputBaseHeight = 0;
+
+function syncQuickInputLayout() {
+  if (!input?.style) return;
+
+  input.style.height = 'auto';
+  const naturalHeight = Math.max(input.scrollHeight || 0, 30);
+  if (!quickInputBaseHeight || !input.value) quickInputBaseHeight = naturalHeight;
+
+  const nextHeight = Math.min(naturalHeight, QUICK_INPUT_MAX_HEIGHT);
+  input.style.height = `${nextHeight}px`;
+  input.style.overflowY = naturalHeight > QUICK_INPUT_MAX_HEIGHT ? 'auto' : 'hidden';
+
+  const targetWindowHeight = QUICK_WINDOW_BASE_HEIGHT + Math.max(0, nextHeight - quickInputBaseHeight);
+  window.api.resizeQuick?.(targetWindowHeight);
+}
+
 const uiText = value => window.DRI18n?.t ? window.DRI18n.t(String(value ?? '')) : String(value ?? '');
+
+let localeSyncSerial = 0;
+
+async function syncLocale(locale) {
+  if (!locale || !window.DRI18n) return;
+  const serial = ++localeSyncSerial;
+  try {
+    await window.DRI18n.setLocale(locale);
+  } catch {
+    // 语言包读取失败时保留当前快速记录条，不中断记录输入。
+  }
+  if (serial === localeSyncSerial) renderNow();
+}
+
+input.addEventListener('input', syncQuickInputLayout);
 
 /* 主题跟随主窗口（主进程下发） */
 const applyTheme = t => {
@@ -20,10 +54,15 @@ const applyTheme = t => {
 window.api.getTheme().then(applyTheme);
 window.api.onThemeChanged(applyTheme);
 window.api.onLocaleChanged?.(locale => {
-  if (!locale || !window.DRI18n) return;
-  window.DRI18n.setLocale(locale).catch(() => {
-    // 语言包读取失败时保留当前快速记录条，不中断记录输入。
-  }).finally(renderNow);
+  syncLocale(locale);
+});
+
+// 语言广播可能发生在快速记录条脚本注册监听器之前（首次启动或小窗重建），
+// 因此启动时主动向主进程读取一次当前语言，避免沿用旧的 localStorage 缓存。
+window.api.getLocale?.().then(locale => {
+  if (localeSyncSerial === 0) syncLocale(locale);
+}).catch(() => {
+  // 主进程读取失败时保留当前快速记录条，不中断记录输入。
 });
 
 const pad = n => String(n).padStart(2, '0');
@@ -91,6 +130,7 @@ async function commit() {
   await window.api.add(text, Date.now());
   if (session !== quickSession) return;
   input.value = '';
+  syncQuickInputLayout();
   status.classList.add('show');
   commitHideTimer = setTimeout(() => {
     commitHideTimer = null;
@@ -120,6 +160,7 @@ window.api.onQuickReset(generation => {
   void bar.offsetWidth;
   bar.classList.add('in');
   input.value = '';
+  syncQuickInputLayout();
   status.classList.remove('show');
   renderNow();
   input.focus();
@@ -130,4 +171,5 @@ window.api.onQuickReset(generation => {
 });
 
 renderNow();
+syncQuickInputLayout();
 setInterval(renderNow, 15000);

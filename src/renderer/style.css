@@ -258,6 +258,55 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
+/* ---------- 文本选择边界 ----------
+   操作层不产生无意义的拖选；正文和输入内容保留复制能力。 */
+button,
+select,
+label,
+[role="button"],
+[role="tab"],
+[role="switch"],
+[role="separator"],
+.custom-select,
+.custom-select *,
+.topbar,
+.topbar *,
+.main-titlebar,
+.main-titlebar *,
+.stats-strip,
+.stats-strip *,
+.activity-chart,
+.activity-chart *,
+.settings-head,
+.settings-head *,
+.filter-popover-head,
+.filter-popover-head *,
+.filter-popover-note,
+.report-thinking-head,
+.report-thinking-head *,
+.report-thinking-note,
+.set-info,
+.set-sub:not(.path),
+.f-count,
+.empty,
+.ui-no-select,
+.ui-no-select * {
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+input,
+textarea,
+[contenteditable="true"],
+.entry-text,
+.report-content,
+.report-source-entry,
+.report-thinking-content,
+.set-sub.path {
+  -webkit-user-select: text;
+  user-select: text;
+}
+
 [hidden] { display: none !important; }
 
 .app { height: 100vh; display: flex; flex-direction: column; }
@@ -267,7 +316,7 @@ body {
 .topbar {
   display: flex; align-items: center; justify-content: space-between;
   min-height: 52px;
-  padding: 8px 152px 8px 28px; /* 右侧为原生窗口控制按钮留位 */
+  padding: 8px 12px 8px 28px;
   -webkit-app-region: drag;
 }
 
@@ -289,7 +338,58 @@ body {
   font-family: Consolas, "Courier New", monospace;
 }
 
-.topbar-actions { display: flex; gap: 8px; -webkit-app-region: no-drag; }
+.topbar-actions {
+  display: flex; align-items: center; gap: 8px;
+  -webkit-app-region: no-drag;
+}
+
+/* 自绘窗口控制区：只有这里和其他按钮可以点击，周围仍然是拖拽区。 */
+.window-controls {
+  display: flex; align-items: stretch;
+  height: 40px;
+  margin: -2px -12px -2px 0;
+  -webkit-app-region: no-drag;
+}
+
+.window-control {
+  width: 46px; height: 40px;
+  display: grid; place-items: center;
+  border: 0; border-radius: 0;
+  background: transparent; color: var(--text-2);
+  cursor: pointer;
+  transition: background-color .15s ease, color .15s ease;
+  -webkit-app-region: no-drag;
+}
+
+.window-control:hover {
+  background: var(--input-bg);
+  color: var(--text);
+}
+
+.window-control:active { filter: brightness(.94); }
+
+.window-control:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -4px;
+}
+
+.window-control.close:hover {
+  background: var(--danger);
+  color: var(--danger-text);
+}
+
+.window-control svg {
+  width: 16px; height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.35;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.window-control-icon.restore { display: none; }
+.window-control.is-maximized .window-control-icon.maximize { display: none; }
+.window-control.is-maximized .window-control-icon.restore { display: block; }
 
 /* ---------- 基础控件：按钮 ---------- */
 
@@ -599,7 +699,9 @@ body.textarea-resizing * { cursor: nwse-resize !important; user-select: none !im
   background: transparent;
   font: inherit; font-size: 15px; line-height: 1.6;
   color: var(--text);
-  min-height: 52px; max-height: 240px;
+  height: 132px; min-height: 132px; max-height: 132px;
+  overflow-y: auto;
+  scrollbar-width: thin;
 }
 .composer textarea::placeholder { color: var(--text-3); }
 
@@ -755,6 +857,7 @@ body.textarea-resizing * { cursor: nwse-resize !important; user-select: none !im
   display: flex; align-items: baseline; gap: 10px;
   padding: 4px 4px 8px;
   background: linear-gradient(var(--bg) 82%, transparent);
+  user-select: none;
 }
 
 .day-date { font-size: 13.5px; font-weight: 700; }
@@ -840,7 +943,7 @@ body.textarea-resizing * { cursor: nwse-resize !important; user-select: none !im
   padding: 2px 2px 20px;
 }
 
-.settings-ai-entry { padding:0; overflow:hidden; }
+.settings-ai-entry { flex:0 0 auto; padding:0; overflow:hidden; }
 .settings-entry-button {
   width:100%; min-height:72px; padding:14px 18px;
   display:flex; align-items:center; justify-content:space-between; gap:16px;
@@ -858,7 +961,6 @@ body.textarea-resizing * { cursor: nwse-resize !important; user-select: none !im
 @media (max-width: 1199px) {
   #view-settings .settings-ai-entry {
     display: block;
-    flex: 0 0 auto;
     background: var(--card);
   }
 
@@ -920,6 +1022,7 @@ body.textarea-resizing * { cursor: nwse-resize !important; user-select: none !im
   font-size: 11.5px; font-weight: 650; letter-spacing: .05em;
   color: var(--text-3);
   padding: 14px 0 2px;
+  user-select: none;
 }
 
 .set-row {
@@ -935,9 +1038,16 @@ body.textarea-resizing * { cursor: nwse-resize !important; user-select: none !im
 .set-sub { font-size: 12px; color: var(--text-3); margin-top: 3px; line-height: 1.55; }
 
 .set-sub.path {
+  -webkit-user-select: text;
+  user-select: text;
   word-break: break-all;
   font-family: Consolas, "Courier New", monospace;
   font-size: 11px;
+}
+
+.set-info .set-sub.path {
+  -webkit-user-select: text;
+  user-select: text;
 }
 
 .hk-area { display: flex; align-items: center; justify-content: flex-end; gap: 10px; flex: 0 1 auto; max-width: 100%; flex-wrap: wrap; }
@@ -965,6 +1075,18 @@ body.textarea-resizing * { cursor: nwse-resize !important; user-select: none !im
 .data-actions { display:flex; align-items:center; justify-content:flex-end; gap:8px; flex:0 1 auto; max-width:100%; flex-wrap:wrap; }
 .data-actions-row { align-items:flex-start; }
 .data-actions-row + .set-msg { padding-top:4px; }
+
+.about-card { flex:none; }
+.about-body { display:flex; align-items:center; gap:14px; padding:10px 0 14px; }
+.about-icon {
+  width:56px; height:56px; flex:none; object-fit:contain; border-radius:14px;
+  -webkit-user-select:none; user-select:none; -webkit-user-drag:none;
+}
+.about-copy { min-width:0; flex:1 1 auto; }
+.about-name { font-size:15px; font-weight:700; line-height:1.35; }
+.about-version { display:flex; flex:none; flex-direction:column; align-items:flex-end; gap:2px; }
+.about-version-label { color:var(--text-3); font-size:11px; }
+.about-version-value { color:var(--text-2); font:12px/1.35 Consolas, "Courier New", monospace; }
 
 /* 分段选择器 */
 .segmented {
@@ -1391,7 +1513,8 @@ body.textarea-resizing * { cursor: nwse-resize !important; user-select: none !im
     display: flex; align-items: baseline; justify-content: space-between;
     padding: 12px 16px;
   }
-  .stat-value { font-size: 22px; }
+  .stat-value { flex: 1 1 auto; font-size: 22px; text-align: center; }
+  .stat-label { flex: none; text-align: right; }
 }
 
 /* ---------- 小窗口紧凑工作概览 ---------- */

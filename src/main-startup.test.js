@@ -27,6 +27,12 @@ test('语言包从固定外部文件读取，切换语言不重载渲染页面',
   assert.doesNotMatch(fs.readFileSync(path.join(__dirname, 'renderer', 'quick.js'), 'utf8'), /window\.location\.reload\(\)/);
 });
 
+test('关于页版本信息由主进程提供运行时版本', () => {
+  assert.match(mainSource, /ipcMain\.handle\('app:info',[\s\S]*app\.getName\(\)[\s\S]*app\.getVersion\(\)/);
+  assert.match(preloadSource, /getAppInfo:\s*\(\)\s*=>\s*ipcRenderer\.invoke\('app:info'/);
+  assert.match(appSource, /aboutVersion/);
+});
+
 test('术语编辑示例使用通用占位内容，不暴露具体项目实例', () => {
   const userSpecificExamples = /DP310-X2|步进驱动器|模切飞线问题|双轴、两轴/;
   assert.match(indexSource, /项目编号或产品名称/);
@@ -142,7 +148,7 @@ test('AI 连接测试不落盘，配置由独立保存动作持久化', () => {
 
 test('快速记录条按唤起代次隔离退出事件，避免托盘重呼出后被旧回调隐藏', () => {
   const hideStart = mainSource.indexOf("ipcMain.on('quick:hide'");
-  const hideEnd = mainSource.indexOf("ipcMain.on('window:modal-cover'", hideStart);
+  const hideEnd = mainSource.indexOf("ipcMain.on('window:minimize'", hideStart);
   const hideHandler = mainSource.slice(hideStart, hideEnd === -1 ? mainSource.length : hideEnd);
   const showStart = mainSource.indexOf('function showQuick(');
   const showEnd = mainSource.indexOf('// 系统缩放/分辨率变化', showStart);

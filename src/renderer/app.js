@@ -171,6 +171,34 @@ function toast(msg, action) {
 }
 function hideToast() { $('#toast').classList.remove('show'); }
 
+/* ---------- 自绘窗口标题栏 ---------- */
+
+const windowControls = window.api.windowControls;
+const appTopbar = $('#app-topbar');
+const windowMinimize = $('#window-minimize');
+const windowMaximize = $('#window-maximize');
+const windowClose = $('#window-close');
+
+function renderWindowState(next = {}) {
+  const maximized = Boolean(next.maximized);
+  if (!windowMaximize) return;
+  windowMaximize.classList.toggle('is-maximized', maximized);
+  windowMaximize.setAttribute('aria-pressed', String(maximized));
+  const label = uiText(maximized ? '还原' : '最大化');
+  windowMaximize.setAttribute('title', label);
+  windowMaximize.setAttribute('aria-label', label);
+}
+
+windowMinimize?.addEventListener('click', () => windowControls?.minimize());
+windowMaximize?.addEventListener('click', () => windowControls?.toggleMaximize());
+windowClose?.addEventListener('click', () => windowControls?.close());
+appTopbar?.addEventListener('dblclick', event => {
+  if (event.target.closest?.('.topbar-actions')) return;
+  windowControls?.toggleMaximize();
+});
+windowControls?.onStateChanged?.(renderWindowState);
+Promise.resolve(windowControls?.getState?.()).then(renderWindowState).catch(() => {});
+
 /* ---------- 视图切换 ---------- */
 
 const viewMain = $('#view-main');
@@ -195,6 +223,13 @@ $('#btn-ai-settings').addEventListener('click', () => {
 $('#btn-ai-settings-back').addEventListener('click', () => showView('settings'));
 $('#btn-report-back').addEventListener('click', () => showView('main'));
 window.api.onNavigate(v => showView(v));
+
+const aboutVersion = $('#about-version');
+Promise.resolve(window.api.getAppInfo?.()).then(info => {
+  if (info?.version && aboutVersion) aboutVersion.textContent = `v${info.version}`;
+}).catch(() => {
+  // 版本信息读取失败时保留 HTML 中的安全回退值，不影响设置页使用。
+});
 
 /* ---------- 主题 ---------- */
 
@@ -327,11 +362,6 @@ setInterval(recalibrate, 30000);
 document.addEventListener('visibilitychange', () => { if (!document.hidden) recalibrate(); });
 window.addEventListener('focus', recalibrate);
 
-function growTextarea(el) {
-  el.style.height = 'auto';
-  el.style.height = Math.min(el.scrollHeight, 240) + 'px';
-}
-
 function syncTextareaResizerVisibility(textarea) {
   const shell = textarea?.parentElement?.classList.contains('textarea-resize-shell')
     ? textarea.parentElement
@@ -402,8 +432,6 @@ function installTextareaResizer(textarea) {
   return shell;
 }
 
-composerText.addEventListener('input', () => growTextarea(composerText));
-
 composerText.addEventListener('keydown', e => {
   if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) saveComposer();
   if (e.key === 'Escape') setComposerOpen(false);
@@ -418,7 +446,6 @@ const btnComposer = $('#btn-composer');
 
 function setComposerOpen(open) {
   composerModal.hidden = !open;
-  syncModalCover();
   if (open) {
     composerText.focus();
     tsTouched = false;      // 打开时校准时间，避免久置后带旧时刻
@@ -453,7 +480,6 @@ async function saveComposer() {
   const res = await window.api.add(text, ts);
   if (res.ok) {
     composerText.value = '';
-    growTextarea(composerText);
     tsTouched = false;
     syncComposerTime();
     setComposerOpen(false);   // 保存后收起（宽屏下 CSS 强制常驻，不受影响）
@@ -490,7 +516,6 @@ function closeFilterNameModal(value = null) {
   const resolve = filterNameResolver;
   filterNameResolver = null;
   filterNameModal.hidden = true;
-  syncModalCover();
   if (resolve) resolve(value);
 }
 
@@ -510,7 +535,6 @@ function askFilterName(defaultName) {
     filterNameInput.value = defaultName;
     filterNameMsg.textContent = '';
     filterNameModal.hidden = false;
-    syncModalCover();
     requestAnimationFrame(() => {
       filterNameInput.focus();
       filterNameInput.select();
@@ -523,7 +547,6 @@ function closeConfirmModal(value = false) {
   confirmResolver = null;
   confirmModal.hidden = true;
   confirmOk.classList.remove('confirm-danger');
-  syncModalCover();
   if (resolve) resolve(value);
 }
 
@@ -543,7 +566,6 @@ function askConfirmation(message, options = {}) {
     confirmCancel.textContent = uiText(cancelLabel);
     confirmOk.classList.toggle('confirm-danger', danger);
     confirmModal.hidden = false;
-    syncModalCover();
     requestAnimationFrame(() => confirmOk.focus());
   });
 }
@@ -576,20 +598,11 @@ document.addEventListener('keydown', event => {
 function openExportModal() {
   closeMoreMenu();
   exportModal.hidden = false;
-  syncModalCover();
   renderExportPreview();
 }
 
 function closeExportModal() {
   exportModal.hidden = true;
-  syncModalCover();
-}
-
-// 任一模窗打开时，请主进程把标题栏控制按钮区染成遮罩色（视觉遮盖）
-function syncModalCover() {
-  window.api.setModalCover(
-    !composerModal.hidden || !exportModal.hidden || !closureModal.hidden || !filterNameModal.hidden || !confirmModal.hidden
-  );
 }
 
 $('#btn-export-open').addEventListener('click', openExportModal);
@@ -2410,12 +2423,10 @@ function openClosureModal() {
   if (!state.workbench.closure.data) return;
   renderClosureModal();
   closureModal.hidden = false;
-  syncModalCover();
 }
 
 function closeClosureModal() {
   closureModal.hidden = true;
-  syncModalCover();
 }
 
 function confirmClosureSuggestion(suggestion) {
