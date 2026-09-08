@@ -94,6 +94,43 @@ test('术语已确认后旧闭环缓存不再重复返回同一待确认关联',
   assert.notEqual(filtered, summary);
 });
 
+test('明确不是同一事项的叫法不会再次显示为待确认关联', () => {
+  const summary = {
+    needs_confirmation: [
+      {
+        alias: '风格现场问题',
+        canonical_name: '铭工现场售前问题',
+        reason: '上下文可能相关，但尚未确认',
+        recent_refs: ['N002']
+      },
+      {
+        alias: '另一个叫法',
+        canonical_name: '另一个术语',
+        reason: '仍待确认',
+        recent_refs: ['N001']
+      }
+    ]
+  };
+  const filtered = filterResolvedClosureSuggestions(summary, [], [
+    { canonicalName: '铭工现场售前问题', alias: '风格现场问题' }
+  ]);
+
+  assert.equal(filtered.needs_confirmation.length, 1);
+  assert.equal(filtered.needs_confirmation[0].alias, '另一个叫法');
+});
+
+test('闭环提示词会告诉 AI 已明确排除的叫法关系', () => {
+  const prompt = buildClosurePrompt({
+    start: '2026-08-31',
+    end: '2026-09-06',
+    recentSources: closureSourceBundle([entries[1]], 'N'),
+    historicalSources: closureSourceBundle([entries[0]], 'H'),
+    terminologyExclusions: [{ canonicalName: '铭工现场售前问题', alias: '风格现场问题' }]
+  });
+  assert.match(prompt, /铭工现场售前问题/);
+  assert.match(prompt, /风格现场问题/);
+});
+
 test('分批结果会合并同一闭环的证据并保留高置信度', () => {
   const merged = mergeClosureResults([
     { completed_items: [{ title: 'DP310-X2 双轴测试已完成', summary: '完成阶段一', confidence: 'medium', before_refs: ['H001'], recent_refs: ['N001'] }] },

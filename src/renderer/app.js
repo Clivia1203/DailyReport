@@ -2406,13 +2406,16 @@ function appendClosureSuggestions(parent, data, compact = true, withHeading = tr
     copy.appendChild(wbNode('div', 'wb-closure-suggestion-title', `${suggestion.alias} 可能对应 ${suggestion.canonical_name}`));
     copy.appendChild(wbNode('div', 'wb-closure-suggestion-reason', suggestion.reason));
     const actions = wbNode('div', 'wb-closure-suggestion-actions');
-    const confirm = wbNode('button', 'link-btn', uiText('确认并记住'));
+    const confirm = wbNode('button', 'link-btn', uiText('是'));
     confirm.type = 'button';
     confirm.addEventListener('click', () => confirmClosureSuggestion(suggestion));
-    const dismiss = wbNode('button', 'link-btn', uiText('暂不处理'));
+    const reject = wbNode('button', 'link-btn', uiText('不是'));
+    reject.type = 'button';
+    reject.addEventListener('click', () => rejectClosureSuggestion(suggestion));
+    const dismiss = wbNode('button', 'link-btn', uiText('不处理'));
     dismiss.type = 'button';
     dismiss.addEventListener('click', () => dismissClosureSuggestion(suggestion));
-    actions.append(confirm, dismiss);
+    actions.append(confirm, reject, dismiss);
     box.append(copy, actions);
     section.appendChild(box);
   }
@@ -2675,6 +2678,15 @@ function closeClosureModal() {
   closureModal.hidden = true;
 }
 
+function removeClosureSuggestion(suggestion) {
+  if (!state.workbench.closure.data) return;
+  state.workbench.closure.data = {
+    ...state.workbench.closure.data,
+    needs_confirmation: (state.workbench.closure.data.needs_confirmation || [])
+      .filter(item => closureSuggestionKey(item) !== closureSuggestionKey(suggestion))
+  };
+}
+
 function confirmClosureSuggestion(suggestion) {
   return (async () => {
     const term = (state.settings?.terminology || []).find(item => item.canonicalName === suggestion.canonical_name);
@@ -2686,21 +2698,34 @@ function confirmClosureSuggestion(suggestion) {
     if (!res.ok) { toast(uiText(res.error || '术语别名保存失败')); return; }
     if (state.settings) {
       state.settings.terminology = res.terminology || [];
+      state.settings.terminologyExclusions = res.terminologyExclusions || state.settings.terminologyExclusions || [];
       if (state.settings.terminologyDiscovery) state.settings.terminologyDiscovery.termCount = state.settings.terminology.length;
     }
-    if (state.workbench.closure.data) {
-      state.workbench.closure.data = {
-        ...state.workbench.closure.data,
-        needs_confirmation: (state.workbench.closure.data.needs_confirmation || [])
-          .filter(item => closureSuggestionKey(item) !== closureSuggestionKey(suggestion))
-      };
-    }
+    removeClosureSuggestion(suggestion);
     state.workbench.closure.cacheStatus = 'terminology-changed';
     state.workbench.closure.dismissedSuggestions.delete(closureSuggestionKey(suggestion));
     renderTerminologyUI();
     if (!closureModal.hidden) renderClosureModal();
     renderWeeklyWorkbench();
     toast(uiText(`已记住：${suggestion.alias} → ${suggestion.canonical_name}`));
+  })();
+}
+
+function rejectClosureSuggestion(suggestion) {
+  return (async () => {
+    const res = await window.api.addTerminologyExclusion(
+      suggestion.canonical_name,
+      suggestion.alias
+    );
+    if (!res.ok) { toast(uiText(res.error || '叫法排除保存失败')); return; }
+    if (state.settings) state.settings.terminologyExclusions = res.terminologyExclusions || [];
+    removeClosureSuggestion(suggestion);
+    state.workbench.closure.cacheStatus = 'terminology-changed';
+    state.workbench.closure.dismissedSuggestions.delete(closureSuggestionKey(suggestion));
+    renderTerminologyUI();
+    if (!closureModal.hidden) renderClosureModal();
+    renderWeeklyWorkbench();
+    toast(uiText('已记住不是同一事项'));
   })();
 }
 

@@ -85,6 +85,14 @@ test('待确认叫法只在术语规范设置中展示，主画面不阻塞使�
   assert.doesNotMatch(appSource, /appendClosureSuggestions\(closureModalContent, data, false\)/);
 });
 
+test('待确认叫法提供是、不是、不处理三种语义明确的选择', () => {
+  assert.match(appSource, /uiText\('是'\)/);
+  assert.match(appSource, /uiText\('不是'\)/);
+  assert.match(appSource, /uiText\('不处理'\)/);
+  assert.match(appSource, /window\.api\.addTerminologyExclusion\(/);
+  assert.match(appSource, /function dismissClosureSuggestion\(/);
+});
+
 test('AI 工作过程标题、状态和操作按钮各有稳定区域，长状态不会挤掉按钮', () => {
   assert.match(htmlSource, /report-thinking-head[\s\S]*report-thinking-title[\s\S]*report-thinking-status[\s\S]*report-thinking-toggle/);
   assert.match(appSource, /const title = wbNode\('span', 'report-thinking-title'/);

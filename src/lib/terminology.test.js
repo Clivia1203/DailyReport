@@ -5,7 +5,10 @@ const {
   normalizeTerminology,
   upsertTerminology,
   addTerminologyAlias,
-  findTerminologyCandidates
+  findTerminologyCandidates,
+  normalizeTerminologyExclusions,
+  addTerminologyExclusion,
+  removeTerminologyExclusion
 } = require('./terminology');
 
 test('术语规范会统一空白、别名并保留输出名称', () => {
@@ -53,4 +56,22 @@ test('术语查找支持规范名称和别名，并尊重范围', () => {
   assert.equal(findTerminologyCandidates(terms, '两轴', '模切设备').length, 0);
   assert.equal(findTerminologyCandidates(terms, '双轴', '模切设备')[0].canonicalName, 'DP310-X2');
   assert.equal(findTerminologyCandidates(terms, '双轴').length, 2);
+});
+
+test('术语排除关系会规范化、去重，并支持被正向确认后移除', () => {
+  let exclusions = normalizeTerminologyExclusions([
+    { canonicalName: ' 铭工现场售前问题 ', alias: '风格现场问题' },
+    { canonical_name: '铭工现场售前问题', alias: '风格现场问题' },
+    { canonicalName: '另一个事项', alias: '另一个叫法' }
+  ]);
+  assert.deepEqual(exclusions, [
+    { canonicalName: '铭工现场售前问题', alias: '风格现场问题' },
+    { canonicalName: '另一个事项', alias: '另一个叫法' }
+  ]);
+  exclusions = addTerminologyExclusion(exclusions, '铭工现场售前问题', '风格现场问题');
+  assert.equal(exclusions.length, 2);
+  exclusions = removeTerminologyExclusion(exclusions, '铭工现场问题', '风格现场问题');
+  assert.equal(exclusions.length, 2);
+  exclusions = removeTerminologyExclusion(exclusions, '铭工现场售前问题', '风格现场问题');
+  assert.deepEqual(exclusions, [{ canonicalName: '另一个事项', alias: '另一个叫法' }]);
 });

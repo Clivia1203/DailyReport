@@ -93,12 +93,28 @@ function terminologyPrompt(terms, locale = 'zh-CN') {
   }).join('\n');
 }
 
+function terminologyExclusionsPrompt(exclusions, locale = 'zh-CN') {
+  const rules = closurePromptRules(locale);
+  const seen = new Set();
+  const lines = [];
+  for (const item of Array.isArray(exclusions) ? exclusions : []) {
+    const canonicalName = cleanText(item?.canonicalName || item?.canonical_name, 120);
+    const alias = cleanText(item?.alias || item?.candidate_alias || item?.candidateAlias, 120);
+    const pairKey = `${key(canonicalName)}|${key(alias)}`;
+    if (!canonicalName || !alias || !key(canonicalName) || !key(alias) || seen.has(pairKey)) continue;
+    seen.add(pairKey);
+    lines.push(`${alias} ≠ ${canonicalName}`);
+  }
+  return lines.length ? lines.join('\n') : rules.noExclusions;
+}
+
 function buildClosurePrompt({
   start,
   end,
   recentSources = [],
   historicalSources = [],
   terminology = [],
+  terminologyExclusions = [],
   customPrompt,
   segmentIndex = 0,
   segmentCount = 1,
@@ -141,6 +157,8 @@ function buildClosurePrompt({
     '',
     rules.terminology,
     terminologyPrompt(terminology, locale),
+    rules.exclusions,
+    terminologyExclusionsPrompt(terminologyExclusions, locale),
     '',
     rules.recentRecords,
     recentText,
@@ -228,7 +246,7 @@ function normalizeClosureResult(raw = {}) {
   return { completed_items: items, recent_explicit_completions: direct, needs_confirmation: needsConfirmation };
 }
 
-function filterResolvedClosureSuggestions(summary, terminology = []) {
+function filterResolvedClosureSuggestions(summary, terminology = [], terminologyExclusions = []) {
   if (!summary) return null;
 
   const resolved = new Set();
@@ -241,12 +259,19 @@ function filterResolvedClosureSuggestions(summary, terminology = []) {
     }
   }
 
+  const excluded = new Set();
+  for (const item of Array.isArray(terminologyExclusions) ? terminologyExclusions : []) {
+    const canonical = key(item?.canonicalName || item?.canonical_name);
+    const alias = key(item?.alias || item?.candidate_alias || item?.candidateAlias);
+    if (canonical && alias) excluded.add(`${canonical}|${alias}`);
+  }
+
   const suggestions = Array.isArray(summary.needs_confirmation) ? summary.needs_confirmation : [];
   return {
     ...summary,
     needs_confirmation: suggestions.filter(item => {
       const suggestionKey = `${key(item?.canonical_name || item?.canonicalName)}|${key(item?.alias)}`;
-      return !resolved.has(suggestionKey);
+      return !resolved.has(suggestionKey) && !excluded.has(suggestionKey);
     })
   };
 }
@@ -316,11 +341,11 @@ function mergeClosureResults(results) {
   };
 }
 
-function closureInputHash(recentSources, historicalSources, terminology = []) {
+function closureInputHash(recentSources, historicalSources, terminology = [], terminologyExclusions = []) {
   const sourceText = [...(recentSources || []), ...(historicalSources || [])]
     .map(source => `${source.id}|${source.date}|${source.time}|${source.text}`)
     .join('\n');
-  const termsText = JSON.stringify(terminology || []);
+  const termsText = JSON.stringify({ terminology: terminology || [], terminologyExclusions: terminologyExclusions || [] });
   return crypto.createHash('sha256').update(`${sourceText}\n--TERMS--\n${termsText}`).digest('hex');
 }
 

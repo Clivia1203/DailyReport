@@ -64,6 +64,8 @@
     "facts4": "4. Give only a brief basis for the judgment; do not output detailed internal reasoning.",
     "terminology": "Terminology rules:",
     "noTerminology": "(The user has not configured terminology rules; use context, but do not force permanent aliases.)",
+    "exclusions": "Pairs explicitly marked as different matters (do not merge them or return them in needs_confirmation):",
+    "noExclusions": "(No terminology relationships have been explicitly excluded.)",
     "recentRecords": "Current-period entries (all must participate in the judgment):",
     "historicalRecords": "Historical entries (this batch):",
     "returnJson": "Return valid JSON only. Do not use Markdown fences or add explanations outside the JSON. Use this format:",

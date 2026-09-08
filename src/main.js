@@ -63,7 +63,10 @@ const {
 } = require('./lib/backup');
 const {
   normalizeTerminology,
-  addTerminologyAlias
+  addTerminologyAlias,
+  normalizeTerminologyExclusions,
+  addTerminologyExclusion,
+  removeTerminologyExclusion
 } = require('./lib/terminology');
 const {
   attachReportThinking,
@@ -210,6 +213,7 @@ const DEFAULT_SETTINGS = {
   closurePrompt: DEFAULT_CLOSURE_PROMPT,
   terminologyDiscoveryPrompt: DEFAULT_TERMINOLOGY_DISCOVERY_PROMPT,
   terminology: [],
+  terminologyExclusions: [],
   terminologyDiscovery: {
     initialized: false,
     lastRunAt: 0,
@@ -230,6 +234,7 @@ let settings = {
   promptOverrides: createPromptOverrides(),
   reportTemplates: { ...DEFAULT_SETTINGS.reportTemplates },
   terminology: [],
+  terminologyExclusions: [],
   terminologyDiscovery: { ...DEFAULT_SETTINGS.terminologyDiscovery }
 };
 
@@ -300,6 +305,7 @@ function settingsForClient(target = settings) {
     promptSchemaVersion: PROMPT_SCHEMA_VERSION,
     ...promptSettingsForClient(target),
     terminology: normalizeTerminology(target.terminology),
+    terminologyExclusions: normalizeTerminologyExclusions(target.terminologyExclusions),
     terminologyDiscovery: { ...normalizeDiscoveryState(target.terminologyDiscovery) },
     savedFilters: target.savedFilters.map(filter => ({ ...filter, rangeFocus: { ...filter.rangeFocus } }))
   };
@@ -340,6 +346,9 @@ function loadSettings() {
         if (typeof s.ai.lastError === 'string') settings.ai.lastError = s.ai.lastError;
       }
       if (Array.isArray(s.terminology)) settings.terminology = normalizeTerminology(s.terminology);
+      if (Array.isArray(s.terminologyExclusions)) {
+        settings.terminologyExclusions = normalizeTerminologyExclusions(s.terminologyExclusions);
+      }
       if (s.terminologyDiscovery && typeof s.terminologyDiscovery === 'object') {
         settings.terminologyDiscovery = normalizeDiscoveryState(s.terminologyDiscovery);
       }
@@ -630,6 +639,7 @@ function normalizeRestoredSettings(snapshot) {
     ? snapshot.terminologyDiscoveryPrompt.trim().slice(0, 2400)
     : DEFAULT_SETTINGS.terminologyDiscoveryPrompt;
   restored.terminology = normalizeTerminology(snapshot?.terminology);
+  restored.terminologyExclusions = normalizeTerminologyExclusions(snapshot?.terminologyExclusions);
   restored.terminologyDiscovery = normalizeDiscoveryState({
     ...(snapshot?.terminologyDiscovery || restored.terminologyDiscovery),
     termCount: restored.terminology.length
@@ -1029,7 +1039,10 @@ function closurePromptHash() {
 }
 
 function closureTerminologyHash() {
-  return hashText(JSON.stringify(settings.terminology || []));
+  return hashText(JSON.stringify({
+    terminology: settings.terminology || [],
+    terminologyExclusions: settings.terminologyExclusions || []
+  }));
 }
 
 function reportTerminologyHash() {
@@ -1046,7 +1059,12 @@ function closureContext(start, end, periodType = 'week') {
   const historyEntries = db.entries.filter(entry => localDateStr(entry.ts) < start);
   const recentSources = closureSourceBundle(recentEntries, 'N');
   const historicalSources = closureSourceBundle(historyEntries, 'H');
-  const inputHash = closureInputHash(recentSources, historicalSources, settings.terminology);
+  const inputHash = closureInputHash(
+    recentSources,
+    historicalSources,
+    settings.terminology,
+    settings.terminologyExclusions
+  );
   const terminologyHash = closureTerminologyHash();
   const promptHash = closurePromptHash();
   return {
@@ -1835,7 +1853,7 @@ ipcMain.handle('terminology:discover', async (event, payload = {}) => {
 function closureForClient(summary) {
   if (!summary) return null;
   const cloned = JSON.parse(JSON.stringify(summary));
-  return filterResolvedClosureSuggestions(cloned, settings.terminology);
+  return filterResolvedClosureSuggestions(cloned, settings.terminology, settings.terminologyExclusions);
 }
 
 ipcMain.handle('closure:getCached', (_e, { start, end, periodType } = {}) => {
@@ -1950,6 +1968,7 @@ ipcMain.handle('closure:generate', async (event, payload = {}) => {
           recentSources: context.recentSources,
           historicalSources: historyChunks[index],
           terminology: settings.terminology,
+          terminologyExclusions: settings.terminologyExclusions,
           customPrompt: resolvedPrompt('closure').value,
           segmentIndex: index,
           segmentCount: historyChunks.length,
@@ -2493,15 +2512,40 @@ ipcMain.handle('settings:addTerminologyAlias', (_e, { canonicalName, alias, scop
   if (!canonical || !value) return { ok: false, error: '规范名称和别名不能为空' };
   try {
     settings.terminology = addTerminologyAlias(settings.terminology, canonical, value, scope);
+    settings.terminologyExclusions = removeTerminologyExclusion(
+      settings.terminologyExclusions,
+      canonical,
+      value
+    );
     settings.terminologyDiscovery = normalizeDiscoveryState({
       ...settings.terminologyDiscovery,
       termCount: settings.terminology.length
     });
     saveSettings();
-    return { ok: true, terminology: normalizeTerminology(settings.terminology) };
+    return {
+      ok: true,
+      terminology: normalizeTerminology(settings.terminology),
+      terminologyExclusions: normalizeTerminologyExclusions(settings.terminologyExclusions)
+    };
   } catch (error) {
     return { ok: false, error: error?.message || '术语别名保存失败' };
   }
+});
+
+ipcMain.handle('settings:addTerminologyExclusion', (_e, { canonicalName, alias } = {}) => {
+  const canonical = String(canonicalName || '').trim();
+  const value = String(alias || '').trim();
+  if (!canonical || !value) return { ok: false, error: '规范名称和叫法不能为空' };
+  settings.terminologyExclusions = addTerminologyExclusion(
+    settings.terminologyExclusions,
+    canonical,
+    value
+  );
+  saveSettings();
+  return {
+    ok: true,
+    terminologyExclusions: normalizeTerminologyExclusions(settings.terminologyExclusions)
+  };
 });
 
 ipcMain.handle('settings:setSavedFilters', (_e, { filters } = {}) => {

@@ -2,6 +2,7 @@
 
 const MAX_TERMINOLOGY = 100;
 const MAX_ALIASES_PER_TERM = 30;
+const MAX_TERMINOLOGY_EXCLUSIONS = 200;
 const MAX_TEXT_LENGTH = 120;
 
 function text(value, max = MAX_TEXT_LENGTH) {
@@ -61,6 +62,43 @@ function normalizeTerminology(items) {
     result.push({ id, canonicalName, aliases, scope, note });
   }
   return result;
+}
+
+function terminologyExclusionKey(canonicalName, alias) {
+  const canonicalKey = terminologyKey(canonicalName);
+  const aliasKey = terminologyKey(alias);
+  return canonicalKey && aliasKey && canonicalKey !== aliasKey
+    ? `${canonicalKey}|${aliasKey}`
+    : '';
+}
+
+function normalizeTerminologyExclusions(items) {
+  const result = [];
+  const seen = new Set();
+  for (const item of Array.isArray(items) ? items : []) {
+    const canonicalName = text(item?.canonicalName || item?.canonical_name);
+    const alias = text(item?.alias || item?.candidate_alias || item?.candidateAlias);
+    const key = terminologyExclusionKey(canonicalName, alias);
+    if (!canonicalName || !alias || !key || seen.has(key)) continue;
+    seen.add(key);
+    result.push({ canonicalName, alias });
+    if (result.length >= MAX_TERMINOLOGY_EXCLUSIONS) break;
+  }
+  return result;
+}
+
+function addTerminologyExclusion(items, canonicalName, alias) {
+  return normalizeTerminologyExclusions([
+    ...(Array.isArray(items) ? items : []),
+    { canonicalName, alias }
+  ]);
+}
+
+function removeTerminologyExclusion(items, canonicalName, alias) {
+  const target = terminologyExclusionKey(canonicalName, alias);
+  if (!target) return normalizeTerminologyExclusions(items);
+  return normalizeTerminologyExclusions(items)
+    .filter(item => terminologyExclusionKey(item.canonicalName, item.alias) !== target);
 }
 
 function terminologySignature(items) {
@@ -133,11 +171,16 @@ function findTerminologyCandidates(items, value, scope = '') {
 module.exports = {
   MAX_TERMINOLOGY,
   MAX_ALIASES_PER_TERM,
+  MAX_TERMINOLOGY_EXCLUSIONS,
   terminologyKey,
+  terminologyExclusionKey,
   normalizeTerminology,
+  normalizeTerminologyExclusions,
   terminologySignature,
   upsertTerminology,
   addTerminologyAlias,
+  addTerminologyExclusion,
+  removeTerminologyExclusion,
   removeTerminology,
   findTerminologyCandidates
 };
