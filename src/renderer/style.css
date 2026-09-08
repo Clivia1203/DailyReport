@@ -1685,16 +1685,57 @@ body.textarea-resizing * { cursor: nwse-resize !important; user-select: none !im
 .report-dates { color: var(--text-3); }
 .report-dates[hidden] { display:none; }
 .report-jump {
-  display:flex; align-items:center; gap:7px; height:32px; padding:0 9px;
-  border:1px solid var(--border); border-radius:9px; background:var(--input-bg); color:var(--text-2);
-  transition: border-color .16s ease, background .16s ease, box-shadow .16s ease;
+  position:relative;
 }
-.report-jump:hover { border-color:var(--border-strong); }
-.report-jump:focus-within { border-color:var(--accent); box-shadow:0 0 0 3px color-mix(in srgb, var(--accent) 14%, transparent); }
-.report-jump svg { width:15px; height:15px; flex:none; }
-.report-jump input { width:116px; min-width:0; height:30px; padding:0; border:0; border-radius:0; outline:none; background:transparent; color:var(--text); }
-.report-jump input:disabled { opacity:.62; cursor:not-allowed; }
-.report-jump input::-webkit-calendar-picker-indicator { cursor:pointer; opacity:.72; }
+.report-jump-trigger {
+  display:flex; align-items:center; gap:7px; height:32px; min-width:158px; padding:0 10px;
+  border:1px solid var(--border); border-radius:9px; background:var(--input-bg); color:var(--text-2);
+  font:inherit; font-size:12.5px; cursor:pointer; transition:border-color .16s ease, background .16s ease, box-shadow .16s ease;
+}
+.report-jump-trigger:hover { border-color:var(--border-strong); }
+.report-jump-trigger:focus-visible, .report-jump-trigger[aria-expanded="true"] { border-color:var(--accent); box-shadow:0 0 0 3px color-mix(in srgb, var(--accent) 14%, transparent); }
+.report-jump-trigger:disabled { opacity:.62; cursor:not-allowed; }
+.report-jump-trigger svg { width:15px; height:15px; flex:none; }
+#report-calendar-label { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.report-calendar-chevron { width:7px; height:7px; margin-left:auto; border-right:1.5px solid currentColor; border-bottom:1.5px solid currentColor; transform:rotate(45deg) translateY(-2px); flex:none; }
+#report-calendar-trigger[aria-expanded="true"] .report-calendar-chevron { transform:rotate(225deg) translate(-1px, -1px); }
+.report-calendar {
+  position:absolute; top:calc(100% + 8px); left:0; z-index:30; width:306px; padding:13px;
+  border:1px solid var(--border); border-radius:12px; background:var(--card); color:var(--text);
+}
+.report-calendar[hidden] { display:none; }
+.report-calendar-head { display:flex; align-items:center; justify-content:space-between; gap:8px; margin-bottom:11px; }
+.report-calendar-heading { display:flex; align-items:center; justify-content:center; gap:9px; min-width:0; flex:1; }
+.report-calendar-heading > span { font-size:14px; font-weight:700; white-space:nowrap; }
+.report-calendar-nav, .report-calendar-today {
+  border:1px solid var(--border); background:transparent; color:var(--text-2); cursor:pointer;
+}
+.report-calendar-nav { width:27px; height:27px; padding:0; border-radius:8px; font-size:18px; line-height:1; }
+.report-calendar-nav:hover, .report-calendar-today:hover { border-color:var(--border-strong); background:var(--input-bg); color:var(--text); }
+.report-calendar-today { height:25px; padding:0 8px; border-radius:7px; font:inherit; font-size:11px; }
+.report-calendar-weekdays, .report-calendar-week { display:grid; grid-template-columns:repeat(7, minmax(0, 1fr)); gap:2px; }
+.report-calendar-weekdays { padding:0 3px 5px; color:var(--text-3); font-size:10px; text-align:center; }
+.report-calendar-week { position:relative; padding:2px; border:1px solid transparent; border-radius:10px; }
+.report-calendar-week.has-records::before { content:""; position:absolute; left:0; top:10px; bottom:10px; width:3px; border-radius:3px; background:var(--accent); }
+.report-calendar-week.selected-week { border-color:var(--accent); background:var(--accent-soft); }
+.report-calendar-week.selected-week .report-calendar-day { font-weight:650; }
+.report-calendar-day {
+  position:relative; min-width:0; min-height:38px; padding:5px 2px 8px; border:1px solid transparent; border-radius:7px;
+  background:transparent; color:var(--text); font:inherit; font-size:12px; line-height:1; cursor:pointer;
+}
+.report-calendar-day:hover:not(:disabled) { border-color:var(--border-strong); background:var(--input-bg); }
+.report-calendar-day.outside { color:var(--text-3); }
+.report-calendar-day.today { border-color:var(--text-2); }
+.report-calendar-day.selected-day { border-color:var(--accent); background:var(--accent); color:var(--accent-text); }
+.report-calendar-day.selected-month { background:var(--accent-soft); color:var(--accent); }
+.report-calendar-day:disabled { opacity:.34; cursor:not-allowed; }
+.report-calendar-day-number { display:block; }
+.report-calendar-record-dot { position:absolute; left:50%; bottom:4px; width:4px; height:4px; border-radius:50%; background:var(--accent); transform:translateX(-50%); }
+.report-calendar-day.selected-day .report-calendar-record-dot { background:currentColor; }
+.report-calendar-legend { display:flex; align-items:center; justify-content:space-between; gap:10px; margin-top:9px; color:var(--text-3); font-size:10px; }
+.report-calendar-record-legend { display:inline-flex; align-items:center; gap:5px; white-space:nowrap; }
+.report-calendar-record-legend i { width:5px; height:5px; border-radius:50%; background:var(--accent); }
+.report-calendar-legend > span:last-child { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .report-jump[hidden] { display:none; }
 .report-actions { display:flex; align-items:center; justify-content:flex-end; gap:10px; margin-left:auto; max-width:100%; flex-wrap:wrap; }
 .report-actions .custom-select { flex: none; }
@@ -2015,6 +2056,8 @@ body.textarea-resizing * { cursor: nwse-resize !important; user-select: none !im
   .report-actions .btn { flex:1; min-width:0; padding-left:9px; padding-right:9px; }
   .report-dates { order:3; width:100%; }
   .report-dates input { flex:1; min-width:0; }
+  .report-calendar { left:auto; right:0; width:min(306px, calc(100vw - 32px)); }
+  .report-jump-trigger { min-width:145px; }
   #view-report .settings-head { flex-wrap:wrap; }
   #view-report .report-connection { max-width:calc(100% - 52px); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .report-title { font-size:18px; }

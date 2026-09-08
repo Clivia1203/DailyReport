@@ -153,8 +153,27 @@
             <button class="icon-btn small-icon" id="report-next" title="下一周期">›</button>
           </div>
           <div class="report-jump" id="report-jump">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="5" width="18" height="16" rx="3"/><path d="M16 3v4M8 3v4M3 10h18"/></svg>
-            <input type="date" id="report-anchor" title="跳转日期" aria-label="跳转日期">
+            <button class="report-jump-trigger" id="report-calendar-trigger" type="button" aria-haspopup="dialog" aria-expanded="false" title="选择周期" aria-label="选择周期">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="5" width="18" height="16" rx="3"/><path d="M16 3v4M8 3v4M3 10h18"/></svg>
+              <span id="report-calendar-label"></span>
+              <span class="report-calendar-chevron" aria-hidden="true"></span>
+            </button>
+            <div class="report-calendar" id="report-calendar" role="dialog" aria-label="选择周期" hidden>
+              <div class="report-calendar-head">
+                <button class="report-calendar-nav" id="report-calendar-prev" type="button" title="上个月" aria-label="上个月">‹</button>
+                <div class="report-calendar-heading">
+                  <span id="report-calendar-month"></span>
+                  <button class="report-calendar-today" id="report-calendar-today" type="button" title="回到今天">今天</button>
+                </div>
+                <button class="report-calendar-nav" id="report-calendar-next" type="button" title="下个月" aria-label="下个月">›</button>
+              </div>
+              <div class="report-calendar-weekdays" id="report-calendar-weekdays"></div>
+              <div class="report-calendar-grid" id="report-calendar-grid"></div>
+              <div class="report-calendar-legend">
+                <span class="report-calendar-record-legend"><i aria-hidden="true"></i><span>有日报</span></span>
+                <span id="report-calendar-period-note"></span>
+              </div>
+            </div>
           </div>
           <div class="report-dates" id="report-dates">
             <input type="date" id="report-start" title="开始日期">

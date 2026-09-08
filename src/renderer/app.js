@@ -660,7 +660,18 @@ const reportType = $('#report-type');
 const reportPrev = $('#report-prev');
 const reportNext = $('#report-next');
 const reportJump = $('#report-jump');
-const reportAnchor = $('#report-anchor');
+const reportCalendarTrigger = $('#report-calendar-trigger');
+const reportCalendar = $('#report-calendar');
+const reportCalendarLabel = $('#report-calendar-label');
+const reportCalendarPrev = $('#report-calendar-prev');
+const reportCalendarNext = $('#report-calendar-next');
+const reportCalendarToday = $('#report-calendar-today');
+const reportCalendarMonthTitle = $('#report-calendar-month');
+const reportCalendarWeekdays = $('#report-calendar-weekdays');
+const reportCalendarGrid = $('#report-calendar-grid');
+const reportCalendarPeriodNote = $('#report-calendar-period-note');
+let reportCalendarOpen = false;
+let reportCalendarCursor = 0;
 const reportStart = $('#report-start');
 const reportEnd = $('#report-end');
 const reportDates = $('#report-dates');
@@ -738,6 +749,159 @@ function reportPeriodForAnchor(value) {
   if (Number.isNaN(date.getTime())) return null;
   const bounds = periodBounds(state.report.type, localDateFromString(value).getTime());
   return { type: state.report.type, start: bounds.start, end: bounds.end };
+}
+
+function calendarMonthStart(value) {
+  const date = typeof value === 'number' ? new Date(value) : localDateFromString(value);
+  return new Date(date.getFullYear(), date.getMonth(), 1);
+}
+
+function reportCalendarTriggerText() {
+  if (!state.report.start) return uiText('选择周期');
+  if (state.report.type === 'day') {
+    return new Intl.DateTimeFormat(uiLocale(), { year: 'numeric', month: '2-digit', day: '2-digit' })
+      .format(localDateFromString(state.report.start));
+  }
+  if (state.report.type === 'month') {
+    return new Intl.DateTimeFormat(uiLocale(), { year: 'numeric', month: 'short' })
+      .format(localDateFromString(state.report.start));
+  }
+  const format = value => new Intl.DateTimeFormat(uiLocale(), { month: '2-digit', day: '2-digit' })
+    .format(localDateFromString(value));
+  return `${format(state.report.start)} – ${format(state.report.end)}`;
+}
+
+function reportCalendarEntryCounts() {
+  const counts = new Map();
+  state.entries.forEach(entry => {
+    const day = dateStr(entry.ts);
+    counts.set(day, (counts.get(day) || 0) + 1);
+  });
+  return counts;
+}
+
+function reportCalendarNote() {
+  if (state.report.type === 'day') return '点击日期选择当天';
+  if (state.report.type === 'month') return '点击日期选择整月';
+  return '点击日期选择整周';
+}
+
+function renderReportCalendar() {
+  if (!reportCalendarGrid || !state.report.start) return;
+  const month = calendarMonthStart(reportCalendarCursor || state.report.start);
+  const first = new Date(month);
+  first.setDate(1 - ((first.getDay() + 6) % 7));
+  const counts = reportCalendarEntryCounts();
+  const selectedPeriod = currentReportPeriod();
+  reportCalendarMonthTitle.textContent = new Intl.DateTimeFormat(uiLocale(), {
+    year: 'numeric',
+    month: 'long'
+  }).format(month);
+  reportCalendarWeekdays.replaceChildren();
+  for (let index = 0; index < 7; index += 1) {
+    const weekday = new Date(2026, 8, 7 + index);
+    const label = document.createElement('span');
+    label.textContent = new Intl.DateTimeFormat(uiLocale(), { weekday: 'short' }).format(weekday);
+    reportCalendarWeekdays.appendChild(label);
+  }
+  reportCalendarGrid.replaceChildren();
+
+  for (let weekIndex = 0; weekIndex < 6; weekIndex += 1) {
+    const week = document.createElement('div');
+    week.className = 'report-calendar-week';
+    const weekStart = new Date(first);
+    weekStart.setDate(first.getDate() + weekIndex * 7);
+    const weekStartKey = dateStringFromDate(weekStart);
+    const weekDays = [];
+    for (let dayIndex = 0; dayIndex < 7; dayIndex += 1) {
+      const date = new Date(weekStart);
+      date.setDate(weekStart.getDate() + dayIndex);
+      weekDays.push({ date, key: dateStringFromDate(date) });
+    }
+    const weekHasRecords = weekDays.some(day => counts.has(day.key));
+    const selectedWeek = state.report.type === 'week' && weekStartKey === selectedPeriod.start;
+    if (weekHasRecords) week.classList.add('has-records');
+    if (selectedWeek) week.classList.add('selected-week');
+
+    weekDays.forEach(({ date, key }) => {
+      const count = counts.get(key) || 0;
+      const target = periodBounds(state.report.type, date.getTime());
+      const canView = canViewReportPeriod(target);
+      const cell = document.createElement('button');
+      cell.type = 'button';
+      cell.className = 'report-calendar-day';
+      cell.disabled = !canView;
+      if (date.getMonth() !== month.getMonth()) cell.classList.add('outside');
+      if (key === dateStr(Date.now())) cell.classList.add('today');
+      if (count) cell.classList.add('has-entry');
+      if (state.report.type === 'day' && key === selectedPeriod.start) cell.classList.add('selected-day');
+      if (state.report.type === 'month' && key >= selectedPeriod.start && key <= selectedPeriod.end) {
+        cell.classList.add('selected-month');
+      }
+      const title = count ? `${key} · ${count} ${uiText('有日报')}` : key;
+      cell.title = canView ? title : `${title} · ${uiText('未来空周期没有日报记录，无法查看。')}`;
+      cell.setAttribute('aria-label', cell.title);
+
+      const number = document.createElement('span');
+      number.className = 'report-calendar-day-number';
+      number.textContent = String(date.getDate());
+      const dot = document.createElement('i');
+      dot.className = 'report-calendar-record-dot';
+      dot.hidden = !count;
+      dot.setAttribute('aria-hidden', 'true');
+      cell.append(number, dot);
+      cell.addEventListener('click', () => selectReportCalendarDate(key));
+      week.appendChild(cell);
+    });
+    reportCalendarGrid.appendChild(week);
+  }
+  reportCalendarPeriodNote.textContent = uiText(reportCalendarNote());
+}
+
+function setReportCalendarOpen(open) {
+  if (open && state.report.start) reportCalendarCursor = calendarMonthStart(state.report.start).getTime();
+  reportCalendarOpen = !!open && state.report.type !== 'custom' && !state.report.editing;
+  reportCalendar.hidden = !reportCalendarOpen;
+  reportCalendarTrigger.setAttribute('aria-expanded', String(reportCalendarOpen));
+  if (reportCalendarOpen) renderReportCalendar();
+}
+
+function closeReportCalendar() {
+  if (reportCalendarOpen) setReportCalendarOpen(false);
+}
+
+function shiftReportCalendarMonth(delta) {
+  const month = calendarMonthStart(reportCalendarCursor || state.report.start || Date.now());
+  month.setMonth(month.getMonth() + delta, 1);
+  reportCalendarCursor = month.getTime();
+  renderReportCalendar();
+}
+
+function selectReportCalendarDate(value) {
+  if (state.report.editing || state.report.type === 'custom') return;
+  const bounds = reportPeriodForAnchor(value);
+  if (!bounds) return;
+  if (!canViewReportPeriod(bounds)) {
+    toast(uiText('未来空周期没有日报记录，无法查看。'));
+    return;
+  }
+  reportCalendarCursor = calendarMonthStart(bounds.start).getTime();
+  setReportPeriod(bounds.type, bounds.start, bounds.end);
+  closeReportCalendar();
+  reloadReportContent();
+}
+
+function syncReportCalendar() {
+  const custom = state.report.type === 'custom';
+  reportJump.hidden = custom;
+  reportCalendarTrigger.disabled = state.report.editing || custom;
+  reportCalendarTrigger.title = uiText('选择周期');
+  reportCalendarTrigger.setAttribute('aria-label', reportCalendarTrigger.title);
+  reportCalendarLabel.textContent = reportCalendarTriggerText();
+  if (custom) reportCalendarOpen = false;
+  reportCalendar.hidden = !reportCalendarOpen;
+  reportCalendarTrigger.setAttribute('aria-expanded', String(reportCalendarOpen));
+  if (reportCalendarOpen) renderReportCalendar();
 }
 
 function reportPeriodLabel() {
@@ -865,11 +1029,7 @@ function syncReportControls() {
   reportNext.title = uiText(nextPeriodBlocked ? '未来空周期没有日报记录，无法查看。' : '下一周期');
   reportNext.setAttribute('aria-label', reportNext.title);
   reportGenerate.disabled = busy;
-  reportJump.hidden = state.report.type === 'custom';
-  reportAnchor.disabled = editing || state.report.type === 'custom';
-  reportAnchor.title = uiText('跳转日期');
-  reportAnchor.setAttribute('aria-label', reportAnchor.title);
-  if (state.report.type !== 'custom') reportAnchor.value = state.report.start || '';
+  syncReportCalendar();
   syncCustomSelect(reportType);
   reportGenerate.textContent = uiText(busy
     ? (job.status === 'queued' ? '排队中…' : '生成中…')
@@ -1556,6 +1716,7 @@ function shiftReportPeriod(delta) {
   if (state.report.editing || state.report.type === 'custom') return;
   const nextPeriod = shiftedReportPeriod(delta);
   if (!nextPeriod || !canViewReportPeriod(nextPeriod)) return;
+  closeReportCalendar();
   setReportPeriod(nextPeriod.type, nextPeriod.start, nextPeriod.end);
   reloadReportContent();
 }
@@ -1563,26 +1724,39 @@ function shiftReportPeriod(delta) {
 $('#btn-report').addEventListener('click', openReportView);
 reportType.addEventListener('change', () => {
   if (state.report.editing) return;
+  closeReportCalendar();
   setReportPeriod(reportType.value);
   reloadReportContent();
 });
-reportAnchor.addEventListener('change', () => {
-  if (state.report.editing || reportType.value === 'custom') return;
-  const bounds = reportPeriodForAnchor(reportAnchor.value);
-  if (!bounds) {
-    reportAnchor.value = state.report.start || '';
-    return;
+reportCalendarTrigger.addEventListener('click', event => {
+  event.stopPropagation();
+  setReportCalendarOpen(!reportCalendarOpen);
+});
+reportCalendarPrev.addEventListener('click', event => {
+  event.stopPropagation();
+  shiftReportCalendarMonth(-1);
+});
+reportCalendarNext.addEventListener('click', event => {
+  event.stopPropagation();
+  shiftReportCalendarMonth(1);
+});
+reportCalendarToday.addEventListener('click', event => {
+  event.stopPropagation();
+  reportCalendarCursor = calendarMonthStart(Date.now()).getTime();
+  renderReportCalendar();
+});
+document.addEventListener('click', event => {
+  if (!reportJump.contains(event.target)) closeReportCalendar();
+});
+document.addEventListener('keydown', event => {
+  if (event.key === 'Escape' && reportCalendarOpen) {
+    closeReportCalendar();
+    reportCalendarTrigger.focus();
   }
-  if (!canViewReportPeriod(bounds)) {
-    reportAnchor.value = state.report.start || '';
-    toast(uiText('未来空周期没有日报记录，无法查看。'));
-    return;
-  }
-  setReportPeriod(bounds.type, bounds.start, bounds.end);
-  reloadReportContent();
 });
 reportStart.addEventListener('change', () => {
   if (state.report.editing || reportType.value !== 'custom') return;
+  closeReportCalendar();
   const previousPeriod = currentReportPeriod();
   state.report.start = reportStart.value;
   if (state.report.start > state.report.end) reportEnd.value = reportStart.value;
@@ -1598,6 +1772,7 @@ reportStart.addEventListener('change', () => {
 });
 reportEnd.addEventListener('change', () => {
   if (state.report.editing || reportType.value !== 'custom') return;
+  closeReportCalendar();
   const previousPeriod = currentReportPeriod();
   if (reportEnd.value < reportStart.value) reportStart.value = reportEnd.value;
   state.report.start = reportStart.value;
