@@ -205,16 +205,18 @@ const viewMain = $('#view-main');
 const viewSettings = $('#view-settings');
 const viewAiSettings = $('#view-ai-settings');
 const viewReport = $('#view-report');
+const btnSettings = $('#btn-settings');
 
 function showView(name) {
   viewMain.hidden = name !== 'main';
   viewSettings.hidden = name !== 'settings';
   viewAiSettings.hidden = name !== 'ai-settings';
   viewReport.hidden = name !== 'report';
+  btnSettings.hidden = name === 'settings' || name === 'ai-settings';
   if (typeof syncWeeklyWorkbenchViewport === 'function') syncWeeklyWorkbenchViewport();
 }
 
-$('#btn-settings').addEventListener('click', () => { showView('settings'); loadSettingsUI(); });
+btnSettings.addEventListener('click', () => { showView('settings'); loadSettingsUI(); });
 $('#btn-back').addEventListener('click', () => showView('main'));
 $('#btn-ai-settings').addEventListener('click', () => {
   showView('ai-settings');
