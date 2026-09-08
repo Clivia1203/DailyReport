@@ -29,3 +29,9 @@ test('日历按当前周期类型跳转，显示日报日期并复用未来空�
   assert.match(appSource, /reportCalendarPrev\.addEventListener\('click'/);
   assert.match(appSource, /toast\(uiText\('未来空周期没有日报记录，无法查看。'\)\);/);
 });
+
+test('选中周内悬停单日保持高对比度', () => {
+  assert.match(cssSource, /\.report-calendar-day:hover:not\(:disabled\)\s*\{[\s\S]*color:var\(--text\);/);
+  assert.match(cssSource, /\.report-calendar-week\.selected-week \.report-calendar-day:hover:not\(:disabled\)\s*\{[\s\S]*background:var\(--accent\);[\s\S]*color:var\(--accent-text\);/);
+  assert.match(cssSource, /\.report-calendar-day:hover:not\(:disabled\) \.report-calendar-record-dot\s*\{[\s\S]*background:currentColor;/);
+});

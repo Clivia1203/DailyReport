@@ -1723,12 +1723,22 @@ body.textarea-resizing * { cursor: nwse-resize !important; user-select: none !im
   position:relative; min-width:0; min-height:38px; padding:5px 2px 8px; border:1px solid transparent; border-radius:7px;
   background:transparent; color:var(--text); font:inherit; font-size:12px; line-height:1; cursor:pointer;
 }
-.report-calendar-day:hover:not(:disabled) { border-color:var(--border-strong); background:var(--input-bg); }
+.report-calendar-day:hover:not(:disabled) { border-color:var(--border-strong); background:var(--input-bg); color:var(--text); }
 .report-calendar-day.outside { color:var(--text-3); }
 .report-calendar-day.today { border-color:var(--text-2); }
 .report-calendar-day.selected-day { border-color:var(--accent); background:var(--accent); color:var(--accent-text); }
 .report-calendar-day.selected-month { background:var(--accent-soft); color:var(--accent); }
 .report-calendar-day:disabled { opacity:.34; cursor:not-allowed; }
+.report-calendar-day:hover:not(:disabled) .report-calendar-record-dot { background:currentColor; }
+.report-calendar-week.selected-week .report-calendar-day:hover:not(:disabled) {
+  border-color:var(--accent); background:var(--accent); color:var(--accent-text);
+}
+.report-calendar-day.selected-day:hover:not(:disabled) {
+  border-color:var(--accent-hover); background:var(--accent-hover); color:var(--accent-text);
+}
+.report-calendar-day.selected-month:hover:not(:disabled) {
+  border-color:var(--accent); background:var(--accent); color:var(--accent-text);
+}
 .report-calendar-day-number { display:block; }
 .report-calendar-record-dot { position:absolute; left:50%; bottom:4px; width:4px; height:4px; border-radius:50%; background:var(--accent); transform:translateX(-50%); }
 .report-calendar-day.selected-day .report-calendar-record-dot { background:currentColor; }
