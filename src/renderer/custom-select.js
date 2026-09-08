@@ -3,6 +3,13 @@
   if (typeof module === 'object' && module.exports) module.exports = api;
   else root.DRCustomSelect = api;
 })(typeof window !== 'undefined' ? window : globalThis, function () {
+  function uiText(value) {
+    const source = String(value ?? '');
+    return typeof window !== 'undefined' && window.DRI18n?.t
+      ? window.DRI18n.t(source)
+      : source;
+  }
+
   function optionModel(options, selectedValue) {
     const value = String(selectedValue ?? '');
     const items = Array.from(options || []).map((option, index) => ({
@@ -84,7 +91,7 @@
     trigger.setAttribute('role', 'combobox');
     trigger.setAttribute('aria-haspopup', 'listbox');
     trigger.setAttribute('aria-expanded', 'false');
-    trigger.setAttribute('aria-label', select.getAttribute('aria-label') || select.title || '选择');
+    trigger.setAttribute('aria-label', select.getAttribute('aria-label') || select.title || uiText('选择'));
     trigger.title = select.title || '';
 
     const label = doc.createElement('span');
@@ -173,7 +180,7 @@
     function sync() {
       renderOptions();
       const selected = controller.model.selected;
-      label.textContent = selected?.label || '请选择';
+      label.textContent = selected?.label || uiText('请选择');
       trigger.disabled = !!select.disabled || !controller.model.items.length;
       wrapper.classList.toggle('is-disabled', trigger.disabled);
       wrapper.classList.toggle('is-open', controller.isOpen);

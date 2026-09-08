@@ -1,10 +1,11 @@
 /* 近期工作闭环的输入编排、结果解析和缓存指纹。AI 只做语义判断，原始记录仍是证据来源。 */
 
 const crypto = require('crypto');
+const { catalogFor } = require('./prompt-catalog');
+const DEFAULT_CLOSURE_PROMPT = require('../prompts/zh-CN.json').closurePrompt;
 
 const DEFAULT_CLOSURE_MAX_HISTORY_SOURCES = 36;
 const DEFAULT_CLOSURE_MAX_HISTORY_CHARS = 16000;
-const DEFAULT_CLOSURE_PROMPT = '请整理当前周期内近期完成或取得阶段性进展的工作闭环。优先把历史记录中的问题、测试或待处理事项，与当前周期记录中的解决、完成或验证结果对应起来。名称尽量使用术语规范中的规范名称；细分信息不明确时使用宏观表述。输出应简洁、事实准确，并保留历史依据和近期依据。';
 
 function pad(value, width = 2) { return String(value).padStart(width, '0'); }
 
@@ -72,14 +73,23 @@ function splitClosureHistory(sources, {
   return chunks;
 }
 
-function terminologyPrompt(terms) {
+function fillPrompt(value, replacements = {}) {
+  return String(value || '').replace(/\{(\w+)\}/g, (_match, key) => String(replacements[key] ?? ''));
+}
+
+function closurePromptRules(locale = 'zh-CN') {
+  return catalogFor(locale).closurePromptRules || catalogFor('zh-CN').closurePromptRules;
+}
+
+function terminologyPrompt(terms, locale = 'zh-CN') {
+  const rules = catalogFor(locale).reportPromptRules || catalogFor('zh-CN').reportPromptRules;
   const list = Array.isArray(terms) ? terms : [];
-  if (!list.length) return '（用户尚未配置术语规范；请根据上下文判断，但不要强行建立永久别名。）';
+  if (!list.length) return closurePromptRules(locale).noTerminology;
   return list.map((item, index) => {
-    const aliases = Array.isArray(item.aliases) && item.aliases.length ? item.aliases.join('、') : '无';
-    const scope = item.scope ? `；适用范围：${item.scope}` : '';
-    const note = item.note ? `；说明：${item.note}` : '';
-    return `${index + 1}. 规范名称：${item.canonicalName}；常用说法：${aliases}${scope}${note}`;
+    const aliases = Array.isArray(item.aliases) && item.aliases.length ? item.aliases.join('、') : rules.noAliases;
+    const scope = item.scope ? `${rules.scope}${item.scope}` : '';
+    const note = item.note ? `${rules.note}${item.note}` : '';
+    return `${index + 1}. ${rules.canonical}${item.canonicalName}${rules.aliases}${aliases}${scope}${note}`;
   }).join('\n');
 }
 
@@ -89,74 +99,77 @@ function buildClosurePrompt({
   recentSources = [],
   historicalSources = [],
   terminology = [],
-  customPrompt = DEFAULT_CLOSURE_PROMPT,
+  customPrompt,
   segmentIndex = 0,
-  segmentCount = 1
+  segmentCount = 1,
+  locale = 'zh-CN'
 } = {}) {
+  const rules = closurePromptRules(locale);
   const recentText = recentSources.length
     ? recentSources.map(sourceLine).join('\n')
-    : '（当前周期没有记录）';
+    : rules.noRecent;
   const historyText = historicalSources.length
     ? historicalSources.map(sourceLine).join('\n')
-    : '（当前周期之前没有可用历史记录）';
+    : rules.noHistory;
+  const prompt = String(customPrompt || catalogFor(locale).closurePrompt || DEFAULT_CLOSURE_PROMPT).trim();
   return [
-    '你是“近期工作闭环整理助手”，不是项目进度管理器。',
-    `当前周期：${start} 至 ${end}`,
-    `这是历史记录比对的第 ${segmentIndex + 1}/${segmentCount} 批。当前周期记录在每一批中都完整提供；历史记录按批提供。`,
+    rules.role,
+    fillPrompt(rules.period, { start, end }),
+    fillPrompt(rules.batch, { index: segmentIndex + 1, total: segmentCount }),
     '',
-    '用户可编辑的闭环提示词（只能补充表达目标，不能违反事实边界和来源要求）：',
-    cleanPrompt(customPrompt) || DEFAULT_CLOSURE_PROMPT,
+    rules.userPrompt,
+    cleanPrompt(prompt),
     '',
-    '任务：',
-    '1. 只找出当前周期内出现的明确完成、解决、验证通过、可使用、已交付或阶段性闭环。',
-    '2. 优先寻找“历史记录中的问题/待处理/测试中/进行中”与“当前周期记录中的完成结果”之间的对应关系。',
-    '3. 当前周期记录中明确完成、但找不到历史对应项的内容，可以放入 recent_explicit_completions。',
-    '4. 不要总结整个项目，也不要假设随手记录覆盖了项目全部事实。未记录不等于未完成。',
+    rules.task,
+    rules.task1,
+    rules.task2,
+    rules.task3,
+    rules.task4,
     '',
-    '名称和语义匹配：',
-    '1. 规范名称优先使用术语规范中的名称。',
-    '2. 记录中的简称、口语、缩写、错写和新造词可能指向同一事项，例如“项目简称”“产品简称”“客户简称”。',
-    '3. 不能只因为一个词相似就合并，必须结合完整记录、产品上下文、任务动作和时间关系判断。',
-    '4. 同一个产品可能包含不同功率段、版本或子任务。若细分信息不充分，提升到产品族或宏观层级，不要强行指定细分范围。',
-    '5. 如果无法确定是否为同一事项，放入 needs_confirmation；不要把不确定关系写成已完成事实。',
+    rules.naming,
+    rules.naming1,
+    rules.naming2,
+    rules.naming3,
+    rules.naming4,
+    rules.naming5,
     '',
-    '事实边界：',
-    '1. “已联系”“已安排”“计划处理”“继续跟进”“正在排查”不能直接当作已完成。',
-    '2. 不要输出“全部完成”“所有功率段完成”“项目已结束”等超过证据范围的结论。',
-    '3. 每条结论必须引用历史依据或当前周期依据的来源编号。来源编号只使用输入中的编号，不要自造编号。',
-    '4. 只输出简要判断依据，不要输出详细的内部思考过程。',
+    rules.facts,
+    rules.facts1,
+    rules.facts2,
+    rules.facts3,
+    rules.facts4,
     '',
-    '术语规范：',
-    terminologyPrompt(terminology),
+    rules.terminology,
+    terminologyPrompt(terminology, locale),
     '',
-    '当前周期记录（必须全部参与判断）：',
+    rules.recentRecords,
     recentText,
     '',
-    '历史记录（本批）：',
+    rules.historicalRecords,
     historyText,
     '',
-    '请只返回合法 JSON，不要 Markdown 代码围栏，不要返回 JSON 之外的解释。格式如下：',
+    rules.returnJson,
     JSON.stringify({
       completed_items: [{
-        title: '规范名称 + 事项 + 已完成/已闭环',
-        summary: '说明此前状态与当前完成结果，使用谨慎、事实准确的语言。',
-        scope: 'macro 或 specific',
-        status: 'completed 或 stage_completed',
-        confidence: 'high 或 medium',
+        title: rules.sampleCompletedTitle,
+        summary: rules.sampleCompletedSummary,
+        scope: rules.sampleScope,
+        status: rules.sampleStatus,
+        confidence: rules.sampleConfidence,
         before_refs: ['H001'],
         recent_refs: ['N001'],
-        note: '细分范围不明确时说明范围限制。'
+        note: rules.sampleCompletedNote
       }],
       recent_explicit_completions: [{
-        title: '当前周期明确完成的事项',
-        summary: '只依据当前周期记录描述。',
-        confidence: 'high 或 medium',
+        title: rules.sampleRecentTitle,
+        summary: rules.sampleRecentSummary,
+        confidence: rules.sampleConfidence,
         recent_refs: ['N002']
       }],
       needs_confirmation: [{
-        alias: '记录中的新说法',
-        canonical_name: '可能对应的规范名称',
-        reason: '说明可能相关但无法确定的原因。',
+        alias: rules.sampleAlias,
+        canonical_name: rules.sampleCanonical,
+        reason: rules.sampleReason,
         before_refs: ['H002'],
         recent_refs: ['N003']
       }]

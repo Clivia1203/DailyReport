@@ -87,6 +87,14 @@
       '修改': 'Change',
       '恢复默认': 'Restore default',
       '外观': 'Appearance',
+      '主题配色': 'Color theme',
+      '选择应用强调色和背景风格；不改变应用图标。': 'Choose the app accent and background style; the app icon stays unchanged.',
+      '向阳金': 'Sunlit Gold',
+      '晴空蓝': 'Clear Sky',
+      '薄荷林': 'Mint Grove',
+      '暮紫': 'Dusk Violet',
+      '显示模式': 'Display mode',
+      '选择亮色、暗色或跟随系统': 'Choose light, dark, or follow the system',
       '界面主题': 'Theme',
       '跟随系统时随 Windows 深浅色自动切换': 'Follow Windows light/dark mode when set to system',
       '跟随系统': 'System',
@@ -247,6 +255,7 @@
       , '中午好': 'Good noon'
       , '下午好': 'Good afternoon'
       , '晚上好': 'Good evening'
+      , '夜深了': 'It\'s late'
       , '今日': 'Today'
       , '本周': 'This week'
       , '累计': 'Total'
@@ -292,6 +301,8 @@
       , '当前显示历史闭环结果，建议更新。': 'A historical closure result is shown; updating is recommended.'
       , '只对照近期记录和历史记录，不代表整个项目的完整进度。': 'Only recent and historical entries are compared; this does not represent the complete project progress.'
       , '配置 AI 后，这里可以识别近期出现的工作闭环。': 'After configuring AI, recent work closures can be identified here.'
+      , '请选择': 'Please select'
+      , '当前语言与本次 AI 过程的生成语言不同，已隐藏原始思考文本。': 'The original reasoning is hidden because it was generated in a different language.'
       , '此刻': 'Now'
     },
     'ja-JP': {
@@ -365,6 +376,14 @@
       '修改': '変更',
       '恢复默认': 'デフォルトに戻す',
       '外观': '外観',
+      '主题配色': '配色テーマ',
+      '选择应用强调色和背景风格；不改变应用图标。': 'アプリのアクセントカラーと背景スタイルを選択します。アプリアイコンは変わりません。',
+      '向阳金': 'サンリットゴールド',
+      '晴空蓝': 'クリアスカイ',
+      '薄荷林': 'ミントグローブ',
+      '暮紫': 'ダスクバイオレット',
+      '显示模式': '表示モード',
+      '选择亮色、暗色或跟随系统': 'ライト、ダーク、またはシステム設定に合わせます',
       '界面主题': 'テーマ',
       '跟随系统时随 Windows 深浅色自动切换': 'システム設定時は Windows の明暗に追従します',
       '跟随系统': 'システム',
@@ -522,6 +541,7 @@
       , '中午好': 'こんにちは'
       , '下午好': 'こんにちは'
       , '晚上好': 'こんばんは'
+      , '夜深了': '夜更けです'
       , '今日': '今日'
       , '本周': '今週'
       , '累计': '合計'
@@ -567,6 +587,8 @@
       , '当前显示历史闭环结果，建议更新。': '履歴の完了事項を表示しています。更新してください。'
       , '只对照近期记录和历史记录，不代表整个项目的完整进度。': '最近と履歴の記録だけを比較しており、プロジェクト全体の進捗を示すものではありません。'
       , '配置 AI 后，这里可以识别近期出现的工作闭环。': 'AI を設定すると、最近発生した作業の完了事項をここで確認できます。'
+      , '请选择': '選択してください'
+      , '当前语言与本次 AI 过程的生成语言不同，已隐藏原始思考文本。': '生成時の言語が現在の言語と異なるため、元の思考テキストを非表示にしています。'
       , '此刻': '現在'
     }
   };
@@ -700,6 +722,44 @@
     if (match) return localized(`Failed to delete filter: ${match[1]}`, `フィルターの削除に失敗しました：${match[1]}`);
     match = /^筛选保存失败：(.+)$/.exec(source);
     if (match) return localized(`Failed to save filter: ${match[1]}`, `フィルターの保存に失敗しました：${match[1]}`);
+    match = /^已加入生成队列，前面还有 (\d+) 个任务。$/.exec(source);
+    if (match) return localized(`Queued; ${match[1]} task(s) are ahead.`, `生成キューに追加しました。前に${match[1]}件あります。`);
+    match = /^当前日期筛选：(.+)$/.exec(source);
+    if (match) return localized(`Current date filter: ${match[1]}`, `現在の日付フィルター：${match[1]}`);
+    match = /^删除保存的筛选“(.+)”？$/.exec(source);
+    if (match) return localized(`Delete saved filter “${match[1]}”?`, `保存済みフィルター「${match[1]}」を削除しますか？`);
+    match = /^删除术语“(.+)”？之后 AI 不再优先使用这组规范。$/.exec(source);
+    if (match) return localized(`Delete “${match[1]}”? AI will no longer prefer this terminology.`, `「${match[1]}」を削除しますか？AI はこの用語を優先しなくなります。`);
+    match = /^只基于 (\d{4}-\d{2}-\d{2}) 至 (\d{4}-\d{2}-\d{2}) 的本期记录和历史记录做前后对照；历史记录不完整时不会推断项目整体状态。$/.exec(source);
+    if (match) return localized(
+      `This compares current-period entries from ${match[1]} to ${match[2]} with historical entries; it does not infer overall project status when history is incomplete.`,
+      `今回（${match[1]}〜${match[2]}）の記録と履歴を比較します。履歴が不完全な場合、プロジェクト全体の状態は推測しません。`
+    );
+    match = /^已记住：(.+) → (.+)$/.exec(source);
+    if (match) return localized(`Remembered: ${match[1]} → ${match[2]}`, `記憶しました：${match[1]} → ${match[2]}`);
+    match = /^连接成功，发现 (\d+) 个可用模型，请保存配置$/.exec(source);
+    if (match) return localized(`Connected. Found ${match[1]} available models. Save the configuration.`, `接続に成功しました。利用可能なモデルが${match[1]}件見つかりました。設定を保存してください。`);
+    match = /^连接成功，周期报告模型：(.+)；闭环模型：(.+)，请保存配置$/.exec(source);
+    if (match) return localized(`Connected. Report model: ${match[1]}; closure model: ${match[2]}. Save the configuration.`, `接続に成功しました。期間レポートモデル：${match[1]}、完了事項モデル：${match[2]}。設定を保存してください。`);
+    match = /^备份已导出：(\d+) 条记录，(\d+) 份总结，(\d+) 份闭环结果$/.exec(source);
+    if (match) return localized(`Backup exported: ${match[1]} entries, ${match[2]} summaries, ${match[3]} closure results.`, `バックアップをエクスポートしました：記録${match[1]}件、まとめ${match[2]}件、完了事項結果${match[3]}件。`);
+    match = /^恢复完成：(\d+) 条记录，(\d+) 份总结；恢复前安全备份已自动保留。$/.exec(source);
+    if (match) return localized(`Restore complete: ${match[1]} entries and ${match[2]} summaries. The safety backup made before restoring was kept.`, `復元しました：記録${match[1]}件、まとめ${match[2]}件。復元前に作成した安全バックアップは保持されています。`);
+    match = /^备份导出失败：(.+)$/.exec(source);
+    if (match) return localized(`Backup export failed: ${match[1]}`, `バックアップのエクスポートに失敗しました：${match[1]}`);
+    match = /^备份文件无法读取：(.+)$/.exec(source);
+    if (match) return localized(`Unable to read the backup file: ${match[1]}`, `バックアップファイルを読み取れません：${match[1]}`);
+    match = /^恢复失败：(.+)$/.exec(source);
+    if (match) return localized(`Restore failed: ${match[1]}`, `復元に失敗しました：${match[1]}`);
+    match = /^备份恢复失败：(.+)$/.exec(source);
+    if (match) return localized(`Backup restore failed: ${match[1]}`, `バックアップの復元に失敗しました：${match[1]}`);
+    match = /^快捷键已更新为 (.+)$/.exec(source);
+    if (match) return localized(`Shortcut updated to ${match[1]}`, `ショートカットを${match[1]}に更新しました`);
+    match = /^(.+)，请重试$/.exec(source);
+    if (match) {
+      const prefix = localizePattern(match[1]);
+      if (prefix !== match[1]) return locale === 'en-US' ? `${prefix}. Please try again.` : `${prefix}。もう一度お試しください。`;
+    }
     match = /^已读取 (\d+) 条日报，形成 (\d+) 组术语；上次识别：(.+)。可再次识别并合并。$/.exec(source);
     if (match) return localized(`${match[1]} entries analyzed; ${match[2]} terminology groups created. Last analysis: ${match[3]}. Analyze and merge again.`, `${match[1]}件の日報を読み込み、${match[2]}組の用語を作成しました。前回の分析：${match[3]}。再分析して統合できます。`);
 
@@ -756,21 +816,87 @@
     if (match) return locale === 'en-US' ? `Terminology updated: ${match[1]} groups` : `用語辞書を更新しました：${match[1]}組`;
     match = /^(\d+) 组术语$/.exec(source);
     if (match) return locale === 'en-US' ? `${match[1]} terminology groups` : `${match[1]}組の用語`;
+    match = /^匹配 (\d+) \/ (\d+) 组术语$/.exec(source);
+    if (match) return locale === 'en-US'
+      ? `${match[1]} / ${match[2]} terminology groups match`
+      : `${match[1]} / ${match[2]}組の用語が一致`;
+    match = /^没有找到与“(.+)”匹配的术语；可以直接在上方新增术语。$/.exec(source);
+    if (match) return locale === 'en-US'
+      ? `No terminology matches “${match[1]}”. You can add one above.`
+      : `「${match[1]}」に一致する用語がありません。上で追加できます。`;
     match = /^AI 已连接 · (.+)$/.exec(source);
     if (match) return locale === 'en-US' ? `AI connected · ${match[1]}` : `AI 接続済み · ${match[1]}`;
     if (source === 'AI 已配置') return locale === 'en-US' ? 'AI configured' : 'AI 設定済み';
     if (source === 'AI 连接失败') return locale === 'en-US' ? 'AI connection failed' : 'AI 接続失敗';
     if (source === '未配置 AI') return locale === 'en-US' ? 'AI not configured' : 'AI 未設定';
+    if (source === '已加入生成队列，等待可用的 AI 请求…') {
+      return locale === 'en-US' ? 'Queued; waiting for an available AI request…' : '生成キューに追加しました。利用可能な AI リクエストを待っています…';
+    }
+    if (source === '正在连接 DeepSeek，准备分析原始记录…') {
+      return locale === 'en-US' ? 'Connecting to DeepSeek and preparing to analyze the original entries…' : 'DeepSeek に接続し、元の記録を分析する準備をしています…';
+    }
+    match = /^正在分析第 (\d+)\/(\d+) 段原始记录…$/.exec(source);
+    if (match) return locale === 'en-US'
+      ? `Analyzing original entries, segment ${match[1]}/${match[2]}…`
+      : `元の記録の${match[1]}/${match[2]}セグメントを分析中…`;
+    match = /^AI 正在分析第 (\d+)\/(\d+) 段记录…$/.exec(source);
+    if (match) return locale === 'en-US'
+      ? `AI is analyzing entries, segment ${match[1]}/${match[2]}…`
+      : `AI が記録の${match[1]}/${match[2]}セグメントを分析中…`;
+    match = /^正在接收总结正文，已收到 (\d+) 字…$/.exec(source);
+    if (match) return locale === 'en-US'
+      ? `Receiving the summary; ${match[1]} characters received…`
+      : `まとめを受信中。${match[1]}文字を受信しました…`;
+    match = /^正在继续整理总结正文（第 (\d+) 次）…$/.exec(source);
+    if (match) return locale === 'en-US'
+      ? `Continuing to organize the summary (attempt ${match[1]})…`
+      : `まとめを整理中（${match[1]}回目）…`;
+    if (source === '正在继续整理总结正文…') return locale === 'en-US' ? 'Continuing to organize the summary…' : 'まとめを整理中…';
+    if (source === '正在继续生成总结…') return locale === 'en-US' ? 'Continuing to generate the summary…' : 'まとめを生成中…';
+    if (source === '正文流式输出完成，准备保存完整报告…') return locale === 'en-US' ? 'Streaming output complete; preparing to save the full report…' : '本文のストリーミング出力が完了しました。完全なレポートを保存中…';
+    if (source === '正在保存报告正文、完整性清单和原始记录明细…') return locale === 'en-US' ? 'Saving the report, completeness checklist, and original entry details…' : 'レポート本文、完全性チェック、元の記録詳細を保存中…';
+    if (source === '报告已保存，可以查看、编辑或导出。') return locale === 'en-US' ? 'Report saved. You can view, edit, or export it.' : 'レポートを保存しました。表示、編集、エクスポートができます。';
+    if (source === '正文已生成，正在保存完整报告。') return locale === 'en-US' ? 'The main text is ready; saving the full report.' : '本文を生成しました。完全なレポートを保存中です。';
+    if (source === '生成过程中发生错误。') return locale === 'en-US' ? 'An error occurred during generation.' : '生成中にエラーが発生しました。';
+    if (source === '正在对照历史记录和本期记录…') return locale === 'en-US' ? 'Comparing historical and current-period entries…' : '履歴と今回の記録を照合中…';
+    if (source === '正在连接 AI，准备对照历史记录…') return locale === 'en-US' ? 'Connecting to AI and preparing the historical comparison…' : 'AI に接続し、履歴との照合を準備中…';
+    if (source === '近期闭环已保存。') return locale === 'en-US' ? 'Recent closures saved.' : '最近の完了事項を保存しました。';
+    if (source === '近期闭环已保存；详细过程默认收起。') return locale === 'en-US' ? 'Recent closures saved; details are collapsed by default.' : '最近の完了事項を保存しました。詳細は初期状態で閉じられています。';
+    match = /^正在分析历史记录第 (\d+)\/(\d+) 批…$/.exec(source);
+    if (match) return locale === 'en-US' ? `Analyzing historical entries, batch ${match[1]}/${match[2]}…` : `履歴の${match[1]}/${match[2]}バッチを分析中…`;
+    match = /^AI 正在判断历史记录与本期记录的语义关系（第 (\d+)\/(\d+) 批）…$/.exec(source);
+    if (match) return locale === 'en-US' ? `AI is comparing historical and current entries (batch ${match[1]}/${match[2]})…` : `AI が履歴と今回の記録の意味関係を判定中（${match[1]}/${match[2]}バッチ）…`;
+    match = /^正在整理第 (\d+)\/(\d+) 批结构化结果…$/.exec(source);
+    if (match) return locale === 'en-US' ? `Organizing structured results, batch ${match[1]}/${match[2]}…` : `構造化結果の${match[1]}/${match[2]}バッチを整理中…`;
+    if (source === '正在继续整理闭环结果…') return locale === 'en-US' ? 'Continuing to organize closure results…' : '完了事項の結果を整理中…';
+    if (source === '正在继续分析闭环结果…') return locale === 'en-US' ? 'Continuing to analyze closure results…' : '完了事項の結果を分析中…';
+    match = /^已完成第 (\d+)\/(\d+) 批历史对照…$/.exec(source);
+    if (match) return locale === 'en-US' ? `Historical comparison batch ${match[1]}/${match[2]} complete…` : `履歴照合の${match[1]}/${match[2]}バッチが完了…`;
+    match = /^开始扫描全部 (\d+) 条日报…$/.exec(source);
+    if (match) return locale === 'en-US' ? `Scanning all ${match[1]} entries…` : `全${match[1]}件の日報をスキャン中…`;
+    match = /^正在识别第 (\d+)\/(\d+) 批日报…$/.exec(source);
+    if (match) return locale === 'en-US' ? `Analyzing entries, batch ${match[1]}/${match[2]}…` : `日報の${match[1]}/${match[2]}バッチを認識中…`;
+    match = /^AI 正在分析第 (\d+)\/(\d+) 批日报…$/.exec(source);
+    if (match) return locale === 'en-US' ? `AI is analyzing entries, batch ${match[1]}/${match[2]}…` : `AI が日報の${match[1]}/${match[2]}バッチを分析中…`;
+    match = /^正在整理第 (\d+)\/(\d+) 批 AI 输出…$/.exec(source);
+    if (match) return locale === 'en-US' ? `Organizing AI output, batch ${match[1]}/${match[2]}…` : `AI 出力の${match[1]}/${match[2]}バッチを整理中…`;
+    match = /^已完成第 (\d+)\/(\d+) 批，正在保留候选术语…$/.exec(source);
+    if (match) return locale === 'en-US' ? `Batch ${match[1]}/${match[2]} complete; preserving candidate terms…` : `${match[1]}/${match[2]}バッチが完了。候補用語を保持中…`;
+    if (source === '正在合并跨批次的同义叫法…') return locale === 'en-US' ? 'Merging equivalent names across batches…' : 'バッチ間の同義語を統合中…';
+    match = /^词典已保存，共 (\d+) 组术语。$/.exec(source);
+    if (match) return locale === 'en-US' ? `Dictionary saved with ${match[1]} terminology groups.` : `用語辞書を保存しました。${match[1]}組です。`;
     return source;
   }
 
   function translateText(value) {
     const source = String(value || '');
-    if (currentLocale === localeApi.DEFAULT_LOCALE) return source;
     const leading = source.match(/^\s*/)?.[0] || '';
     const trailing = source.match(/\s*$/)?.[0] || '';
     const core = source.slice(leading.length, source.length - trailing.length || source.length);
-    return leading + localizePattern(core) + trailing;
+    const translatedCore = currentLocale === localeApi.DEFAULT_LOCALE ? core : localizePattern(core);
+    const translated = leading + translatedCore + trailing;
+    rememberRenderedSource(translated, source);
+    return translated;
   }
 
   const ignoredTags = new Set(['SCRIPT', 'STYLE', 'TEXTAREA', 'PRE']);
@@ -779,8 +905,30 @@
   const textRendered = new WeakMap();
   const attributeSources = new WeakMap();
   const attributeRendered = new WeakMap();
+  // 动态渲染器通常会先调用 t() 再把结果放入 DOM。记录“译文 -> 源文案”，
+  // 避免 MutationObserver 在非中文界面首次看到动态节点时，把译文误当成源文案。
+  // 否则下一次切换语言时，节点没有可供反向翻译的中文键，会残留上一种语言。
+  const renderedSourceHints = new Map();
   let titleSource = '';
   let titleRendered = '';
+
+  function rememberRenderedSource(rendered, source) {
+    if (!rendered || !source || rendered === source) return;
+    const candidates = renderedSourceHints.get(rendered) || [];
+    if (!candidates.includes(source)) candidates.push(source);
+    // 用户可以长时间运行应用；限制提示表规模，避免动态错误文本无限增长。
+    if (candidates.length > 8) candidates.splice(0, candidates.length - 8);
+    renderedSourceHints.set(rendered, candidates);
+    if (renderedSourceHints.size > 2000) {
+      const oldest = renderedSourceHints.keys().next().value;
+      if (oldest !== undefined) renderedSourceHints.delete(oldest);
+    }
+  }
+
+  function sourceHintFor(rendered) {
+    const candidates = renderedSourceHints.get(rendered);
+    return candidates?.[candidates.length - 1] || '';
+  }
 
   function shouldSkip(node) {
     let el = node.nodeType === Node.ELEMENT_NODE ? node : node.parentElement;
@@ -796,9 +944,8 @@
     if (!node || shouldSkip(node)) return;
     const current = node.nodeValue || '';
     const previous = textRendered.get(node);
-    const source = previous !== undefined && current === previous
-      ? textSources.get(node) || current
-      : current;
+    const source = sourceHintFor(current)
+      || (previous !== undefined && current === previous ? textSources.get(node) || current : current);
     const translated = translateText(source);
     textSources.set(node, source);
     textRendered.set(node, translated);
@@ -812,9 +959,10 @@
         const current = element.getAttribute(attr) || '';
         const sources = attributeSources.get(element) || {};
         const rendered = attributeRendered.get(element) || {};
-        const source = rendered[attr] !== undefined && current === rendered[attr]
-          ? sources[attr] || current
-          : current;
+        const source = sourceHintFor(current)
+          || (rendered[attr] !== undefined && current === rendered[attr]
+            ? sources[attr] || current
+            : current);
         const translated = translateText(source);
         sources[attr] = source;
         rendered[attr] = translated;
@@ -861,7 +1009,7 @@
   const api = {
     get locale() { return currentLocale; },
     locales: localeApi.SUPPORTED_LOCALES.slice(),
-    t: value => localizePattern(String(value || '')),
+    t: value => translateText(value),
     translateText,
     applyDocument,
     setLocale

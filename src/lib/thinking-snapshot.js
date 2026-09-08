@@ -32,6 +32,7 @@
       phase,
       text: text(snapshot.text),
       content: text(snapshot.content),
+      locale: text(snapshot.locale).slice(0, 16),
       segment: count(snapshot.segment),
       totalSegments: count(snapshot.totalSegments),
       continuation: count(snapshot.continuation),

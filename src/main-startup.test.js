@@ -9,6 +9,7 @@ const appSource = fs.readFileSync(path.join(__dirname, 'renderer', 'app.js'), 'u
 const indexSource = fs.readFileSync(path.join(__dirname, 'renderer', 'index.html'), 'utf8');
 const i18nSource = fs.readFileSync(path.join(__dirname, 'renderer', 'i18n.js'), 'utf8');
 const discovery = require('./lib/terminology-discovery');
+const promptCatalog = require('./lib/prompt-catalog');
 
 test('语言包从固定外部文件读取，切换语言不重载渲染页面', () => {
   for (const locale of ['zh-CN', 'en-US', 'ja-JP']) {
@@ -73,6 +74,31 @@ test('并发周期报告的进度事件携带任务 ID，避免切周后串到�
 test('报告流正常结束但缺少 finish_reason 时按完成处理，续写不重复开启思考', () => {
   assert.match(mainSource, /return \{ finishReason: finishReason \|\| 'stop', usage \}/);
   assert.match(mainSource, /const thinkingEnabled = continuationCount === 0/);
+});
+
+test('AI 提示词按界面语言从外部目录解析，并在切换后刷新设置页', () => {
+  assert.equal(promptCatalog.validateCatalog(), true);
+  assert.match(mainSource, /promptSchemaVersion:\s*PROMPT_SCHEMA_VERSION/);
+  assert.match(mainSource, /settings\.promptOverrides\s*=\s*migrateLegacyPromptOverrides\(s\)/);
+  assert.match(mainSource, /resolvedPrompt\('reportTemplate'/);
+  assert.match(mainSource, /resolvedPrompt\('closure'/);
+  assert.match(mainSource, /resolvedPrompt\('terminologyDiscovery'/);
+  assert.match(appSource, /window\.api\.getSettings\(\)\.then\(localizedSettings/);
+  assert.match(appSource, /reportTemplateDefaults/);
+});
+
+test('主题家族和亮暗模式同步到主窗口与快速记录条', () => {
+  const quickSource = fs.readFileSync(path.join(__dirname, 'renderer', 'quick.js'), 'utf8');
+  const styleSource = fs.readFileSync(path.join(__dirname, 'renderer', 'style.css'), 'utf8');
+  const quickStyleSource = fs.readFileSync(path.join(__dirname, 'renderer', 'quick.css'), 'utf8');
+
+  assert.match(mainSource, /const THEME_FAMILIES = \['gold', 'sky', 'mint', 'violet'\]/);
+  assert.match(mainSource, /themeFamily/);
+  assert.match(mainSource, /webContents\.send\('theme:changed', t\)/);
+  assert.match(preloadSource, /getTheme:\s*\(\)\s*=>\s*ipcRenderer\.invoke\('theme:get'/);
+  assert.match(quickSource, /dataset\.themeFamily/);
+  assert.match(styleSource, /\[data-theme-family="sky"\]/);
+  assert.match(quickStyleSource, /\[data-theme="dark"\]\[data-theme-family="violet"\]/);
 });
 
 test('无日报记录时在读取缓存和调用 AI 前直接返回', () => {

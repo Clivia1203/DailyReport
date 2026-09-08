@@ -5,6 +5,7 @@ const test = require('node:test');
 
 const root = path.resolve(__dirname, '../..');
 const appSource = fs.readFileSync(path.join(root, 'src/renderer/app.js'), 'utf8');
+const autoRefreshSource = fs.readFileSync(path.join(root, 'src/renderer/closure-autorefresh.js'), 'utf8');
 const htmlSource = fs.readFileSync(path.join(root, 'src/renderer/index.html'), 'utf8');
 const cssSource = fs.readFileSync(path.join(root, 'src/renderer/style.css'), 'utf8');
 const previewPath = path.join(root, '.scratch/ai-report-prototype/ai-report-prototype.html');
@@ -33,11 +34,47 @@ test('近期闭环支持默认收起且不落盘的 AI 思考过程', () => {
   assert.match(appSource, /thinking\.open \? '收起详细过程' : '查看详细过程'/);
   assert.match(appSource, /thinking\.open = !thinking\.open;/);
   assert.match(appSource, /thinkingState\.appendThinkingProgress\(thinking,[\s\S]*progress\.phase === 'thinking'/);
-  assert.match(cssSource, /\.wb-closure-thinking\s*\{[\s\S]*background:color-mix\(in srgb, var\(--accent\)/s);
+  assert.match(cssSource, /\.wb-closure-thinking\s*\{[\s\S]*background:var\(--accent-soft\)/s);
+});
+
+test('近期闭环自动分析受大窗口可见性、内容变化和冷却时间控制', () => {
+  assert.match(htmlSource, /closure-autorefresh\.js[\s\S]*app\.js/);
+  assert.match(appSource, /function isClosureWorkbenchVisible\(\)[\s\S]*weeklyWorkbench\.hidden[\s\S]*viewMain\.hidden[\s\S]*document\.hidden/);
+  assert.match(appSource, /createClosureAutoRefresh\([\s\S]*generateWorkbenchClosure\(false, \{ automatic: true \}\)/);
+  assert.match(autoRefreshSource, /debounceMs/);
+  assert.match(autoRefreshSource, /cooldownMs/);
+  assert.match(appSource, /loadWorkbenchClosure\(\{ autoReason: 'startup', schedule: false \}\)/);
+  assert.match(appSource, /resumeVisibleClosureAutomation\('visible'\)/);
+});
+
+test('首次术语识别也不会在后台或小窗口自动调用 AI', () => {
+  assert.match(appSource, /function ensureTerminologyDiscovery\(\)[\s\S]*!isClosureWorkbenchVisible\(\)/);
+  assert.match(appSource, /document\.addEventListener\('visibilitychange',[\s\S]*resumeVisibleClosureAutomation\('visible'\)/);
 });
 
 test('近期闭环的 AI 工作过程与空结果卡片保持清晰间距', () => {
   assert.match(cssSource, /\.wb-closure-card\s*>\s*\.wb-closure-thinking\s*\+\s*\.wb-empty\s*\{[\s\S]*margin-top:\s*11px/);
+});
+
+test('切换语言时正在生成的近期闭环也会完整重绘固定文案', () => {
+  assert.match(appSource, /function renderWeeklyWorkbench\(\{\s*force = false\s*\} = \{\}\)/);
+  assert.match(appSource, /if \(!force && livePlan === 'patch'\)/);
+  assert.match(appSource, /renderWeeklyWorkbench\(\{ force: true \}\)/);
+  assert.match(appSource, /workbenchHeader\('近期总结', '最近完成了什么', info\)/);
+});
+
+test('近期闭环头部和操作区能容纳长语言，不让标题与状态互相挤压', () => {
+  assert.match(appSource, /wbNode\('div', 'wb-head-copy'\)/);
+  assert.match(cssSource, /\.wb-head\s*\{[^}]*display:grid;[^}]*grid-template-columns:minmax\(0,1fr\)/s);
+  assert.match(cssSource, /\.wb-head-copy\s*\{[^}]*min-width:0/s);
+  assert.match(cssSource, /\.wb-status\s*\{[^}]*max-width:100%[^}]*text-align:left/s);
+  assert.match(cssSource, /\.wb-action\s*\{[^}]*height:auto[^}]*min-height:[^;]+[^}]*white-space:normal/s);
+});
+
+test('主界面日期按当前语言格式化，不会显示 undefined', () => {
+  assert.match(appSource, /function localizedTodayDate\(date\)/);
+  assert.match(appSource, /date\.textContent = localizedTodayDate\(d\)/);
+  assert.doesNotMatch(appSource, /date\.textContent = uiText\(`\$\{d\.getMonth\(\) \+ 1\}/);
 });
 
 test('待确认叫法只在术语规范设置中展示，主画面不阻塞使用', () => {
@@ -48,11 +85,15 @@ test('待确认叫法只在术语规范设置中展示，主画面不阻塞使�
   assert.doesNotMatch(appSource, /appendClosureSuggestions\(closureModalContent, data, false\)/);
 });
 
-test('AI 工作过程状态完整显示，空间不足时让按钮换行', () => {
-  assert.match(cssSource, /\.report-thinking-head\s*\{[^}]*flex-wrap:\s*wrap/);
-  assert.match(cssSource, /\.report-thinking-head > div:first-child\s*\{[\s\S]*min-width:\s*max-content[\s\S]*overflow:\s*visible/);
-  assert.doesNotMatch(cssSource, /\.report-thinking-head > div:first-child\s*\{[^}]*text-overflow:\s*ellipsis/);
-  assert.match(cssSource, /\.report-thinking-status\s*\{[\s\S]*white-space:\s*nowrap/s);
+test('AI 工作过程标题、状态和操作按钮各有稳定区域，长状态不会挤掉按钮', () => {
+  assert.match(htmlSource, /report-thinking-head[\s\S]*report-thinking-title[\s\S]*report-thinking-status[\s\S]*report-thinking-toggle/);
+  assert.match(appSource, /const title = wbNode\('span', 'report-thinking-title'/);
+  assert.match(appSource, /const status = wbNode\('span', 'report-thinking-status'/);
+  assert.match(appSource, /head\.append\(title, status, toggle\)/);
+  assert.match(cssSource, /\.report-thinking-head\s*\{[^}]*display:grid;[^}]*grid-template-columns:max-content minmax\(0,1fr\) minmax\(0,max-content\)/s);
+  assert.match(cssSource, /\.report-thinking-status\s*\{[\s\S]*min-width:0[\s\S]*white-space:\s*normal[\s\S]*overflow-wrap:\s*anywhere/s);
+  assert.match(cssSource, /\.report-thinking-head > \.link-btn\s*\{[\s\S]*min-width:0[\s\S]*white-space:\s*normal/s);
+  assert.doesNotMatch(cssSource, /\.report-thinking-head\s*\{[^}]*flex-wrap:\s*wrap/);
 });
 
 test('报告 AI 工作过程按报告周期缓存，空周期不会继承其他周期', () => {

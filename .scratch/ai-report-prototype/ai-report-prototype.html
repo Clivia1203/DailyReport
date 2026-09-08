@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>日报随手记 · 工作台</title>
+  <style>
+    :root { --bg:#f5f6fa; --card:#fff; --line:#e4e7ef; --text:#1c2029; --muted:#747b89; --accent:#5869ee; --soft:#eef0ff; --good:#16865b; --warn:#ad7411; }
+    * { box-sizing:border-box; }
+    body { margin:0; min-height:100vh; background:var(--bg); color:var(--text); font:14px/1.55 "Segoe UI", "Microsoft YaHei", sans-serif; }
+    button, select { font:inherit; }
+    button { cursor:pointer; }
+    .shell { width:min(1180px, calc(100% - 40px)); margin:0 auto; min-height:100vh; display:flex; flex-direction:column; }
+    .top { height:64px; display:flex; align-items:center; justify-content:space-between; border-bottom:1px solid var(--line); }
+    .brand { display:flex; align-items:center; gap:10px; font-weight:700; }
+    .dot { width:10px; height:10px; border-radius:50%; background:var(--accent); box-shadow:0 0 0 4px var(--soft); }
+    .top-actions { display:flex; align-items:center; gap:8px; }
+    .ghost, .primary, .select { border:1px solid var(--line); border-radius:9px; background:var(--card); color:var(--text); height:34px; padding:0 12px; }
+    .primary { background:var(--accent); color:#fff; border-color:var(--accent); font-weight:650; }
+    .status { color:var(--good); font-size:12px; }
+    .content { flex:1; padding:24px 0 84px; }
+    .eyebrow { color:var(--muted); font-size:12px; font-weight:650; letter-spacing:.04em; }
+    h1 { margin:4px 0 18px; font-size:25px; line-height:1.2; }
+    h2 { margin:0; font-size:16px; }
+    h3 { margin:0; font-size:14px; }
+    .toolbar { display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-bottom:18px; }
+    .toolbar .grow { flex:1; }
+    .report-scope { display:flex; gap:8px; align-items:center; }
+    .report-scope .select { min-width:115px; }
+    .layout { display:grid; grid-template-columns:minmax(0, 1fr) 300px; gap:18px; }
+    .panel { background:var(--card); border:1px solid var(--line); border-radius:14px; }
+    .panel-head { padding:16px 18px; border-bottom:1px solid var(--line); display:flex; justify-content:space-between; align-items:center; gap:12px; }
+    .panel-body { padding:18px; }
+    .report-title { font-size:20px; font-weight:700; margin-bottom:12px; }
+    .report-body { color:#343944; }
+    .report-body h3 { margin:18px 0 6px; color:var(--text); }
+    .report-body ul { margin:6px 0 0 20px; padding:0; }
+    .report-body li { margin:5px 0; }
+    .mono { white-space:pre-wrap; font:13px/1.7 Consolas, monospace; color:#343944; }
+    .record { padding:10px 0; border-bottom:1px solid var(--line); display:flex; gap:10px; }
+    .record:last-child { border-bottom:0; }
+    .time { flex:none; color:var(--accent); font:12px Consolas, monospace; }
+    .meta { display:flex; flex-wrap:wrap; gap:6px; margin-top:12px; }
+    .chip { display:inline-flex; border:1px solid var(--line); border-radius:999px; padding:2px 8px; color:var(--muted); font-size:11px; }
+    .chip.ai { color:var(--accent); border-color:#cbd0ff; background:var(--soft); }
+    .note { color:var(--muted); font-size:12px; }
+    .action-row { display:flex; gap:8px; flex-wrap:wrap; margin-top:16px; }
+    .preview { background:#fafbff; border:1px solid #dfe3ff; border-radius:12px; padding:14px; }
+    .preview strong { display:block; margin-bottom:5px; }
+    .metric { display:flex; justify-content:space-between; padding:9px 0; border-bottom:1px solid var(--line); }
+    .metric:last-child { border-bottom:0; }
+    .rail { display:flex; flex-direction:column; gap:12px; }
+    .rail .panel-body { padding:14px 16px; }
+    .rail-title { color:var(--muted); font-size:12px; margin-bottom:8px; }
+    .collapsed-report { display:none; }
+    .drawer { position:fixed; inset:0; background:rgba(15,17,23,.34); display:flex; align-items:center; justify-content:center; padding:24px; z-index:5; }
+    .drawer[hidden] { display:none; }
+    .dialog { width:min(760px, 100%); max-height:min(780px, 90vh); overflow:auto; background:var(--card); border:1px solid var(--line); border-radius:16px; box-shadow:0 18px 60px rgba(16,24,40,.22); }
+    .dialog .panel-head { position:sticky; top:0; background:var(--card); z-index:1; }
+    @media (max-width:760px) {
+      .shell { width:min(100% - 24px, 680px); }
+      .top { height:56px; }
+      .brand .status { display:none; }
+      .content { padding-top:18px; }
+      h1 { font-size:21px; }
+      .layout { display:block; }
+      .side-rail { display:none; }
+      .wide-only { display:none !important; }
+      .collapsed-report { display:block; }
+      .report-inline { display:none; }
+      .summary-card .panel-body { display:block; }
+      .summary-card .primary { width:100%; }
+      .drawer { padding:12px; }
+      .dialog { max-height:calc(100vh - 24px); }
+      .top-actions .ghost:first-child { display:none; }
+    }
+    @media (min-width:761px) {
+      .collapsed-report { display:none; }
+    }
+  </style>
+</head>
+<body>
+  <div id="app"></div>
+  <div class="drawer" id="drawer" hidden>
+    <article class="dialog">
+      <div class="panel-head"><div><div class="eyebrow">AI 总结 · 2026-09-01 至 2026-09-05</div><h2>本周期工作总结</h2></div><button class="ghost" id="close">关闭</button></div>
+      <div class="panel-body">
+        <div class="report-body">
+          <h3>本周完成</h3>
+          <ul><li>完成日报工具登录接口联调，推进接口功能验证。</li><li>修复 Excel 导出问题，改善日报交付格式。</li><li>参加客户需求评审，明确下一阶段工作范围。</li></ul>
+          <h3>问题与风险</h3><ul><li>暂无明确风险，建议继续观察接口联调结果。</li></ul>
+          <h3>下周计划</h3><ul><li>继续完善周报输出格式，并验证异常数据恢复流程。</li></ul>
+        </div>
+      </div>
+    </article>
+  </div>
+  <script>
+    const report = `<div class="report-title">本周期工作总结</div><div class="note">周期：2026-09-01 至 2026-09-05　·　来源：12 条记录　·　覆盖：12 / 12　·　模型：deepseek-chat</div><div class="meta"><span class="chip ai">AI 已生成</span><span class="chip">全部记录已覆盖</span><span class="chip">可编辑</span><span class="chip">Markdown</span></div><div class="report-body"><h3>本周完成</h3><ul><li>完成日报工具登录接口联调，推进接口功能验证。</li><li>修复 Excel 导出问题，改善日报交付格式。</li><li>参加客户需求评审，明确下一阶段工作范围。</li></ul><h3>问题与风险</h3><ul><li>暂无明确风险，建议继续观察接口联调结果。</li></ul><h3>下周计划</h3><ul><li>继续完善周报输出格式，并验证异常数据恢复流程。</li></ul></div>`;
+    const records = `<div class="record"><span class="time">09:12</span><span>完成登录接口联调，推进接口功能验证。</span></div><div class="record"><span class="time">13:40</span><span>修复 Excel 导出问题，改善日报交付格式。</span></div><div class="record"><span class="time">16:20</span><span>参加客户需求评审，明确下一阶段工作范围。</span></div>`;
+    function shell() {
+      document.body.className = '';
+      const app = document.querySelector('#app');
+      app.innerHTML = `<div class="shell"><header class="top"><div class="brand"><span class="dot"></span><span>日报随手记</span><span class="status">● AI 已连接</span></div><div class="top-actions"><button class="ghost">记录</button><button class="ghost">⚙ 设置</button></div></header><main class="content">${workbench()}</main></div>`;
+      document.querySelector('#close').onclick = () => document.querySelector('#drawer').hidden = true;
+      document.querySelector('#drawer').onclick = e => { if (e.target.id === 'drawer') e.target.hidden = true; };
+    }
+    function scope() { return `<div class="toolbar"><div class="report-scope"><select class="select"><option>本周</option><option>本月</option><option>自定义周期</option></select><button class="ghost" title="上一周期" aria-label="上一周期">‹</button><button class="ghost" title="下一周期" aria-label="下一周期">›</button></div><span class="grow"></span><select class="select"><option>Markdown</option><option>纯文本</option></select><button class="ghost">导出</button><button class="primary">重新生成</button></div>`; }
+    function workbench() { return `<div class="eyebrow">AI 总结</div><h1>总结工作台</h1>${scope()}<div class="layout"><section class="panel report-panel"><div class="panel-head"><div><h2>生成结果</h2><div class="note">生成后可编辑，原始记录不会被修改</div></div><button class="ghost">复制</button></div><div class="panel-body report-inline">${report}</div><div class="panel-body collapsed-report"><div class="preview"><strong>本周期工作总结</strong><span class="note">已根据 12 条记录生成，全部记录已覆盖</span></div><div class="action-row"><button class="primary" id="compact-open">查看完整总结</button></div></div></section><aside class="rail side-rail"><section class="panel"><div class="panel-body"><div class="rail-title">本周期概览</div><div class="metric"><span>记录数</span><b>12</b></div><div class="metric"><span>覆盖日期</span><b>5 天</b></div><div class="metric"><span>内容覆盖</span><b class="status">12 / 12</b></div></div></section><section class="panel record-source"><div class="panel-head"><h3>原始记录</h3><span class="note">只读</span></div><div class="panel-body">${records}</div></section></aside></div>`; }
+    function openCompact() { document.querySelectorAll('#compact-open').forEach(x => x.onclick = () => document.querySelector('#drawer').hidden = false); }
+    shell(); openCompact();
+  </script>
+</body>
+</html>

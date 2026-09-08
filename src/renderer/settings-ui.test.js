@@ -6,8 +6,34 @@ const test = require('node:test');
 const root = path.resolve(__dirname);
 const htmlSource = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
 const appSource = fs.readFileSync(path.join(root, 'app.js'), 'utf8');
+const customSelectSource = fs.readFileSync(path.join(root, 'custom-select.js'), 'utf8');
 const preloadSource = fs.readFileSync(path.join(root, '..', 'preload.js'), 'utf8');
 const cssSource = fs.readFileSync(path.join(root, 'style.css'), 'utf8');
+
+function readThemeVariables(selector) {
+  const escapedSelector = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const match = cssSource.match(new RegExp(`${escapedSelector}\\s*\\{([\\s\\S]*?)\\n\\}`));
+  assert.ok(match, `${selector} 主题变量不存在`);
+  const variables = {};
+  for (const [, name, value] of match[1].matchAll(/--([a-z0-9-]+):\s*(#[0-9a-f]{6})\s*;/gi)) {
+    variables[name] = value;
+  }
+  return variables;
+}
+
+function colorLuminance(hex) {
+  const channels = [1, 3, 5].map(index => Number.parseInt(hex.slice(index, index + 2), 16) / 255);
+  const linear = channels.map(channel => channel <= 0.03928
+    ? channel / 12.92
+    : ((channel + 0.055) / 1.055) ** 2.4);
+  return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2];
+}
+
+function colorContrast(first, second) {
+  const light = Math.max(colorLuminance(first), colorLuminance(second));
+  const dark = Math.min(colorLuminance(first), colorLuminance(second));
+  return (light + 0.05) / (dark + 0.05);
+}
 
 function sectionSource(id) {
   const start = htmlSource.indexOf(`id="${id}"`);
@@ -36,12 +62,32 @@ test('设置页将普通设置与 AI 设置分开，AI 设置提供左右项目�
 });
 
 test('所有原生下拉框统一由应用内自定义菜单呈现', () => {
-  assert.equal((htmlSource.match(/<select\b/g) || []).length, 11);
+  assert.equal((htmlSource.match(/<select\b/g) || []).length, 12);
   assert.match(htmlSource, /custom-select\.js[\s\S]*app\.js/);
   assert.match(appSource, /customSelect\?\.enhanceAll\(document\)/);
   assert.match(appSource, /function syncCustomSelect\(select\)/);
   assert.match(cssSource, /\.custom-select-menu\s*\{[\s\S]*position:\s*fixed/);
   assert.match(cssSource, /\.custom-select-option\.selected\s*\{[\s\S]*font-weight:\s*600/);
+});
+
+test('日期筛选和更多菜单的箭头会随展开状态翻转', () => {
+  for (const id of ['date-filter-toggle', 'btn-more']) {
+    assert.match(
+      htmlSource,
+      new RegExp(`id="${id}"[^>]*aria-expanded="false"[^>]*>[\\s\\S]*?<span class="custom-select-chevron" aria-hidden="true"><\\/span>`),
+      `${id} 应使用统一的下拉箭头`
+    );
+  }
+
+  assert.match(customSelectSource, /chevron\.className = 'custom-select-chevron'/);
+  assert.match(appSource, /dateFilterToggle\.setAttribute\('aria-expanded', String\(open\)\)/);
+  assert.match(appSource, /moreToggle\.setAttribute\('aria-expanded', String\(open\)\)/);
+  assert.match(cssSource, /\.custom-select-chevron\s*\{[\s\S]*width:\s*8px[\s\S]*height:\s*8px[\s\S]*transition:\s*transform/);
+  assert.match(cssSource, /\[aria-expanded="true"\]\s*>\s*\.custom-select-chevron\s*\{[\s\S]*transform:\s*rotate\(225deg\)/);
+  assert.doesNotMatch(cssSource, /\.date-filter-toggle\s*>\s*svg|#btn-more\s*>\s*svg/);
+  assert.match(htmlSource, /id="btn-more"[^>]*>[\s\S]*?<span class="more-label">/);
+  assert.match(cssSource, /#btn-more\s*\{[^}]*gap:\s*4px[^}]*justify-content:\s*space-between/);
+  assert.match(cssSource, /#btn-more\s+\.more-label\s*\{[\s\S]*overflow:\s*hidden[\s\S]*text-overflow:\s*ellipsis/);
 });
 
 test('AI 服务将连接测试与配置保存拆成两个明确动作', () => {
@@ -65,6 +111,80 @@ test('软件启动时自动检查已保存的 AI 配置，且同一会话不会�
   assert.match(appSource, /window\.api\.testAi\(''\)/);
   assert.match(appSource, /loadSettingsUI\(\)[\s\S]*autoTestAiOnStartup/);
   assert.doesNotMatch(appSource, /AI 已配置，待测试/);
+});
+
+test('主题配色覆盖四套主题家族，并保留亮暗模式切换', () => {
+  assert.match(htmlSource, /<select id="theme-family-select" class="theme-family-select"/);
+  assert.doesNotMatch(htmlSource, /theme-family-seg/);
+  for (const family of ['gold', 'sky', 'mint', 'violet']) {
+    assert.match(htmlSource, new RegExp(`<option value="${family}">`));
+    assert.match(cssSource, new RegExp(`data-theme-family="${family}"`));
+  }
+  for (const mode of ['auto', 'light', 'dark']) {
+    assert.match(htmlSource, new RegExp(`data-v="${mode}"`));
+  }
+  assert.match(appSource, /function syncThemeFamilySelect\(\)/);
+  assert.match(appSource, /themeFamilySelect\.addEventListener\('change'/);
+  assert.match(appSource, /setSettings\(\{ themeFamily: nextFamily \}\)/);
+  assert.match(appSource, /if \(res\.ok && state\.settings\) state\.settings\.themeFamily = nextFamily;\s*syncThemeFamilySelect\(\);/);
+  assert.match(cssSource, /.theme-family-select\s*\{[^}]*width:\s*148px/);
+  assert.match(cssSource, /\[data-theme="dark"\]\[data-theme-family="violet"\]/);
+  assert.match(cssSource, /--scrollbar-thumb:[^;]+/);
+  assert.match(cssSource, /::-webkit-scrollbar-thumb\s*\{[^}]*background:\s*var\(--scrollbar-thumb\)/);
+});
+
+test('所有主题的控件表面、边框和辅助文字保持可辨识对比度', () => {
+  const themes = [
+    ['gold-light', ':root, [data-theme-family="gold"]'],
+    ['sky-light', '[data-theme-family="sky"]'],
+    ['mint-light', '[data-theme-family="mint"]'],
+    ['violet-light', '[data-theme-family="violet"]'],
+    ['gold-dark', '[data-theme="dark"][data-theme-family="gold"]'],
+    ['sky-dark', '[data-theme="dark"][data-theme-family="sky"]'],
+    ['mint-dark', '[data-theme="dark"][data-theme-family="mint"]'],
+    ['violet-dark', '[data-theme="dark"][data-theme-family="violet"]']
+  ];
+
+  for (const [name, selector] of themes) {
+    const variables = readThemeVariables(selector);
+    assert.ok(
+      colorContrast(variables.bg, variables['input-bg']) >= 1.08,
+      `${name}: 输入/下拉框底色与页面背景过于接近`
+    );
+    assert.ok(
+      colorContrast(variables.card, variables.border) >= 1.55,
+      `${name}: 卡片边框与卡片背景过于接近`
+    );
+    assert.ok(
+      colorContrast(variables['input-bg'], variables['text-2']) >= 4.5,
+      `${name}: 输入区域辅助文字对比度不足`
+    );
+    assert.ok(
+      colorContrast(variables['accent-soft'], variables.accent) >= 4,
+      `${name}: 浅色强调底上的强调文字对比度不足`
+    );
+    for (const status of ['success', 'warning', 'danger']) {
+      assert.ok(
+        colorContrast(variables[`${status}-soft`], variables[status]) >= 4,
+        `${name}: ${status} 状态文字与状态底色对比度不足`
+      );
+    }
+  }
+});
+
+test('下拉框、状态卡和禁用按钮在默认状态也保留清晰边界', () => {
+  const nativeControlRule = cssSource.match(/input\[type="datetime-local"\],[\s\S]*?select\s*\{([\s\S]*?)\n\}/)?.[1] || '';
+  const triggerRule = cssSource.match(/\.custom-select-trigger\s*\{([\s\S]*?)\n\}/)?.[1] || '';
+
+  assert.match(nativeControlRule, /border:\s*1px solid var\(--border\)/);
+  assert.match(triggerRule, /border:\s*1px solid var\(--border\)/);
+  assert.match(cssSource, /\.btn:disabled\s*\{[\s\S]*opacity:\s*1/);
+  assert.match(cssSource, /\.btn\.primary:disabled,[\s\S]*background:\s*var\(--input-bg\)/);
+  assert.match(cssSource, /\.custom-select-trigger:disabled\s*\{[\s\S]*border-color:\s*var\(--border-strong\)/);
+  assert.match(cssSource, /\.wb-action:disabled\s*\{[\s\S]*background:\s*var\(--input-bg\)[\s\S]*border-color:\s*var\(--border-strong\)/);
+  assert.match(cssSource, /\.wb-action\.primary:disabled,[\s\S]*background:\s*var\(--input-bg\)/);
+  assert.match(cssSource, /\.wb-status\.ok\s*\{[\s\S]*background:\s*var\(--success-soft\)/);
+  assert.match(cssSource, /\.wb-status\.warn\s*\{[\s\S]*background:\s*var\(--warning-soft\)/);
 });
 
 test('下拉选项之间保留间距，长文本不会突破选项边界', () => {
@@ -99,6 +219,14 @@ test('多语言文案变长时按钮和操作区不会溢出', () => {
   assert.match(menuRule, /overflow-wrap:\s*anywhere/);
   assert.match(rowRule, /flex-wrap:\s*wrap/);
   assert.match(cssSource, /\.template-foot\s*\{[\s\S]*flex-wrap:\s*wrap/);
+});
+
+test('切换语言后刷新自定义下拉框，选中语言名称使用当前界面语言', () => {
+  assert.match(appSource, /function syncAllCustomSelects\(\)/);
+  assert.match(appSource, /window\.DRI18n\.setLocale\(locale\)\.then\(\(\) => \{[\s\S]*localeSelect\.value = locale;[\s\S]*syncAllCustomSelects\(\);/);
+  assert.match(appSource, /window\.api\.getSettings\(\)\.then\(localizedSettings/);
+  assert.match(appSource, /syncTemplateUI\(\);[\s\S]*syncClosurePromptUI\(\);[\s\S]*syncTerminologyPromptUI\(\);/);
+  assert.match(appSource, /reportTemplateDefaults/);
 });
 
 test('术语表输入控件使用统一圆角样式且双列表单顶端对齐', () => {
@@ -155,8 +283,9 @@ test('术语识别提供默认收起的 AI 思考与输出面板', () => {
 });
 
 test('AI 工作过程的固定状态格式完整显示，不使用省略号裁切', () => {
-  assert.match(cssSource, /\.report-thinking-head > div:first-child\s*\{[\s\S]*display:flex;[\s\S]*overflow:visible;/);
-  assert.doesNotMatch(cssSource, /\.report-thinking-head > div:first-child\s*\{[^}]*text-overflow:\s*ellipsis/);
+  assert.match(cssSource, /\.report-thinking-head\s*\{[\s\S]*display:grid;[\s\S]*grid-template-columns:max-content minmax\(0,1fr\) minmax\(0,max-content\)/);
+  assert.match(cssSource, /\.report-thinking-status\s*\{[\s\S]*white-space:\s*normal[\s\S]*overflow-wrap:\s*anywhere/);
+  assert.doesNotMatch(cssSource, /\.report-thinking-status\s*\{[^}]*text-overflow:\s*ellipsis/);
 });
 
 test('术语识别等待模型返回时，展开区域显示明确状态而不是空白', () => {

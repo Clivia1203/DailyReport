@@ -23,6 +23,7 @@
       continuation: 0,
       maxContinuations: 0,
       progressNote: '',
+      locale: '',
       reasoningLength: 0,
       contentLength: 0,
       sourceCount: 0,

@@ -5,23 +5,21 @@ const {
 const {
   normalizeTerminology
 } = require('./terminology');
+const { catalogFor } = require('./prompt-catalog');
+const DEFAULT_TERMINOLOGY_DISCOVERY_PROMPT = require('../prompts/zh-CN.json').terminologyDiscoveryPrompt;
 
 const MAX_DISCOVERY_SOURCES = 60;
 const MAX_DISCOVERY_CHARS = 18000;
 const MAX_DISCOVERY_OUTPUT_TOKENS = 4096;
 const MAX_DISCOVERY_CANDIDATES = 240;
 
-const DEFAULT_TERMINOLOGY_DISCOVERY_PROMPT = [
-  '请从日报原文中识别“可能指向同一件事情”的不同叫法，并建立可供后续报告使用的术语对照。',
-  '规范输出名称应当是记录中有证据支持、稳定且简洁的名称；常用说法必须保留用户在日报里实际使用过的原话、简称、口语、缩写、错写或新造词。',
-  '只有在结合完整记录、产品上下文和任务动作后能够合理判断为同一事项时才合并，不能只因为字面相似就合并。',
-  '同一个产品可能存在不同功率段、版本或子任务；如果细分信息没有被稳定、明确地记录，使用产品族或更宏观的规范名称，不要猜测具体功率段。',
-  '不要总结项目进度，不要补充日报之外的背景，不要把仅仅相关但不是同一事项的词语放进同一组。',
-  '如果没有足够证据形成可靠对照，可以返回空数组。'
-].join('\n');
 
-function discoverySystemPrompt() {
-  return '你是日报术语归并助手。你只能依据输入的日报记录建立术语对照，不得编造产品、项目或功率段信息。最终响应必须是合法 JSON，不要输出 Markdown 围栏、解释或思考过程。';
+function terminologyPromptRules(locale = 'zh-CN') {
+  return catalogFor(locale).terminologyPromptRules || catalogFor('zh-CN').terminologyPromptRules;
+}
+
+function discoverySystemPrompt(locale = 'zh-CN') {
+  return catalogFor(locale).terminologySystemPrompt;
 }
 
 function cleanSourceText(source) {
@@ -39,69 +37,75 @@ function splitDiscoverySources(sources, {
   return splitSources(sources, { maxSources, maxChars });
 }
 
-function discoveryFormat() {
+function discoveryFormat(locale = 'zh-CN') {
+  const rules = terminologyPromptRules(locale);
   return JSON.stringify({
     terms: [{
-      canonical_name: '记录中有证据支持的规范名称',
-      aliases: ['日报里实际出现过的叫法1', '日报里实际出现过的叫法2'],
-      scope: '只有记录明确支持时填写适用范围，否则为空字符串',
-      note: '必要时说明为什么细分信息应保留在宏观层级'
+      canonical_name: rules.formatCanonical,
+      aliases: [rules.formatAlias1, rules.formatAlias2],
+      scope: rules.formatScope,
+      note: rules.formatNote
     }]
   }, null, 2);
 }
 
-function buildDiscoveryPrompt(sources, customPrompt = DEFAULT_TERMINOLOGY_DISCOVERY_PROMPT) {
+function buildDiscoveryPrompt(sources, customPrompt, locale = 'zh-CN') {
+  const rules = terminologyPromptRules(locale);
   const list = Array.isArray(sources) ? sources : [];
   const sourceText = list.length
     ? list.map(cleanSourceText).join('\n')
-    : '（没有可用日报记录）';
+    : rules.noRecords;
+  const prompt = String(customPrompt || catalogFor(locale).terminologyDiscoveryPrompt || DEFAULT_TERMINOLOGY_DISCOVERY_PROMPT).trim();
   return [
-    '任务规则：',
-    String(customPrompt || DEFAULT_TERMINOLOGY_DISCOVERY_PROMPT).trim(),
+    rules.task,
+    prompt,
     '',
-    '本批日报记录（必须逐条阅读；每条只作为事实证据，不要遗漏记录中出现的候选叫法）：',
+    rules.records,
     sourceText,
     '',
-    '请只返回合法 JSON，格式如下：',
-    discoveryFormat(),
+    rules.returnJson,
+    discoveryFormat(locale),
     '',
-    '约束：',
-    '1. aliases 只能填写输入记录中实际出现过的说法，不要凭空创造别名。',
-    '2. 一个术语至少要有规范名称；没有可靠别名时可以暂不输出。',
-    '3. 细分范围不明确时不要强行拆分或指定功率段。'
+    rules.constraints,
+    rules.constraint1,
+    rules.constraint2,
+    rules.constraint3
   ].join('\n');
 }
 
-function formatTerminologyList(items) {
+function formatTerminologyList(items, locale = 'zh-CN') {
+  const rules = terminologyPromptRules(locale);
   const terms = normalizeTerminology(items);
-  if (!terms.length) return '（暂无已有术语）';
+  if (!terms.length) return rules.noExisting;
   return terms.map((term, index) => {
-    const aliases = term.aliases.length ? term.aliases.join('、') : '无';
-    const scope = term.scope ? `；范围：${term.scope}` : '';
-    const note = term.note ? `；说明：${term.note}` : '';
-    return `${index + 1}. 规范名称：${term.canonicalName}；常用说法：${aliases}${scope}${note}`;
+    const aliases = term.aliases.length ? term.aliases.join('、') : rules.noAliases;
+    const scope = term.scope ? `${rules.scopeLabel}${term.scope}` : '';
+    const note = term.note ? `${rules.noteLabel}${term.note}` : '';
+    return `${index + 1}. ${rules.canonical}${term.canonicalName}${rules.aliases}${aliases}${scope}${note}`;
   }).join('\n');
 }
 
-function buildConsolidationPrompt(candidates, existing = [], customPrompt = DEFAULT_TERMINOLOGY_DISCOVERY_PROMPT) {
+function buildConsolidationPrompt(candidates, existing = [], customPrompt, locale = 'zh-CN') {
+  const rules = terminologyPromptRules(locale);
   const list = normalizeTerminology(candidates).slice(0, MAX_DISCOVERY_CANDIDATES);
+  const prompt = String(customPrompt || catalogFor(locale).terminologyDiscoveryPrompt || DEFAULT_TERMINOLOGY_DISCOVERY_PROMPT).trim();
   return [
-    '请把多个批次识别出的候选术语归并为一份最终词典。',
+    rules.consolidate,
     '',
-    '归并规则：',
-    String(customPrompt || DEFAULT_TERMINOLOGY_DISCOVERY_PROMPT).trim(),
-    '如果不同候选可能是同一事项但证据不足，保留较宏观的规范名称，或不要合并；不要输出无法从候选中得到依据的新名称。',
+    rules.mergeRules,
+    prompt,
+    rules.uncertainMerge,
     '',
-    '用户已经存在的词典（必须保留其内容；新识别结果只能补充，不得删除）：',
-    formatTerminologyList(existing),
+    rules.existing,
+    formatTerminologyList(existing, locale),
     '',
-    '本次各批次候选：',
-    formatTerminologyList(list),
+    rules.candidates,
+    formatTerminologyList(list, locale),
     '',
-    '请只返回合法 JSON：',
-    discoveryFormat(),
+    rules.returnJson,
+    discoveryFormat(locale),
     '',
-    'aliases 只能来自用户词典或候选中的实际说法；不要输出解释。'
+    rules.aliasesOnly
   ].join('\n');
 }
 

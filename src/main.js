@@ -5,6 +5,11 @@ const {
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
+const UI_LOCALE_CATALOG = Object.freeze({
+  'zh-CN': require('./renderer/locales/zh-CN.json'),
+  'en-US': require('./renderer/locales/en-US.json'),
+  'ja-JP': require('./renderer/locales/ja-JP.json')
+});
 const buildXlsxBuffer = require('./lib/xlsx-export');
 const {
   DEFAULT_REPORT_TEMPLATES,
@@ -36,6 +41,17 @@ const {
   normalizeLocale,
   localeFromInstallerLanguage
 } = require('./lib/locale');
+const {
+  TEMPLATE_TYPES,
+  PROMPT_SCHEMA_VERSION,
+  createPromptOverrides,
+  migrateLegacyPromptOverrides,
+  normalizePromptOverrides,
+  defaultPrompt,
+  resolvePrompt,
+  writePromptOverride,
+  catalogFor
+} = require('./lib/prompt-catalog');
 const {
   normalizeSavedFilters
 } = require('./lib/filter-presets');
@@ -127,9 +143,31 @@ function readInstallerLocale() {
   }
 }
 
+const THEME_FAMILIES = ['gold', 'sky', 'mint', 'violet'];
+
+const THEME_WINDOW_COLORS = {
+  gold: {
+    light: { color: '#fffaf1', symbolColor: '#2e2a22', cover: '#b9ae98' },
+    dark: { color: '#19150d', symbolColor: '#eee6d7', cover: '#4a4030' }
+  },
+  sky: {
+    light: { color: '#f4f8ff', symbolColor: '#1b2538', cover: '#b3bdce' },
+    dark: { color: '#111827', symbolColor: '#e5e9f2', cover: '#303b50' }
+  },
+  mint: {
+    light: { color: '#f2fbf7', symbolColor: '#17322b', cover: '#b2c1b9' },
+    dark: { color: '#0f1e1a', symbolColor: '#e3f0ea', cover: '#2f423a' }
+  },
+  violet: {
+    light: { color: '#faf7ff', symbolColor: '#27223a', cover: '#b8b0c5' },
+    dark: { color: '#171424', symbolColor: '#eae8f4', cover: '#3d354d' }
+  }
+};
+
 const DEFAULT_SETTINGS = {
   locale: DEFAULT_LOCALE,
   theme: 'auto',          // 'auto' | 'light' | 'dark'
+  themeFamily: 'gold',    // 'gold' | 'sky' | 'mint' | 'violet'
   hotkey: DEFAULT_HOTKEY, // 唤起快速记录条的全局快捷键
   openAtLogin: false,     // 开机自启（写入系统启动项，默认关闭）
   silentStart: false,     // 静默启动：开机后仅驻留托盘，不显示主窗口
@@ -145,6 +183,8 @@ const DEFAULT_SETTINGS = {
     lastTestOk: false,
     lastError: ''
   },
+  promptSchemaVersion: PROMPT_SCHEMA_VERSION,
+  promptOverrides: createPromptOverrides(),
   reportTemplates: { ...DEFAULT_REPORT_TEMPLATES },
   closurePrompt: DEFAULT_CLOSURE_PROMPT,
   terminologyDiscoveryPrompt: DEFAULT_TERMINOLOGY_DISCOVERY_PROMPT,
@@ -166,13 +206,87 @@ const startHidden = process.argv.includes('--hidden');
 let settings = {
   ...DEFAULT_SETTINGS,
   ai: { ...DEFAULT_SETTINGS.ai },
+  promptOverrides: createPromptOverrides(),
   reportTemplates: { ...DEFAULT_SETTINGS.reportTemplates },
   terminology: [],
   terminologyDiscovery: { ...DEFAULT_SETTINGS.terminologyDiscovery }
 };
 
+function resolvedPrompt(kind, type, target = settings) {
+  return resolvePrompt({
+    locale: target.locale,
+    overrides: target.promptOverrides,
+    kind,
+    type
+  });
+}
+
+function syncEffectivePromptFields(target = settings) {
+  target.promptSchemaVersion = PROMPT_SCHEMA_VERSION;
+  target.promptOverrides = normalizePromptOverrides(target.promptOverrides);
+  target.reportTemplates = target.reportTemplates && typeof target.reportTemplates === 'object'
+    ? target.reportTemplates
+    : {};
+  for (const type of TEMPLATE_TYPES) {
+    target.reportTemplates[type] = resolvedPrompt('reportTemplate', type, target).value;
+  }
+  target.closurePrompt = resolvedPrompt('closure', undefined, target).value;
+  target.terminologyDiscoveryPrompt = resolvedPrompt('terminologyDiscovery', undefined, target).value;
+}
+
+function promptSettingsForClient(target = settings) {
+  const reportTemplates = {};
+  const reportTemplateDefaults = {};
+  const reportTemplateSources = {};
+  for (const type of TEMPLATE_TYPES) {
+    const resolved = resolvedPrompt('reportTemplate', type, target);
+    reportTemplates[type] = resolved.value;
+    reportTemplateDefaults[type] = defaultPrompt(target.locale, 'reportTemplate', type);
+    reportTemplateSources[type] = resolved.source;
+  }
+  const closure = resolvedPrompt('closure', undefined, target);
+  const terminology = resolvedPrompt('terminologyDiscovery', undefined, target);
+  return {
+    promptLocale: target.locale,
+    reportTemplates,
+    reportTemplateDefaults,
+    promptSources: {
+      reportTemplates: reportTemplateSources,
+      closure: closure.source,
+      terminologyDiscovery: terminology.source
+    },
+    closurePrompt: closure.value,
+    closurePromptDefault: defaultPrompt(target.locale, 'closure'),
+    closurePromptSource: closure.source,
+    terminologyDiscoveryPrompt: terminology.value,
+    terminologyDiscoveryPromptDefault: defaultPrompt(target.locale, 'terminologyDiscovery'),
+    terminologyDiscoveryPromptSource: terminology.source
+  };
+}
+
+function settingsForClient(target = settings) {
+  return {
+    locale: target.locale,
+    theme: target.theme,
+    themeFamily: target.themeFamily,
+    resolvedTheme: resolvedTheme(),
+    hotkey: target.hotkey,
+    defaultHotkey: DEFAULT_HOTKEY,
+    openAtLogin: target.openAtLogin,
+    silentStart: target.silentStart,
+    dataFile: dataFile(),
+    ai: aiPublicState(),
+    promptSchemaVersion: PROMPT_SCHEMA_VERSION,
+    ...promptSettingsForClient(target),
+    terminology: normalizeTerminology(target.terminology),
+    terminologyDiscovery: { ...normalizeDiscoveryState(target.terminologyDiscovery) },
+    savedFilters: target.savedFilters.map(filter => ({ ...filter, rangeFocus: { ...filter.rangeFocus } }))
+  };
+}
+
 function loadSettings() {
   let storedLocale = false;
+  let shouldSave = false;
   try {
     const s = JSON.parse(fs.readFileSync(settingsFile(), 'utf8'));
     if (s && typeof s === 'object') {
@@ -182,6 +296,7 @@ function loadSettings() {
         storedLocale = true;
       }
       if (['auto', 'light', 'dark'].includes(s.theme)) settings.theme = s.theme;
+      if (THEME_FAMILIES.includes(s.themeFamily)) settings.themeFamily = s.themeFamily;
       if (typeof s.hotkey === 'string' && s.hotkey) settings.hotkey = s.hotkey;
       if (typeof s.openAtLogin === 'boolean') settings.openAtLogin = s.openAtLogin;
       if (typeof s.silentStart === 'boolean') settings.silentStart = s.silentStart;
@@ -207,6 +322,9 @@ function loadSettings() {
       if (s.terminologyDiscovery && typeof s.terminologyDiscovery === 'object') {
         settings.terminologyDiscovery = normalizeDiscoveryState(s.terminologyDiscovery);
       }
+      const storedPromptSchema = Number(s.promptSchemaVersion);
+      settings.promptOverrides = migrateLegacyPromptOverrides(s);
+      if (storedPromptSchema < PROMPT_SCHEMA_VERSION) shouldSave = true;
       if (typeof s.closurePrompt === 'string' && s.closurePrompt.trim()) settings.closurePrompt = s.closurePrompt.trim().slice(0, 2400);
       if (typeof s.terminologyDiscoveryPrompt === 'string' && s.terminologyDiscoveryPrompt.trim()) {
         settings.terminologyDiscoveryPrompt = s.terminologyDiscoveryPrompt.trim().slice(0, 2400);
@@ -226,9 +344,11 @@ function loadSettings() {
     const selectedLocale = readInstallerLocale();
     if (selectedLocale) {
       settings.locale = selectedLocale;
-      saveSettings();
+      shouldSave = true;
     }
   }
+  syncEffectivePromptFields(settings);
+  if (shouldSave) saveSettings();
 }
 
 function saveSettings() {
@@ -237,35 +357,38 @@ function saveSettings() {
   fs.writeFileSync(file, JSON.stringify(settings, null, 2), 'utf8');
 }
 
-function resolvedTheme() {
+function resolvedThemeMode() {
   if (settings.theme === 'auto') return nativeTheme.shouldUseDarkColors ? 'dark' : 'light';
   return settings.theme;
 }
 
-// Windows 窗口控制按钮区（最小化/最大化/关闭）配色跟随主题
-const TITLEBAR_COLORS = {
-  light: { color: '#f5f6fa', symbolColor: '#3a3f4b' },
-  dark: { color: '#21252b', symbolColor: '#abb2bf' }
-};
+function resolvedTheme() {
+  return { family: settings.themeFamily, mode: resolvedThemeMode() };
+}
 
-const THEMED_BG = { light: '#f5f6fa', dark: '#21252b' };
+function themeWindowColors(theme = resolvedTheme()) {
+  return THEME_WINDOW_COLORS[theme.family]?.[theme.mode]
+    || THEME_WINDOW_COLORS.gold[theme.mode]
+    || THEME_WINDOW_COLORS.gold.light;
+}
 
 // 模态打开时把标题栏覆盖层染成遮罩色，原生控制按钮无法被 CSS 盖住，只能同色隐没
 let modalCoverActive = false;
 
 function chromeOverlayColors() {
+  const colors = themeWindowColors();
   if (modalCoverActive) {
-    // 与 backdrop 遮罩(rgba(15,17,23,.35) 叠加主题底色)近似的实色
-    return resolvedTheme() === 'dark'
-      ? { color: '#1a1c22', symbolColor: '#1a1c22' }
-      : { color: '#a8a6ab', symbolColor: '#a8a6ab' };
+    return { color: colors.cover, symbolColor: colors.cover };
   }
-  return TITLEBAR_COLORS[resolvedTheme()];
+  return { color: colors.color, symbolColor: colors.symbolColor };
 }
 
 function applyChromeOverlay() {
   if (process.platform === 'win32' && mainWindow && !mainWindow.isDestroyed()) {
-    try { mainWindow.setTitleBarOverlay(chromeOverlayColors()); } catch { /* 窗口未就绪时忽略 */ }
+    try {
+      mainWindow.setTitleBarOverlay(chromeOverlayColors());
+      mainWindow.setBackgroundColor(themeWindowColors().color);
+    } catch { /* 窗口未就绪时忽略 */ }
   }
 }
 
@@ -317,7 +440,7 @@ function mainText(key) {
       '导出周期总结': '期間まとめをエクスポート'
     }
   };
-  return messages[settings.locale]?.[key] || key;
+  return UI_LOCALE_CATALOG[settings.locale]?.[key] || messages[settings.locale]?.[key] || key;
 }
 
 /* ---------------- 存储层：本地 JSON 文件 ---------------- */
@@ -460,6 +583,9 @@ function normalizeRestoredSettings(snapshot) {
   const restored = restoreSettingsSnapshot(settings, snapshot, DEFAULT_SETTINGS);
   restored.locale = normalizeLocale(restored.locale) || settings.locale || DEFAULT_LOCALE;
   restored.theme = ['auto', 'light', 'dark'].includes(restored.theme) ? restored.theme : DEFAULT_SETTINGS.theme;
+  restored.themeFamily = THEME_FAMILIES.includes(restored.themeFamily)
+    ? restored.themeFamily
+    : DEFAULT_SETTINGS.themeFamily;
   restored.hotkey = typeof restored.hotkey === 'string' && restored.hotkey.trim()
     ? restored.hotkey.trim()
     : DEFAULT_SETTINGS.hotkey;
@@ -477,8 +603,10 @@ function normalizeRestoredSettings(snapshot) {
   restored.ai.reasoningEffort = normalizeReasoningEffort(restored.ai.reasoningEffort);
   restored.ai.closureReasoningEffort = normalizeReasoningEffort(restored.ai.closureReasoningEffort);
   restored.ai.encryptedApiKey = settings.ai.encryptedApiKey || '';
+  restored.promptSchemaVersion = PROMPT_SCHEMA_VERSION;
+  restored.promptOverrides = migrateLegacyPromptOverrides(snapshot);
   restored.reportTemplates = { ...DEFAULT_REPORT_TEMPLATES };
-  for (const key of Object.keys(DEFAULT_REPORT_TEMPLATES)) {
+  for (const key of TEMPLATE_TYPES) {
     if (typeof snapshot?.reportTemplates?.[key] === 'string' && snapshot.reportTemplates[key].trim()) {
       restored.reportTemplates[key] = snapshot.reportTemplates[key].trim();
     }
@@ -497,6 +625,7 @@ function normalizeRestoredSettings(snapshot) {
     ...(snapshot?.terminologyDiscovery || restored.terminologyDiscovery),
     termCount: restored.terminology.length
   });
+  syncEffectivePromptFields(restored);
   return restored;
 }
 
@@ -518,6 +647,11 @@ function localTimeStr(ts) {
 
 function weekdayOf(dateStr) {
   return WEEKDAYS[new Date(dateStr + 'T00:00:00').getDay()];
+}
+
+function localizedWeekday(dateStr, locale = settings.locale) {
+  return new Intl.DateTimeFormat(normalizeLocale(locale) || DEFAULT_LOCALE, { weekday: 'short' })
+    .format(new Date(`${dateStr}T00:00:00`));
 }
 
 /* ---------------- DeepSeek 与周期总结 ---------------- */
@@ -741,7 +875,7 @@ function responseMessageReasoning(data) {
   return responseMessageText(message?.reasoning_content ?? message?.reasoning);
 }
 
-async function requestTerminologyDiscovery({ key, model, prompt, notify = () => {} }) {
+async function requestTerminologyDiscovery({ key, model, prompt, locale = settings.locale, notify = () => {} }) {
   let thinkingEnabled = true;
   let jsonModeEnabled = true;
   let repairAttempted = false;
@@ -755,7 +889,7 @@ async function requestTerminologyDiscovery({ key, model, prompt, notify = () => 
         body: JSON.stringify({
           model,
           messages: [
-            { role: 'system', content: discoverySystemPrompt() },
+            { role: 'system', content: discoverySystemPrompt(locale) },
             { role: 'user', content: requestPrompt }
           ],
           ...(thinkingEnabled ? { thinking: { type: 'enabled' }, reasoning_effort: closureReasoningEffort() } : {}),
@@ -799,7 +933,7 @@ async function requestTerminologyDiscovery({ key, model, prompt, notify = () => 
           requestPrompt = [
             prompt,
             '',
-            '输出校验：上一响应无法被程序解析。请重新生成同一份结果，只输出完整、可直接被 JSON.parse 解析的 JSON 对象，不要输出思考过程、Markdown 围栏、解释文字或注释。'
+            catalogFor(locale).terminologyRetryPrompt
           ].join('\n');
           continue;
         }
@@ -820,7 +954,7 @@ async function requestTerminologyDiscovery({ key, model, prompt, notify = () => 
   }
 }
 
-async function discoverTerminologyFromEntries({ key, model, entries, existing = [], customPrompt, notify = () => {} }) {
+async function discoverTerminologyFromEntries({ key, model, entries, existing = [], customPrompt, locale = settings.locale, notify = () => {} }) {
   const sources = discoverySources(entries);
   const chunks = sources.length ? splitDiscoverySources(sources) : [];
   const candidates = [];
@@ -838,7 +972,8 @@ async function discoverTerminologyFromEntries({ key, model, entries, existing = 
     const terms = await requestTerminologyDiscovery({
       key,
       model,
-      prompt: buildDiscoveryPrompt(chunks[index], customPrompt),
+      locale,
+      prompt: buildDiscoveryPrompt(chunks[index], customPrompt, locale),
       notify
     });
     candidates.push(terms);
@@ -860,7 +995,8 @@ async function discoverTerminologyFromEntries({ key, model, entries, existing = 
       const consolidated = await requestTerminologyDiscovery({
         key,
         model,
-        prompt: buildConsolidationPrompt(discovered, existing, customPrompt),
+        locale,
+        prompt: buildConsolidationPrompt(discovered, existing, customPrompt, locale),
         notify
       });
       if (consolidated.length) discovered = consolidated;
@@ -880,7 +1016,7 @@ async function discoverTerminologyFromEntries({ key, model, entries, existing = 
 }
 
 function closurePromptHash() {
-  return hashText(settings.closurePrompt || DEFAULT_CLOSURE_PROMPT);
+  return hashText(`${settings.locale}\n${resolvedPrompt('closure').value || DEFAULT_CLOSURE_PROMPT}`);
 }
 
 function closureTerminologyHash() {
@@ -965,8 +1101,8 @@ function canRetryWithoutJsonMode(error) {
   return /response[_ -]?format|json[_ -]?object|json mode|structured output|unsupported.*format|invalid.*format/.test(message);
 }
 
-function reportSystemPrompt() {
-  return '你是一个严谨的工作总结整理助手。你只能基于用户提供的原始记录进行归纳和语言润色，不能编造、扩写或删除事实。总结正文必须覆盖每一条来源记录；如果多条记录属于同一事项，可以合并表达，但必须保留所有任务细节、结果、问题和时间线。最终正文只能输出一个版本，不要把分析过程、候选稿、自我检查或选择理由写进正文。';
+function reportSystemPrompt(locale = settings.locale) {
+  return catalogFor(locale).reportSystemPrompt;
 }
 
 function reportSegmentLabel(sources, index) {
@@ -976,17 +1112,19 @@ function reportSegmentLabel(sources, index) {
   return first === last ? first : `${first} 至 ${last}`;
 }
 
-function combineReportSegments(segments) {
+function combineReportSegments(segments, locale = settings.locale) {
+  const rules = catalogFor(locale).reportPromptRules;
   if (segments.length <= 1) return String(segments[0]?.content || '').trim();
   return segments.map((segment, index) => {
-    const title = segment.label || `分段 ${index + 1}`;
-    const content = String(segment.content || '').trim() || '本段未生成正文。';
+    const title = segment.label || `${rules.segmentScope} ${index + 1}`;
+    const content = String(segment.content || '').trim() || rules.emptyBody;
     return `## ${title}\n\n${content}`;
   }).join('\n\n');
 }
 
-async function generateReportSegment({ key, model, prompt, segmentIndex, segmentCount, notify }) {
-  const system = reportSystemPrompt();
+async function generateReportSegment({ key, model, prompt, segmentIndex, segmentCount, locale = settings.locale, notify }) {
+  const system = reportSystemPrompt(locale);
+  const continuationPrompt = catalogFor(locale).reportContinuationPrompt;
   let reasoning = '';
   let content = '';
   let reasoningLength = 0;
@@ -1005,7 +1143,7 @@ async function generateReportSegment({ key, model, prompt, segmentIndex, segment
     { role: 'assistant', content: content.trimEnd() },
     {
       role: 'user',
-      content: '上一次输出达到了单次长度上限或流式连接中断。请从上一次正文的最后一个完整位置继续，不要重复已经输出的标题、句子或事实；优先补齐本段尚未引用的来源编号。只输出 Markdown 正文，不要解释。'
+      content: continuationPrompt
     }
   ];
 
@@ -1120,11 +1258,11 @@ async function generateReportSegment({ key, model, prompt, segmentIndex, segment
   };
 }
 
-function closureSystemPrompt() {
-  return '你是一个严格的近期工作闭环分析助手。你只能依据输入记录判断事项之间的关系，不得把缺少记录理解为未完成，不得编造项目背景，也不得输出详细的内部思考过程。你的最终响应必须是合法 JSON。';
+function closureSystemPrompt(locale = settings.locale) {
+  return catalogFor(locale).closureSystemPrompt;
 }
 
-async function generateClosureSegment({ key, model, prompt, segmentIndex, segmentCount, notify }) {
+async function generateClosureSegment({ key, model, prompt, segmentIndex, segmentCount, locale = settings.locale, notify }) {
   let content = '';
   let reasoningLength = 0;
   let continuationCount = 0;
@@ -1133,17 +1271,17 @@ async function generateClosureSegment({ key, model, prompt, segmentIndex, segmen
   let maxTokens = closureMaxOutputTokens(model);
   let thinkingEnabled = true;
   let messages = [
-    { role: 'system', content: closureSystemPrompt() },
+    { role: 'system', content: closureSystemPrompt(locale) },
     { role: 'user', content: prompt }
   ];
 
   const continuationMessages = () => [
-    { role: 'system', content: closureSystemPrompt() },
+    { role: 'system', content: closureSystemPrompt(locale) },
     { role: 'user', content: prompt },
     { role: 'assistant', content: content.trimEnd() },
     {
       role: 'user',
-      content: '上一次 JSON 输出未完整结束。请从已有 JSON 的最后一个完整字段继续，最终只返回一个完整、合法的 JSON 对象，不要重复前面的对象，不要加 Markdown 围栏或解释。'
+      content: catalogFor(locale).closureContinuationPrompt
     }
   ];
 
@@ -1263,7 +1401,7 @@ function reportTypeOrCustom(type) {
   return REPORT_TYPES.has(type) ? type : 'custom';
 }
 
-function buildExport(entries, start, end, format) {
+function buildExport(entries, start, end, format, locale = settings.locale) {
   const byDay = new Map();
   for (const e of entries) {
     const day = localDateStr(e.ts);
@@ -1276,20 +1414,21 @@ function buildExport(entries, start, end, format) {
   const days = [...byDay.keys()].sort();
   const range = `${start} ~ ${end}`;
   const flat = s => s.replace(/\r?\n/g, ' ');
+  const reportTitle = mainText('日报');
 
   if (format === 'txt') {
-    const lines = [`日报 ${range}`, ''];
+    const lines = [`${reportTitle} ${range}`, ''];
     for (const day of days) {
-      lines.push(`【${day} 星期${weekdayOf(day)}】`);
+      lines.push(`【${day} ${localizedWeekday(day, locale)}】`);
       for (const e of byDay.get(day)) lines.push(`${localTimeStr(e.ts)}  ${flat(e.text)}`);
       lines.push('');
     }
     return lines.join('\r\n');
   }
 
-  const md = [`# 日报 ${range}`, ''];
+  const md = [`# ${reportTitle} ${range}`, ''];
   for (const day of days) {
-    md.push(`## ${day} 星期${weekdayOf(day)}`, '');
+    md.push(`## ${day} ${localizedWeekday(day, locale)}`, '');
     for (const e of byDay.get(day)) md.push(`- \`${localTimeStr(e.ts)}\` ${flat(e.text)}`);
     md.push('');
   }
@@ -1446,25 +1585,25 @@ ipcMain.handle('export:run', async (_e, { start, end, format }) => {
       .sort((a, b) => a.ts - b.ts)
       .map(e => {
         const d = localDateStr(e.ts);
-        return { date: d, week: `星期${weekdayOf(d)}`, time: localTimeStr(e.ts), text: e.text.replace(/\r?\n/g, ' ') };
+        return { date: d, week: localizedWeekday(d, settings.locale), time: localTimeStr(e.ts), text: e.text.replace(/\r?\n/g, ' ') };
       });
     const buf = await buildXlsxBuffer(rows);
     const { canceled, filePath } = await dialog.showSaveDialog(mainWindow, {
-      title: '导出日报',
+      title: mainText('导出日报'),
       defaultPath: `日报_${start}_${end}.xlsx`,
-      filters: [{ name: 'Excel 工作表', extensions: ['xlsx'] }]
+      filters: [{ name: mainText('Excel 工作表'), extensions: ['xlsx'] }]
     });
     if (canceled || !filePath) return { ok: false, canceled: true };
     fs.writeFileSync(filePath, buf);
     return { ok: true, filePath };
   }
 
-  const content = buildExport(loadDB().entries, start, end, format);
+  const content = buildExport(loadDB().entries, start, end, format, settings.locale);
   const ext = format === 'md' ? 'md' : 'txt';
   const { canceled, filePath } = await dialog.showSaveDialog(mainWindow, {
     title: mainText('导出日报'),
     defaultPath: `日报_${start}_${end}.${ext}`,
-    filters: [{ name: format === 'md' ? 'Markdown 文件' : '纯文本文件', extensions: [ext] }]
+    filters: [{ name: mainText(format === 'md' ? 'Markdown 文件' : '纯文本文件'), extensions: [ext] }]
   });
   if (canceled || !filePath) return { ok: false, canceled: true };
   fs.writeFileSync(filePath, '\ufeff' + content, 'utf8');
@@ -1642,7 +1781,8 @@ ipcMain.handle('terminology:discover', async (event, payload = {}) => {
       model,
       entries,
       existing: settings.terminology,
-      customPrompt: settings.terminologyDiscoveryPrompt,
+      customPrompt: resolvedPrompt('terminologyDiscovery').value,
+      locale: settings.locale,
       notify
     });
     // 识别期间允许用户继续编辑；最终合并当前设置，避免覆盖刚保存的手工词条。
@@ -1794,15 +1934,17 @@ ipcMain.handle('closure:generate', async (event, payload = {}) => {
         model,
         segmentIndex: index,
         segmentCount: historyChunks.length,
+        locale: settings.locale,
         prompt: buildClosurePrompt({
           start,
           end,
           recentSources: context.recentSources,
           historicalSources: historyChunks[index],
           terminology: settings.terminology,
-          customPrompt: settings.closurePrompt,
+          customPrompt: resolvedPrompt('closure').value,
           segmentIndex: index,
-          segmentCount: historyChunks.length
+          segmentCount: historyChunks.length,
+          locale: settings.locale
         }),
         notify
       });
@@ -1883,7 +2025,7 @@ ipcMain.handle('report:getCached', (_e, { start, end, periodType, template } = {
   if (!sourceStatus.ok) {
     return { ok: true, cached: false, cacheStatus: 'missing', report: null, sourceCount: 0 };
   }
-  const templateText = String(template || settings.reportTemplates[type] || DEFAULT_REPORT_TEMPLATES.custom).trim();
+  const templateText = String(template || resolvedPrompt('reportTemplate', type).value || DEFAULT_REPORT_TEMPLATES.custom).trim();
   const cacheParams = {
     start,
     end,
@@ -1908,7 +2050,7 @@ ipcMain.handle('report:generate', async (event, payload = {}) => {
   const jobId = String(payload.jobId || '').trim();
   if (!start || !end || start > end) return { ok: false, error: '日期范围无效' };
   const periodType = reportTypeOrCustom(payload.periodType);
-  const template = String(payload.template || settings.reportTemplates[periodType] || DEFAULT_REPORT_TEMPLATES.custom).trim();
+  const template = String(payload.template || resolvedPrompt('reportTemplate', periodType).value || DEFAULT_REPORT_TEMPLATES.custom).trim();
   const entries = reportEntries(start, end);
   const sources = sourceBundle(entries);
   const sourceStatus = reportInputStatus(sources);
@@ -1983,6 +2125,7 @@ ipcMain.handle('report:generate', async (event, payload = {}) => {
         model,
         segmentIndex: index,
         segmentCount: sourceChunks.length,
+        locale: settings.locale,
         prompt: buildPrompt({
           start,
           end,
@@ -1991,7 +2134,8 @@ ipcMain.handle('report:generate', async (event, payload = {}) => {
           sources: chunk,
           terminology: settings.terminology,
           segmentIndex: index,
-          segmentCount: sourceChunks.length
+          segmentCount: sourceChunks.length,
+          locale: settings.locale
         }),
         notify
       });
@@ -2009,9 +2153,9 @@ ipcMain.handle('report:generate', async (event, payload = {}) => {
       });
     }
 
-    const aiContent = combineReportSegments(segments);
+    const aiContent = combineReportSegments(segments, settings.locale);
     if (!aiContent) throw new Error('AI 没有返回总结正文');
-    const finalContent = appendRawRecords(aiContent, sources);
+    const finalContent = appendRawRecords(aiContent, sources, { locale: settings.locale });
     const sourceAudit = auditSourceRecords(aiContent, finalContent, sources);
     const coveredCount = sourceAudit.filter(item => item.cited).length;
     const rawRecordCount = sourceAudit.filter(item => item.rawPreserved).length;
@@ -2172,7 +2316,10 @@ ipcMain.on('window:modal-cover', (_e, on) => {
 ipcMain.handle('theme:get', () => resolvedTheme());
 
 ipcMain.handle('theme:set', (_e, pref) => {
-  settings.theme = ['light', 'dark'].includes(pref) ? pref : 'auto';
+  const next = pref && typeof pref === 'object' ? pref : { mode: pref };
+  if (['light', 'dark'].includes(next.mode)) settings.theme = next.mode;
+  else if (next.mode === 'auto') settings.theme = 'auto';
+  if (THEME_FAMILIES.includes(next.family)) settings.themeFamily = next.family;
   saveSettings();
   broadcastTheme();
   return resolvedTheme();
@@ -2203,25 +2350,7 @@ ipcMain.handle('locale:load', (_event, requestedLocale) => {
   }
 });
 
-ipcMain.handle('settings:get', () => ({
-  locale: settings.locale,
-  theme: settings.theme,
-  resolvedTheme: resolvedTheme(),
-  hotkey: settings.hotkey,
-  defaultHotkey: DEFAULT_HOTKEY,
-  openAtLogin: settings.openAtLogin,
-  silentStart: settings.silentStart,
-  dataFile: dataFile(),
-  ai: aiPublicState(),
-  reportTemplates: { ...settings.reportTemplates },
-  closurePrompt: settings.closurePrompt,
-  closurePromptDefault: DEFAULT_CLOSURE_PROMPT,
-  terminologyDiscoveryPrompt: settings.terminologyDiscoveryPrompt,
-  terminologyDiscoveryPromptDefault: DEFAULT_TERMINOLOGY_DISCOVERY_PROMPT,
-  terminology: normalizeTerminology(settings.terminology),
-  terminologyDiscovery: terminologyDiscoveryForClient(),
-  savedFilters: settings.savedFilters.map(filter => ({ ...filter, rangeFocus: { ...filter.rangeFocus } }))
-}));
+ipcMain.handle('settings:get', () => settingsForClient());
 
 ipcMain.handle('settings:set', (_e, patch) => {
   const result = { ok: true, error: null };
@@ -2229,11 +2358,20 @@ ipcMain.handle('settings:set', (_e, patch) => {
     const nextLocale = normalizeLocale(patch.locale);
     if (nextLocale && nextLocale !== settings.locale) {
       settings.locale = nextLocale;
+      syncEffectivePromptFields(settings);
       saveSettings();
       broadcastLocale();
     }
+    let themeChanged = false;
     if (['auto', 'light', 'dark'].includes(patch.theme)) {
       settings.theme = patch.theme;
+      themeChanged = true;
+    }
+    if (THEME_FAMILIES.includes(patch.themeFamily)) {
+      settings.themeFamily = patch.themeFamily;
+      themeChanged = true;
+    }
+    if (themeChanged) {
       saveSettings();
       broadcastTheme();
     }
@@ -2256,50 +2394,51 @@ ipcMain.handle('settings:set', (_e, patch) => {
       saveSettings();
     }
   }
-  result.settings = {
-    locale: settings.locale,
-    theme: settings.theme,
-    hotkey: settings.hotkey,
-    openAtLogin: settings.openAtLogin,
-    silentStart: settings.silentStart,
-    ai: aiPublicState(),
-    reportTemplates: { ...settings.reportTemplates },
-    closurePrompt: settings.closurePrompt,
-    closurePromptDefault: DEFAULT_CLOSURE_PROMPT,
-    terminologyDiscoveryPrompt: settings.terminologyDiscoveryPrompt,
-    terminologyDiscoveryPromptDefault: DEFAULT_TERMINOLOGY_DISCOVERY_PROMPT,
-    terminology: normalizeTerminology(settings.terminology),
-    terminologyDiscovery: terminologyDiscoveryForClient(),
-    savedFilters: settings.savedFilters.map(filter => ({ ...filter, rangeFocus: { ...filter.rangeFocus } }))
-  };
+  result.settings = settingsForClient();
   return result;
 });
 
 ipcMain.handle('settings:setReportTemplate', (_e, { type, template } = {}) => {
-  if (!Object.prototype.hasOwnProperty.call(DEFAULT_REPORT_TEMPLATES, type)) {
+  if (!TEMPLATE_TYPES.includes(type)) {
     return { ok: false, error: '总结周期无效' };
   }
   const value = String(template || '').trim();
   if (!value) return { ok: false, error: '模板内容不能为空' };
-  settings.reportTemplates[type] = value;
+  const resolved = writePromptOverride(settings.promptOverrides, {
+    locale: settings.locale,
+    kind: 'reportTemplate',
+    type,
+    value
+  });
+  syncEffectivePromptFields(settings);
   saveSettings();
-  return { ok: true, type, template: value };
+  return { ok: true, type, template: resolved.value, source: resolved.source, locale: settings.locale };
 });
 
 ipcMain.handle('settings:setClosurePrompt', (_e, { prompt } = {}) => {
   const value = String(prompt || '').trim().slice(0, 2400);
   if (!value) return { ok: false, error: '闭环提示词不能为空' };
-  settings.closurePrompt = value;
+  const resolved = writePromptOverride(settings.promptOverrides, {
+    locale: settings.locale,
+    kind: 'closure',
+    value
+  });
+  syncEffectivePromptFields(settings);
   saveSettings();
-  return { ok: true, prompt: value };
+  return { ok: true, prompt: resolved.value, source: resolved.source, locale: settings.locale };
 });
 
 ipcMain.handle('settings:setTerminologyDiscoveryPrompt', (_e, { prompt } = {}) => {
   const value = String(prompt || '').trim().slice(0, 2400);
   if (!value) return { ok: false, error: '术语识别提示词不能为空' };
-  settings.terminologyDiscoveryPrompt = value;
+  const resolved = writePromptOverride(settings.promptOverrides, {
+    locale: settings.locale,
+    kind: 'terminologyDiscovery',
+    value
+  });
+  syncEffectivePromptFields(settings);
   saveSettings();
-  return { ok: true, prompt: value };
+  return { ok: true, prompt: resolved.value, source: resolved.source, locale: settings.locale };
 });
 
 ipcMain.handle('settings:setTerminology', (_e, { terminology } = {}) => {
@@ -2466,16 +2605,17 @@ function applyHotkey(accel) {
 
 function createMainWindow() {
   const t = resolvedTheme();
+  const colors = themeWindowColors(t);
   mainWindow = new BrowserWindow({
     width: 1000,
     height: 700,
     minWidth: 760,
     minHeight: 680, // 保证录入区+工具栏固定时，列表仍有足够可视高度
     show: false,
-    backgroundColor: THEMED_BG[t],
+    backgroundColor: colors.color,
     autoHideMenuBar: true,
     titleBarStyle: 'hidden',
-    titleBarOverlay: { ...TITLEBAR_COLORS[t], height: 40 },
+    titleBarOverlay: { color: colors.color, symbolColor: colors.symbolColor, height: 40 },
     icon: path.join(ASSETS, 'icon.png'),
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),

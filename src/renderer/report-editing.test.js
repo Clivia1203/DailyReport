@@ -48,7 +48,7 @@ test('报告标题栏在宽窗口中让常用元信息与标题同排', () => {
   assert.match(cssSource, /@media \(max-width: 760px\)[\s\S]*\.report-meta\s*\{[\s\S]*margin-top:\s*6px;/);
 });
 
-test('查看态报告标题栏固定在报告卡片的滚动视口顶部', () => {
+test('查看态报告标题栏固定，正文区域独立滚动', () => {
   const headRule = cssSource.match(/\.report-card-head\s*\{[^}]*\}/)?.[0] || '';
   assert.match(headRule, /position:\s*sticky;/);
   assert.match(headRule, /top:\s*0;/);
@@ -68,6 +68,15 @@ test('报告侧栏滚动视口裁切时保留圆角边界', () => {
   assert.doesNotMatch(cssSource, /report-side-card-frame|clip-path:inset\(0 round 14px\)/);
   assert.match(cssSource, /@media \(min-width: 1200px\)[\s\S]*\.report-side\s*\{[\s\S]*padding:\s*2px 10px 14px 2px;[\s\S]*scroll-padding-block:\s*14px;/);
   assert.match(cssSource, /#view-report \.report-side\s*\{[\s\S]*overflow:visible;[\s\S]*scrollbar-gutter:auto;/);
+});
+
+test('左右栏拖拽分隔条在两栏高度之间垂直居中', () => {
+  const resizerRule = cssSource.match(/\.report-resizer\s*\{([\s\S]*?)\n\}/)?.[1] || '';
+  const resizerHandleRule = cssSource.match(/\.report-resizer::after\s*\{([\s\S]*?)\n\}/)?.[1] || '';
+  assert.match(resizerRule, /display:flex;/);
+  assert.match(resizerRule, /align-items:center;/);
+  assert.match(resizerRule, /justify-content:center;/);
+  assert.match(resizerHandleRule, /margin:0;/);
 });
 
 test('报告编辑态锁定周期切换，避免编辑内容与页面周期割裂', () => {
@@ -92,15 +101,25 @@ test('点击编辑时保留当前阅读位置，不把编辑框自动滚到末�
 });
 
 test('取消或保存编辑后保留当前报告阅读位置', () => {
-  assert.match(appSource, /function captureReportEditScroll\(\)\s*\{[\s\S]*const card = state\.report\.editing \? reportEditor : reportFull;[\s\S]*card: scrollProgress\(card\),/);
+  assert.match(appSource, /function captureReportEditScroll\(\)\s*\{[\s\S]*const card = state\.report\.editing \? reportEditor : reportContent;[\s\S]*card: scrollProgress\(card\),/);
   assert.match(appSource, /function restoreReportViewScroll\(position\)/);
+  assert.match(appSource, /const cardMax = Math\.max\(0, reportContent\.scrollHeight - reportContent\.clientHeight\);[\s\S]*reportContent\.scrollTop = cardMax \* snapshot\.card;/);
   assert.match(appSource, /reportEditCancel\.addEventListener\('click', \(\) => \{[\s\S]*const scrollPosition = captureReportEditScroll\(\);[\s\S]*renderReportState\(\);[\s\S]*restoreReportViewScroll\(scrollPosition\);/);
   assert.match(appSource, /reportEditSave\.addEventListener\('click', async \(\) => \{[\s\S]*const scrollPosition = captureReportEditScroll\(\);[\s\S]*state\.report\.editing = false;[\s\S]*renderReportState\('总结修改已保存。'\);[\s\S]*restoreReportViewScroll\(scrollPosition\);/);
 });
 
-test('报告编辑态固定滚动条占位，避免编辑按钮横向跳动', () => {
-  assert.match(cssSource, /\.report-card\s*\{[\s\S]*overflow-y:auto;[\s\S]*overflow-x:hidden;[\s\S]*scrollbar-gutter:\s*stable;/);
-  assert.doesNotMatch(cssSource, /\.report-card\.report-full\.editing\s*\{[^}]*overflow:hidden;/);
-  assert.doesNotMatch(cssSource, /#view-report \.report-card\.report-full\.editing\s*\{[^}]*overflow:hidden;/);
+test('查看态和编辑态都使用内部滚动，报告卡片不再承担外层滚动', () => {
+  const reportCardRule = cssSource.match(/\.report-card\s*\{([\s\S]*?)\n\}/)?.[1] || '';
+  const reportContentRule = cssSource.match(/\.report-content\s*\{([\s\S]*?)\n\}/)?.[1] || '';
+  const reportEditorRule = cssSource.match(/\.report-editor\s*\{([\s\S]*?)\n\}/)?.[1] || '';
+  assert.match(reportCardRule, /display:flex;/);
+  assert.match(reportCardRule, /flex-direction:column;/);
+  assert.match(reportCardRule, /overflow:hidden;/);
+  assert.match(reportContentRule, /flex:1 1 auto;/);
+  assert.match(reportContentRule, /min-height:0;/);
+  assert.match(reportContentRule, /overflow-y:auto;/);
+  assert.match(reportContentRule, /scrollbar-gutter:stable;/);
+  assert.match(reportEditorRule, /overflow:auto;/);
+  assert.match(reportEditorRule, /scrollbar-gutter:stable;/);
   assert.match(cssSource, /#view-report\s*\{[^}]*overflow-y:auto;[^}]*scrollbar-gutter:\s*stable;/);
 });

@@ -3,22 +3,47 @@ const thinkingState = window.DRThinkingState;
 const thinkingSnapshot = window.DRThinkingSnapshot;
 const customSelect = window.DRCustomSelect;
 
+// 所有由应用生成的界面文案都从本地化层取值；日报原文、用户自定义提示词和 AI 正文不经过这里改写。
+function uiText(value) {
+  const source = String(value ?? '');
+  return window.DRI18n?.t ? window.DRI18n.t(source) : source;
+}
+
+function uiLocale() {
+  return window.DRI18n?.locale || 'zh-CN';
+}
+
+function thinkingTextMatchesLocale(thinking) {
+  if (!thinking?.text && !thinking?.content) return true;
+  const locale = uiLocale();
+  // 旧快照没有语言标记：中文界面可以继续查看，切到其他语言时隐藏，避免把旧中文/英文思考过程混入当前界面。
+  return !thinking.locale ? locale === 'zh-CN' : thinking.locale === locale;
+}
+
 function syncCustomSelect(select) {
   customSelect?.sync(select);
 }
 
+function syncAllCustomSelects() {
+  document.querySelectorAll('select').forEach(syncCustomSelect);
+}
+
 function createClosureThinking(visible = false) {
-  return thinkingState.createThinkingState({
+  const thinking = thinkingState.createThinkingState({
     visible,
     phase: visible ? 'segment' : ''
   });
+  thinking.locale = uiLocale();
+  return thinking;
 }
 
 function createTerminologyThinking(visible = false) {
-  return thinkingState.createThinkingState({
+  const thinking = thinkingState.createThinkingState({
     visible,
     phase: visible ? 'segment' : ''
   });
+  thinking.locale = uiLocale();
+  return thinking;
 }
 
 const state = {
@@ -51,6 +76,7 @@ const state = {
       continuation: 0,
       maxContinuations: 0,
       progressNote: '',
+      locale: '',
       reasoningLength: 0,
       contentLength: 0,
       sourceCount: 0,
@@ -71,6 +97,9 @@ const state = {
     closure: {
       data: null,
       cacheStatus: 'missing',
+      recentCount: 0,
+      historicalCount: 0,
+      periodKey: '',
       loading: false,
       generating: false,
       progressNote: '',
@@ -104,6 +133,17 @@ function weekdayOf(ds) {
   return '日一二三四五六'[new Date(ds + 'T00:00:00').getDay()];
 }
 
+function localizedWeekday(indexOrDate) {
+  const value = typeof indexOrDate === 'number'
+    ? new Date(2026, 8, 7 + indexOrDate)
+    : new Date(`${indexOrDate}T00:00:00`);
+  return new Intl.DateTimeFormat(uiLocale(), { weekday: 'short' }).format(value);
+}
+
+function localizedMonth(month) {
+  return new Intl.DateTimeFormat(uiLocale(), { month: 'short' }).format(new Date(2026, Number(month) - 1, 1));
+}
+
 function relDayLabel(ds) {
   const today = dateStr(Date.now());
   const yesterday = dateStr(Date.now() - 86400000);
@@ -117,11 +157,11 @@ function toast(msg, action) {
   const t = $('#toast');
   t.innerHTML = '';
   const span = document.createElement('span');
-  span.textContent = msg;
+  span.textContent = uiText(msg);
   t.appendChild(span);
   if (action) {
     const btn = document.createElement('button');
-    btn.textContent = action.label;
+    btn.textContent = uiText(action.label);
     btn.onclick = () => { action.fn(); hideToast(); };
     t.appendChild(btn);
   }
@@ -165,11 +205,28 @@ const ICONS = {
   trash: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>'
 };
 
+function normalizeThemeState(theme) {
+  const cachedFamily = document.documentElement.dataset.themeFamily || 'gold';
+  const cachedMode = document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light';
+  if (theme && typeof theme === 'object') {
+    return {
+      family: ['gold', 'sky', 'mint', 'violet'].includes(theme.family) ? theme.family : cachedFamily,
+      mode: ['light', 'dark'].includes(theme.mode) ? theme.mode : cachedMode
+    };
+  }
+  return {
+    family: cachedFamily,
+    mode: theme === 'dark' ? 'dark' : 'light'
+  };
+}
+
 function applyTheme(theme) {
-  document.documentElement.dataset.theme = theme;
+  const next = normalizeThemeState(theme);
+  document.documentElement.dataset.theme = next.mode;
+  document.documentElement.dataset.themeFamily = next.family;
   const themeButton = $('#btn-theme');
-  if (themeButton) themeButton.innerHTML = theme === 'dark' ? ICONS.sun : ICONS.moon;
-  try { localStorage.setItem('theme:cache', theme); } catch { /* 忽略 */ }
+  if (themeButton) themeButton.innerHTML = next.mode === 'dark' ? ICONS.sun : ICONS.moon;
+  try { localStorage.setItem('theme:cache', `${next.family}|${next.mode}`); } catch { /* 忽略 */ }
 }
 
 const themeButton = $('#btn-theme');
@@ -182,7 +239,7 @@ if (themeButton) themeButton.addEventListener('click', async () => {
   syncThemeSeg();
 });
 
-window.api.onThemeChanged(t => { applyTheme(t); syncThemeSeg(); });
+window.api.onThemeChanged(t => { applyTheme(t); syncThemeSeg(); syncThemeFamilySelect(); });
 
 /* ---------- 今日面板 ---------- */
 
@@ -190,16 +247,25 @@ const todayPanel = $('#today-panel');
 
 const WEEKDAY_NAMES = '日一二三四五六';
 
+function localizedTodayDate(date) {
+  const month = date.getMonth() + 1;
+  const day = date.getDate();
+  const weekday = new Intl.DateTimeFormat(uiLocale(), { weekday: 'short' }).format(date);
+  if (uiLocale() === 'en-US') return `${month}/${day} ${weekday}`;
+  if (uiLocale() === 'ja-JP') return `${month}月${day}日（${weekday.replace(/曜日$/, '')}）`;
+  return `${month} 月 ${day} 日 星期${WEEKDAY_NAMES[date.getDay()]}`;
+}
+
 function renderTodayPanel() {
   const now = Date.now();
   todayPanel.innerHTML = '';
   const hi = document.createElement('span');
   hi.className = 'today-greet';
-  hi.textContent = DR.greeting(now);
+  hi.textContent = uiText(DR.greeting(now));
   const date = document.createElement('span');
   date.className = 'today-date';
   const d = new Date(now);
-  date.textContent = `${d.getMonth() + 1} 月 ${d.getDate()} 日 星期${WEEKDAY_NAMES[d.getDay()]}`;
+  date.textContent = localizedTodayDate(d);
   todayPanel.append(hi, date);
 }
 
@@ -223,7 +289,7 @@ function renderStats() {
     valueEl.textContent = String(value);
     const labelEl = document.createElement('div');
     labelEl.className = 'stat-label';
-    labelEl.textContent = label;
+    labelEl.textContent = uiText(label);
     card.append(valueEl, labelEl);
     statsStrip.appendChild(card);
   }
@@ -289,7 +355,7 @@ function installTextareaResizer(textarea) {
   const handle = document.createElement('span');
   handle.className = 'textarea-resize-handle';
   handle.setAttribute('aria-hidden', 'true');
-  handle.title = '拖动调整文本框高度';
+  handle.title = uiText('拖动调整文本框高度');
   handle.innerHTML = '<svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M4 13 L13 4 L13 13 Z"/></svg>';
   shell.appendChild(handle);
 
@@ -391,7 +457,7 @@ async function saveComposer() {
     tsTouched = false;
     syncComposerTime();
     setComposerOpen(false);   // 保存后收起（宽屏下 CSS 强制常驻，不受影响）
-    toast('已记录 ✓');
+    toast(uiText('已记录 ✓'));
     refresh();
   }
 }
@@ -431,7 +497,7 @@ function closeFilterNameModal(value = null) {
 function confirmFilterName() {
   const name = filterNameInput.value.trim();
   if (!name) {
-    filterNameMsg.textContent = '请输入筛选名称';
+    filterNameMsg.textContent = uiText('请输入筛选名称');
     filterNameInput.focus();
     return;
   }
@@ -471,10 +537,10 @@ function askConfirmation(message, options = {}) {
   return new Promise(resolve => {
     if (confirmResolver) confirmResolver(false);
     confirmResolver = resolve;
-    confirmTitle.textContent = title;
-    confirmMessage.textContent = message;
-    confirmOk.textContent = confirmLabel;
-    confirmCancel.textContent = cancelLabel;
+    confirmTitle.textContent = uiText(title);
+    confirmMessage.textContent = uiText(message);
+    confirmOk.textContent = uiText(confirmLabel);
+    confirmCancel.textContent = uiText(cancelLabel);
     confirmOk.classList.toggle('confirm-danger', danger);
     confirmModal.hidden = false;
     syncModalCover();
@@ -554,22 +620,22 @@ function renderExportPreview() {
     const d = dateStr(x.ts);
     return d >= s && d <= e;
   }).length;
-  expPreview.append('将导出 ');
+  expPreview.append(`${uiText('将导出')} `);
   const b = document.createElement('b');
   b.textContent = String(n);
   expPreview.appendChild(b);
-  expPreview.append(' 条');
+  expPreview.append(` ${uiText('条')}`);
 }
 
 [expStart, expEnd, expFormat].forEach(el => el.addEventListener('change', renderExportPreview));
 
 $('#btn-export').addEventListener('click', async () => {
   const s = expStart.value, e = expEnd.value;
-  if (!s || !e) { toast('请先选择开始和结束日期'); return; }
-  if (s > e) { toast('开始日期不能晚于结束日期'); return; }
+  if (!s || !e) { toast(uiText('请先选择开始和结束日期')); return; }
+  if (s > e) { toast(uiText('开始日期不能晚于结束日期')); return; }
   const res = await window.api.exportRange(s, e, expFormat.value);
-  if (res.ok) { closeExportModal(); toast('已导出到 ' + res.filePath); }
-  else if (res.error) toast(res.error);
+  if (res.ok) { closeExportModal(); toast(uiText(`已导出到 ${res.filePath}`)); }
+  else if (res.error) toast(uiText(res.error));
 });
 
 /* ---------- 周期总结 ---------- */
@@ -670,7 +736,7 @@ function setReportPeriod(type, start, end) {
   state.report.periodLabel = reportPeriodLabel();
   syncReportThinkingForPeriod();
   reportDates.hidden = type !== 'custom';
-  reportTitle.textContent = reportPeriodLabel();
+  reportTitle.textContent = uiText(reportPeriodLabel());
   rememberReportPeriod();
   syncReportControls();
 }
@@ -745,9 +811,9 @@ function syncReportControls() {
   reportNext.disabled = editing || state.report.type === 'custom';
   reportGenerate.disabled = busy;
   syncCustomSelect(reportType);
-  reportGenerate.textContent = busy
+  reportGenerate.textContent = uiText(busy
     ? (job.status === 'queued' ? '排队中…' : '生成中…')
-    : (state.report.data ? '重新生成' : '生成总结');
+    : (state.report.data ? '重新生成' : '生成总结'));
 }
 
 const REPORT_PERIOD_STORAGE_KEY = 'report-period-selection';
@@ -826,7 +892,7 @@ function scrollProgress(element) {
 }
 
 function captureReportEditScroll() {
-  const card = state.report.editing ? reportEditor : reportFull;
+  const card = state.report.editing ? reportEditor : reportContent;
   return {
     card: scrollProgress(card),
     view: scrollProgress(viewReport)
@@ -836,8 +902,8 @@ function captureReportEditScroll() {
 function restoreReportViewScroll(position) {
   const snapshot = position || { card: 0, view: 0 };
   const apply = () => {
-    const cardMax = Math.max(0, reportFull.scrollHeight - reportFull.clientHeight);
-    reportFull.scrollTop = cardMax * snapshot.card;
+    const cardMax = Math.max(0, reportContent.scrollHeight - reportContent.clientHeight);
+    reportContent.scrollTop = cardMax * snapshot.card;
     const viewMax = Math.max(0, viewReport.scrollHeight - viewReport.clientHeight);
     viewReport.scrollTop = viewMax * snapshot.view;
   };
@@ -917,7 +983,7 @@ function renderReportSources() {
   if (!entries.length) {
     const empty = document.createElement('div');
     empty.className = 'report-source-empty';
-    empty.textContent = '本周期没有记录';
+    empty.textContent = uiText('本周期没有记录');
     reportSourceList.appendChild(empty);
     return;
   }
@@ -940,10 +1006,10 @@ function renderReportThinking() {
   const thinking = state.report.thinking || thinkingState.createThinkingState();
   reportThinking.hidden = !thinking.visible;
   reportThinkingContent.hidden = !thinking.open;
-  reportThinkingToggle.textContent = thinking.open ? '收起详细过程' : '查看详细过程';
+  reportThinkingToggle.textContent = uiText(thinking.open ? '收起详细过程' : '查看详细过程');
   reportThinkingToggle.setAttribute('aria-expanded', String(thinking.open));
   if (reportThinkingNote) {
-    reportThinkingNote.textContent = thinking.progressNote || '实时状态代表实际生成进度；详细过程仅用于查看，不会写入总结或导出文件。';
+    reportThinkingNote.textContent = uiText(thinking.progressNote || '实时状态代表实际生成进度；详细过程仅用于查看，不会写入总结或导出文件。');
   }
   const elapsed = thinkingState.elapsedSeconds(thinking);
   const segmentLabel = thinking.totalSegments > 1 && thinking.segment
@@ -951,25 +1017,28 @@ function renderReportThinking() {
     : '';
   const outputLength = thinking.contentLength || thinking.content.length;
   const outputLabel = outputLength > 0 ? ` · 已收到 ${outputLength} 字` : '';
-  if (thinking.phase === 'queued') reportThinkingStatus.textContent = `等待生成${segmentLabel} · ${elapsed}s`;
-  else if (thinking.phase === 'segment') reportThinkingStatus.textContent = `准备生成总结${segmentLabel} · ${elapsed}s`;
-  else if (thinking.phase === 'thinking') reportThinkingStatus.textContent = `AI 正在思考${segmentLabel} · ${elapsed}s`;
-  else if (thinking.phase === 'writing') reportThinkingStatus.textContent = `正在输出总结${segmentLabel}${outputLabel} · ${elapsed}s`;
-  else if (thinking.phase === 'continuing') reportThinkingStatus.textContent = `正在续写第 ${thinking.continuation}/${thinking.maxContinuations} 次${segmentLabel} · ${elapsed}s`;
-  else if (thinking.phase === 'recovering') reportThinkingStatus.textContent = `正在恢复流式输出${segmentLabel} · ${elapsed}s`;
-  else if (thinking.phase === 'fallback') reportThinkingStatus.textContent = `正在切换兼容输出模式${segmentLabel} · ${elapsed}s`;
-  else if (thinking.phase === 'stream-done') reportThinkingStatus.textContent = `正文输出完成，准备保存 · ${elapsed}s`;
-  else if (thinking.phase === 'saving') reportThinkingStatus.textContent = `正在保存完整报告 · ${elapsed}s`;
-  else if (thinking.phase === 'saved') reportThinkingStatus.textContent = `报告已保存 · ${elapsed}s`;
-  else if (thinking.phase === 'done') reportThinkingStatus.textContent = `已完成 · ${elapsed}s`;
+  if (thinking.phase === 'queued') reportThinkingStatus.textContent = uiText(`等待生成${segmentLabel} · ${elapsed}s`);
+  else if (thinking.phase === 'segment') reportThinkingStatus.textContent = uiText(`准备生成总结${segmentLabel} · ${elapsed}s`);
+  else if (thinking.phase === 'thinking') reportThinkingStatus.textContent = uiText(`AI 正在思考${segmentLabel} · ${elapsed}s`);
+  else if (thinking.phase === 'writing') reportThinkingStatus.textContent = uiText(`正在输出总结${segmentLabel}${outputLabel} · ${elapsed}s`);
+  else if (thinking.phase === 'continuing') reportThinkingStatus.textContent = uiText(`正在续写第 ${thinking.continuation}/${thinking.maxContinuations} 次${segmentLabel} · ${elapsed}s`);
+  else if (thinking.phase === 'recovering') reportThinkingStatus.textContent = uiText(`正在恢复流式输出${segmentLabel} · ${elapsed}s`);
+  else if (thinking.phase === 'fallback') reportThinkingStatus.textContent = uiText(`正在切换兼容输出模式${segmentLabel} · ${elapsed}s`);
+  else if (thinking.phase === 'stream-done') reportThinkingStatus.textContent = uiText(`正文输出完成，准备保存 · ${elapsed}s`);
+  else if (thinking.phase === 'saving') reportThinkingStatus.textContent = uiText(`正在保存完整报告 · ${elapsed}s`);
+  else if (thinking.phase === 'saved') reportThinkingStatus.textContent = uiText(`报告已保存 · ${elapsed}s`);
+  else if (thinking.phase === 'done') reportThinkingStatus.textContent = uiText(`已完成 · ${elapsed}s`);
   // 兼容修复前已经存在于当前会话内的快照；报告已保存时统一按完成态展示。
-  else if (thinking.phase === 'incomplete') reportThinkingStatus.textContent = `已完成 · ${elapsed}s`;
-  else if (thinking.phase === 'error') reportThinkingStatus.textContent = '生成失败';
-  else reportThinkingStatus.textContent = `AI 正在处理${segmentLabel} · ${elapsed}s`;
+  else if (thinking.phase === 'incomplete') reportThinkingStatus.textContent = uiText(`已完成 · ${elapsed}s`);
+  else if (thinking.phase === 'error') reportThinkingStatus.textContent = uiText('生成失败');
+  else reportThinkingStatus.textContent = uiText(`AI 正在处理${segmentLabel} · ${elapsed}s`);
   const blocks = [];
-  if (thinking.progressNote) blocks.push(`进度：${thinking.progressNote}`);
-  if (thinking.text) blocks.push(`思考过程：\n${thinking.text}`);
-  if (thinking.content) blocks.push(`总结输出：\n${thinking.content}`);
+  if (thinking.progressNote) blocks.push(`${uiText('进度：')}${uiText(thinking.progressNote)}`);
+  if (thinkingTextMatchesLocale(thinking) && thinking.text) blocks.push(`${uiText('思考过程：')}\n${thinking.text}`);
+  if (thinkingTextMatchesLocale(thinking) && thinking.content) blocks.push(`${uiText('总结输出：')}\n${thinking.content}`);
+  if (thinking.text && !thinkingTextMatchesLocale(thinking)) {
+    blocks.push(uiText('当前语言与本次 AI 过程的生成语言不同，已隐藏原始思考文本。'));
+  }
   reportThinkingContent.textContent = blocks.join('\n\n');
   if (thinking.open) reportThinkingContent.scrollTop = reportThinkingContent.scrollHeight;
 }
@@ -1009,6 +1078,7 @@ function beginReportThinking() {
     visible: true,
     phase: status === 'queued' ? 'queued' : 'thinking'
   });
+  thinking.locale = uiLocale();
   thinking.jobId = job?.id || '';
   thinking.progressNote = status === 'queued'
     ? '已加入生成队列，等待可用的 AI 请求…'
@@ -1032,6 +1102,7 @@ function markReportJobStarted(job) {
     phase: 'thinking',
     progressNote: '正在连接 DeepSeek，准备分析原始记录…'
   };
+  thinking.locale = current.locale || uiLocale();
   saveReportThinking(job.period, thinking);
   syncReportThinkingTimer();
 }
@@ -1157,7 +1228,7 @@ function handleReportGenerationEvent(event) {
         ? `当前模型已更新为 ${report.model}，${reportCoverageMessage(report)}`
         : reportCoverageMessage(report));
     } else {
-      toast(`${job.period.start} 至 ${job.period.end} 的总结已生成`);
+      toast(uiText(`${job.period.start} 至 ${job.period.end} 的总结已生成`));
     }
   } else if (event.type === 'failed') {
     handleReportGenerationFailure(job, event.error);
@@ -1173,7 +1244,7 @@ function handleReportGenerationFailure(job, error) {
     renderReportState(message);
     toast(message);
   } else {
-    toast(`${job.period.start} 至 ${job.period.end} 总结失败：${message}`);
+    toast(uiText(`${job.period.start} 至 ${job.period.end} 总结失败：${message}`));
   }
 }
 
@@ -1189,7 +1260,7 @@ window.api.onReportProgress(progress => {
 function renderReportMeta(data, rawRecordLabel) {
   reportMeta.replaceChildren();
   if (!data) {
-    reportMeta.textContent = '尚未生成本周期总结';
+    reportMeta.textContent = uiText('尚未生成本周期总结');
     return;
   }
 
@@ -1205,7 +1276,7 @@ function renderReportMeta(data, rawRecordLabel) {
     if (index > 0) reportMeta.appendChild(document.createTextNode('　·　'));
     const item = document.createElement('span');
     item.className = 'report-meta-item';
-    item.textContent = text;
+    item.textContent = uiText(text);
     reportMeta.appendChild(item);
   });
 }
@@ -1233,15 +1304,15 @@ function renderReportState(message) {
   const rawRecordLabel = data
     ? (Number.isFinite(data.rawRecordCount) ? `${data.rawRecordCount} / ${data.sourceCount}` : '已附加')
     : '--';
-  reportTitle.textContent = reportPeriodLabel();
+  reportTitle.textContent = uiText(reportPeriodLabel());
   renderReportMeta(data, rawRecordLabel);
   reportCoverage.textContent = data ? `${data.coveredCount} / ${data.sourceCount}` : '--';
   reportModel.textContent = data?.model || state.settings?.ai?.model || '--';
-  reportStatus.textContent = message || (staleCache
+  reportStatus.textContent = uiText(message || (staleCache
     ? cacheStatusMessage
     : rawRecordsMessage
     ? rawRecordsMessage
-    : data ? '总结已生成，已保留全部原始记录。' : '选择周期后点击“生成总结”。');
+    : data ? '总结已生成，已保留全部原始记录。' : '选择周期后点击“生成总结”。'));
   reportStatus.className = `report-status${message ? ' active' : ''}${incomplete ? ' incomplete' : ''}`;
   reportEdit.hidden = !data;
   reportFull.classList.toggle('editing', state.report.editing);
@@ -1255,7 +1326,7 @@ function renderReportState(message) {
     reportContent.innerHTML = '';
     const empty = document.createElement('div');
     empty.className = 'report-empty';
-    empty.textContent = '尚未生成本周期总结，点击右上角“生成总结”开始。';
+    empty.textContent = uiText('尚未生成本周期总结，点击右上角“生成总结”开始。');
     reportContent.appendChild(empty);
   }
   renderReportSources();
@@ -1274,7 +1345,7 @@ function syncAiEntry() {
       else if (ai.lastError) label = 'AI 连接失败';
       else label = 'AI 已配置';
     }
-    reportConnection.textContent = label;
+    reportConnection.textContent = uiText(label);
     reportConnection.classList.toggle('ok', configured && ai.lastTestOk);
   }
 }
@@ -1362,7 +1433,7 @@ async function openReportView() {
   if (!state.settings) await loadSettingsUI();
   if (!state.settings?.ai?.configured) {
     showView('settings');
-    toast('请先在设置中配置 DeepSeek API');
+    toast(uiText('请先在设置中配置 DeepSeek API'));
     return;
   }
   showView('report');
@@ -1403,7 +1474,7 @@ function generateReport(force = false) {
     }
   });
   if (!result.accepted) {
-    toast('本周期总结正在生成，请稍候。');
+    toast(uiText('本周期总结正在生成，请稍候。'));
     return result.completion;
   }
   const job = reportGenerationManager.get(result.job.id);
@@ -1473,16 +1544,16 @@ reportFormat.addEventListener('change', () => {
 });
 reportGenerate.addEventListener('click', () => generateReport(!!state.report.data));
 $('#report-copy').addEventListener('click', async () => {
-  if (!state.report.data) { toast('请先生成总结'); return; }
+  if (!state.report.data) { toast(uiText('请先生成总结')); return; }
   const content = state.report.format === 'txt' ? reportText(state.report.data.content) : state.report.data.content;
-  try { await navigator.clipboard.writeText(content); toast('总结已复制'); }
-  catch { toast('复制失败，请使用编辑框手动复制'); }
+  try { await navigator.clipboard.writeText(content); toast(uiText('总结已复制')); }
+  catch { toast(uiText('复制失败，请使用编辑框手动复制')); }
 });
 $('#report-export').addEventListener('click', async () => {
-  if (!state.report.data) { toast('请先生成总结'); return; }
+  if (!state.report.data) { toast(uiText('请先生成总结')); return; }
   const res = await window.api.exportReport(state.report.data.id, state.report.format);
-  if (res.ok) toast('总结已导出到 ' + res.filePath);
-  else if (res.error) toast(res.error);
+  if (res.ok) toast(uiText(`总结已导出到 ${res.filePath}`));
+  else if (res.error) toast(uiText(res.error));
 });
 reportEdit.addEventListener('click', () => {
   if (!state.report.data) return;
@@ -1505,7 +1576,7 @@ reportEditSave.addEventListener('click', async () => {
   const scrollPosition = captureReportEditScroll();
   const content = currentReportDraftMarkdown();
   const res = await window.api.saveReport(state.report.data.id, content);
-  if (!res.ok) { toast(res.error || '保存失败'); return; }
+  if (!res.ok) { toast(uiText(res.error || '保存失败')); return; }
   state.report.data = res.report;
   state.report.editing = false;
   state.report.draftMarkdown = '';
@@ -1608,11 +1679,11 @@ document.addEventListener('click', event => {
 function buildMonthOptions() {
   fMonth.innerHTML = '';
   const all = document.createElement('option');
-  all.value = 'all'; all.textContent = '全部月份';
+  all.value = 'all'; all.textContent = uiText('全部月份');
   fMonth.appendChild(all);
   for (let m = 1; m <= 12; m++) {
     const o = document.createElement('option');
-    o.value = String(m); o.textContent = `${m} 月`;
+    o.value = String(m); o.textContent = uiText(`${m} 月`);
     fMonth.appendChild(o);
   }
   syncCustomSelect(fMonth);
@@ -1623,16 +1694,16 @@ function populateYearOptions() {
   const cur = fYear.value;
   fYear.innerHTML = '';
   const all = document.createElement('option');
-  all.value = 'all'; all.textContent = '全部年份';
+  all.value = 'all'; all.textContent = uiText('全部年份');
   fYear.appendChild(all);
   for (const y of years) {
     const o = document.createElement('option');
-    o.value = String(y); o.textContent = `${y} 年`;
+    o.value = String(y); o.textContent = uiText(`${y} 年`);
     fYear.appendChild(o);
   }
   if (cur !== 'all' && /^\d{4}$/.test(cur) && !years.includes(Number(cur))) {
     const o = document.createElement('option');
-    o.value = cur; o.textContent = `${cur} 年`;
+    o.value = cur; o.textContent = uiText(`${cur} 年`);
     fYear.appendChild(o);
   }
   if ([...fYear.options].some(o => o.value === cur)) fYear.value = cur;
@@ -1652,7 +1723,8 @@ function renderSavedFilterOptions() {
   for (const item of model.options) {
     const option = document.createElement('option');
     option.value = item.value;
-    option.textContent = item.label;
+    // 空值项是程序内置状态文案；用户保存的筛选名称必须原样保留。
+    option.textContent = item.value ? item.label : uiText(item.label);
     fSaved.appendChild(option);
   }
   fSaved.disabled = model.disabled;
@@ -1669,9 +1741,9 @@ function syncFilterControls(filteredCount = filteredEntries().length) {
   fSaveFilter.disabled = !active;
   fDeleteFilter.hidden = !matched;
   fClearFilter.hidden = !active;
-  fCount.textContent = active
+  fCount.textContent = uiText(active
     ? `显示 ${filteredCount} / ${state.entries.length} 条`
-    : `${state.entries.length} 条记录`;
+    : `${state.entries.length} 条记录`);
 }
 
 function resetFilters() {
@@ -1704,10 +1776,12 @@ function syncDateFilterButton() {
   if (fYear.value !== 'all') parts.push(`${fYear.value}年`);
   if (fMonth.value !== 'all') parts.push(`${fMonth.value}月`);
   const rangeLabel = state.rangeFocus.type !== 'all' ? DR.rangeLabel(state.rangeFocus) : '';
-  dateFilterLabel.textContent = rangeLabel || (parts.length ? parts.join(' · ') : '日期筛选');
+  dateFilterLabel.textContent = uiText(rangeLabel || (parts.length ? parts.join(' · ') : '日期筛选'));
   const active = !!rangeLabel || parts.length > 0;
   dateFilterToggle.classList.toggle('active', active);
-  dateFilterToggle.title = active ? `当前日期筛选：${rangeLabel || parts.join(' · ')}` : '按年份或月份筛选';
+  dateFilterToggle.title = uiText(active
+    ? `当前日期筛选：${rangeLabel || parts.join(' · ')}`
+    : '按年份或月份筛选');
 }
 
 function filteredEntries() {
@@ -1745,7 +1819,7 @@ fSaved.addEventListener('change', () => {
   const preset = state.savedFilters.find(item => item.id === fSaved.value);
   if (preset) {
     applyFilterSnapshot(preset);
-    toast(`已加载筛选：${preset.name}`);
+    toast(uiText(`已加载筛选：${preset.name}`));
   }
 });
 
@@ -1767,13 +1841,13 @@ fDeleteFilter.addEventListener('click', async () => {
   fDeleteFilter.disabled = true;
   try {
     const res = await window.api.setSavedFilters(state.savedFilters.filter(item => item.id !== selected.id));
-    if (!res?.ok) { toast(res?.error || '筛选删除失败'); return; }
+    if (!res?.ok) { toast(uiText(res?.error || '筛选删除失败')); return; }
     state.savedFilters = Array.isArray(res.savedFilters) ? res.savedFilters : [];
     renderSavedFilterOptions();
     syncFilterControls();
-    toast('已删除保存的筛选');
+    toast(uiText('已删除保存的筛选'));
   } catch (error) {
-    toast(`筛选删除失败：${error?.message || '无法保存设置'}`);
+    toast(uiText(`筛选删除失败：${error?.message || '无法保存设置'}`));
   } finally {
     fDeleteFilter.disabled = false;
   }
@@ -1781,7 +1855,7 @@ fDeleteFilter.addEventListener('click', async () => {
 
 fSaveFilter.addEventListener('click', async () => {
   if (!isFiltering()) {
-    toast('请先设置关键词或日期筛选');
+    toast(uiText('请先设置关键词或日期筛选'));
     return;
   }
   const snapshot = currentFilterSnapshot();
@@ -1798,13 +1872,13 @@ fSaveFilter.addEventListener('click', async () => {
   fSaveFilter.disabled = true;
   try {
     const res = await window.api.setSavedFilters(next);
-    if (!res?.ok) { toast(res?.error || '筛选保存失败'); return; }
+    if (!res?.ok) { toast(uiText(res?.error || '筛选保存失败')); return; }
     state.savedFilters = Array.isArray(res.savedFilters) ? res.savedFilters : next;
     renderSavedFilterOptions();
     syncFilterControls();
-    toast(existing ? '已更新保存的筛选' : '筛选已保存');
+    toast(uiText(existing ? '已更新保存的筛选' : '筛选已保存'));
   } catch (error) {
-    toast(`筛选保存失败：${error?.message || '无法保存设置'}`);
+    toast(uiText(`筛选保存失败：${error?.message || '无法保存设置'}`));
   } finally {
     syncFilterControls();
   }
@@ -1844,11 +1918,68 @@ function workbenchWeekBounds(now = Date.now()) {
   return { start: dateStringFromDate(monday), end: dateStringFromDate(sunday) };
 }
 
+const closureAutoRefreshApi = window.DRClosureAutoRefresh;
+const closureAutoRefreshDefaults = closureAutoRefreshApi.DEFAULTS;
+
+function closurePeriodKey(bounds = workbenchWeekBounds()) {
+  return `week|${bounds.start}|${bounds.end}`;
+}
+
+function isClosureWorkbenchVisible() {
+  const focused = typeof document.hasFocus !== 'function' || document.hasFocus();
+  return !!weeklyWorkbench
+    && !weeklyWorkbench.hidden
+    && !viewMain.hidden
+    && document.visibilityState !== 'hidden'
+    && !document.hidden
+    && focused;
+}
+
+const closureAutoRefresh = closureAutoRefreshApi.createClosureAutoRefresh({
+  onDue: () => {
+    // 可见性可能在定时器触发前已经改变，最后一层保护避免后台启动新请求。
+    if (isClosureWorkbenchVisible()) generateWorkbenchClosure(false, { automatic: true });
+  }
+});
+
+function syncClosureAutoRefresh(reason = 'source-change', schedule = true) {
+  const closure = state.workbench.closure;
+  const bounds = workbenchWeekBounds();
+  const periodKey = closurePeriodKey(bounds);
+  closure.periodKey = periodKey;
+  closureAutoRefresh.update({
+    enabled: !!state.settings?.ai?.configured
+      && !state.terminologyDiscovery.running
+      && !aiConnectionChecking,
+    visible: isClosureWorkbenchVisible(),
+    hasRecentSources: closure.recentCount > 0,
+    cacheStatus: closure.cacheStatus,
+    periodKey
+  });
+  if (!schedule) {
+    closureAutoRefresh.cancel();
+    return;
+  }
+  const delayByReason = {
+    startup: closureAutoRefreshDefaults.startupDelayMs,
+    'source-change': closureAutoRefreshDefaults.debounceMs,
+    'configuration-change': closureAutoRefreshDefaults.debounceMs,
+    visible: 0,
+    'period-change': 0,
+    retry: 0,
+    'post-generation': 0
+  };
+  closureAutoRefresh.request({
+    reason,
+    delayMs: delayByReason[reason] ?? closureAutoRefreshDefaults.debounceMs
+  });
+}
+
 function workbenchHeader(kicker, title, reportInfo) {
   const head = wbNode('div', 'wb-head');
-  const copy = wbNode('div');
-  copy.append(wbNode('div', 'wb-kicker', kicker), wbNode('div', 'wb-title', title));
-  const status = wbNode('span', `wb-status${reportInfo.className ? ` ${reportInfo.className}` : ''}`, reportInfo.label);
+  const copy = wbNode('div', 'wb-head-copy');
+  copy.append(wbNode('div', 'wb-kicker', uiText(kicker)), wbNode('div', 'wb-title', uiText(title)));
+  const status = wbNode('span', `wb-status${reportInfo.className ? ` ${reportInfo.className}` : ''}`, uiText(reportInfo.label));
   head.append(copy, status);
   return head;
 }
@@ -1894,16 +2025,16 @@ function closureThinkingStatus(thinking) {
     ? ` · 第 ${thinking.segment}/${thinking.totalSegments} 批`
     : '';
   const received = thinking.reasoningLength > 0 ? ` · 已收到 ${thinking.reasoningLength} 字` : '';
-  if (thinking.phase === 'segment') return `准备分析${segment}${elapsed}`;
-  if (thinking.phase === 'thinking') return `AI 正在思考${segment}${received}${elapsed}`;
-  if (thinking.phase === 'writing') return `正在整理结果${segment}${elapsed}`;
-  if (thinking.phase === 'continuing') return `正在续写结构化结果${segment}${elapsed}`;
-  if (thinking.phase === 'recovering') return `正在恢复流式输出${segment}${elapsed}`;
-  if (thinking.phase === 'fallback') return `正在切换兼容模式${segment}${elapsed}`;
-  if (thinking.phase === 'segment-done') return `已完成批次对照${segment}${elapsed}`;
-  if (thinking.phase === 'saved' || thinking.phase === 'done') return `已完成${elapsed}`;
-  if (thinking.phase === 'error') return '分析失败';
-  return `AI 正在处理${segment}${elapsed}`;
+  if (thinking.phase === 'segment') return uiText(`准备分析${segment}${elapsed}`);
+  if (thinking.phase === 'thinking') return uiText(`AI 正在思考${segment}${received}${elapsed}`);
+  if (thinking.phase === 'writing') return uiText(`正在整理结果${segment}${elapsed}`);
+  if (thinking.phase === 'continuing') return uiText(`正在续写结构化结果${segment}${elapsed}`);
+  if (thinking.phase === 'recovering') return uiText(`正在恢复流式输出${segment}${elapsed}`);
+  if (thinking.phase === 'fallback') return uiText(`正在切换兼容模式${segment}${elapsed}`);
+  if (thinking.phase === 'segment-done') return uiText(`已完成批次对照${segment}${elapsed}`);
+  if (thinking.phase === 'saved' || thinking.phase === 'done') return uiText(`已完成${elapsed}`);
+  if (thinking.phase === 'error') return uiText('分析失败');
+  return uiText(`AI 正在处理${segment}${elapsed}`);
 }
 
 function syncClosureThinkingNode(box) {
@@ -1916,18 +2047,21 @@ function syncClosureThinkingNode(box) {
   const content = box.querySelector('.report-thinking-content');
   if (!thinking?.visible || !toggle || !status || !note || !content) return false;
 
-  toggle.textContent = thinking.open ? '收起详细过程' : '查看详细过程';
+  toggle.textContent = uiText(thinking.open ? '收起详细过程' : '查看详细过程');
   toggle.setAttribute('aria-expanded', String(thinking.open));
   status.textContent = closureThinkingStatus(thinking);
-  note.textContent = thinking.progressNote
-    || '实时状态代表实际生成进度；详细过程仅用于查看，不会写入总结或导出文件。';
+  note.textContent = uiText(thinking.progressNote
+    || '实时状态代表实际生成进度；详细过程仅用于查看，不会写入总结或导出文件。');
   content.hidden = !thinking.open;
 
   const blocks = [];
-  if (thinking.progressNote) blocks.push(`进度：${thinking.progressNote}`);
-  if (thinking.text) blocks.push(`思考过程：\n${thinking.text}`);
+  if (thinking.progressNote) blocks.push(`${uiText('进度：')}${uiText(thinking.progressNote)}`);
+  if (thinkingTextMatchesLocale(thinking) && thinking.text) blocks.push(`${uiText('思考过程：')}\n${thinking.text}`);
+  if (thinking.text && !thinkingTextMatchesLocale(thinking)) {
+    blocks.push(uiText('当前语言与本次 AI 过程的生成语言不同，已隐藏原始思考文本。'));
+  }
   if (!thinking.text && !closure.generating && ['saved', 'done'].includes(thinking.phase)) {
-    blocks.push('本次分析没有返回可展示的思考文本；结果仍按记录对照生成。');
+    blocks.push(uiText('本次分析没有返回可展示的思考文本；结果仍按记录对照生成。'));
   }
   content.textContent = blocks.join('\n\n');
   if (thinking.open) {
@@ -1945,15 +2079,12 @@ function renderClosureThinking() {
 
   const box = wbNode('div', 'wb-closure-thinking');
   const head = wbNode('div', 'report-thinking-head');
-  const copy = wbNode('div');
-  copy.append(
-    wbNode('span', 'report-thinking-title', 'AI 工作过程'),
-    wbNode('span', 'report-thinking-status', closureThinkingStatus(thinking))
-  );
-  const toggle = wbNode('button', 'link-btn closure-thinking-toggle', thinking.open ? '收起详细过程' : '查看详细过程');
+  const title = wbNode('span', 'report-thinking-title', uiText('AI 工作过程'));
+  const status = wbNode('span', 'report-thinking-status', closureThinkingStatus(thinking));
+  const toggle = wbNode('button', 'link-btn closure-thinking-toggle', uiText(thinking.open ? '收起详细过程' : '查看详细过程'));
   toggle.type = 'button';
   toggle.setAttribute('aria-expanded', String(thinking.open));
-  head.append(copy, toggle);
+  head.append(title, status, toggle);
 
   const note = wbNode('div', 'report-thinking-note');
   const content = wbNode('pre', 'report-thinking-content');
@@ -1970,7 +2101,7 @@ function appendClosureEvidence(parent, evidence, label, limit = 2) {
   for (const source of list) {
     const row = wbNode('div', 'wb-closure-evidence-row');
     const when = [source.date, source.time].filter(Boolean).join(' ');
-    row.append(wbNode('span', 'wb-closure-evidence-time', when || '记录'), wbNode('span', 'wb-closure-evidence-text', source.text || ''));
+    row.append(wbNode('span', 'wb-closure-evidence-time', when || uiText('记录')), wbNode('span', 'wb-closure-evidence-text', source.text || ''));
     box.appendChild(row);
   }
   parent.appendChild(box);
@@ -1980,7 +2111,7 @@ function renderClosureItem(item, compact = true) {
   const row = wbNode('article', `wb-closure-item${item.kind === 'recent' ? ' recent' : ''}`);
   const head = wbNode('div', 'wb-closure-item-head');
   head.appendChild(wbNode('div', 'wb-closure-item-title', item.title));
-  head.appendChild(wbNode('span', 'wb-confidence', item.confidence === 'high' ? '较确定' : '需谨慎'));
+  head.appendChild(wbNode('span', 'wb-confidence', uiText(item.confidence === 'high' ? '较确定' : '需谨慎')));
   row.appendChild(head);
   row.appendChild(wbNode('div', 'wb-closure-item-summary', item.summary));
   const beforeCount = Array.isArray(item.before_evidence) ? item.before_evidence.length : (item.before_refs || []).length;
@@ -1988,14 +2119,14 @@ function renderClosureItem(item, compact = true) {
   const recentCount = Array.isArray(recentEvidence) ? recentEvidence.length : (item.recent_refs || []).length;
   if (beforeCount || recentCount) {
     const counts = [];
-    if (beforeCount) counts.push(`历史记录 ${beforeCount} 条`);
-    if (recentCount) counts.push(`本期记录 ${recentCount} 条`);
+    if (beforeCount) counts.push(uiText(`历史记录 ${beforeCount} 条`));
+    if (recentCount) counts.push(uiText(`本期记录 ${recentCount} 条`));
     row.appendChild(wbNode('div', 'wb-closure-item-meta', counts.join(' · ')));
   }
   if (item.note) row.appendChild(wbNode('div', 'wb-closure-item-note', item.note));
   if (!compact) {
-    appendClosureEvidence(row, item.before_evidence, '历史记录');
-    appendClosureEvidence(row, recentEvidence, '本期记录');
+    appendClosureEvidence(row, item.before_evidence, uiText('历史记录'));
+    appendClosureEvidence(row, recentEvidence, uiText('本期记录'));
   }
   return row;
 }
@@ -2005,9 +2136,9 @@ function appendClosureSuggestions(parent, data, compact = true, withHeading = tr
     .filter(item => !state.workbench.closure.dismissedSuggestions.has(closureSuggestionKey(item)));
   if (!suggestions.length) return;
   const section = wbNode('div', 'wb-closure-suggestions');
-  if (withHeading) section.appendChild(wbNode('div', 'wb-closure-section-title', '待确认的叫法关联'));
+  if (withHeading) section.appendChild(wbNode('div', 'wb-closure-section-title', uiText('待确认的叫法关联')));
   if (compact) {
-    const note = wbNode('div', 'wb-closure-suggestion-note', 'AI 只在无法确定时提示，不会自动写入术语。');
+    const note = wbNode('div', 'wb-closure-suggestion-note', uiText('AI 只在无法确定时提示，不会自动写入术语。'));
     section.appendChild(note);
   }
   for (const suggestion of suggestions.slice(0, compact ? 2 : 20)) {
@@ -2016,10 +2147,10 @@ function appendClosureSuggestions(parent, data, compact = true, withHeading = tr
     copy.appendChild(wbNode('div', 'wb-closure-suggestion-title', `${suggestion.alias} 可能对应 ${suggestion.canonical_name}`));
     copy.appendChild(wbNode('div', 'wb-closure-suggestion-reason', suggestion.reason));
     const actions = wbNode('div', 'wb-closure-suggestion-actions');
-    const confirm = wbNode('button', 'link-btn', '确认并记住');
+    const confirm = wbNode('button', 'link-btn', uiText('确认并记住'));
     confirm.type = 'button';
     confirm.addEventListener('click', () => confirmClosureSuggestion(suggestion));
-    const dismiss = wbNode('button', 'link-btn', '暂不处理');
+    const dismiss = wbNode('button', 'link-btn', uiText('暂不处理'));
     dismiss.type = 'button';
     dismiss.addEventListener('click', () => dismissClosureSuggestion(suggestion));
     actions.append(confirm, dismiss);
@@ -2033,13 +2164,13 @@ function renderWorkbenchClosureCard() {
   const info = closureWorkbenchInfo();
   const card = wbNode('section', 'wb-card wb-closure-card');
   card.append(workbenchHeader('近期总结', '最近完成了什么', info));
-  card.appendChild(wbNode('div', 'wb-summary', '只把历史记录中的待处理事项，与当前周期记录中的完成或阶段性结果做对照；未记录不等于未完成。'));
+  card.appendChild(wbNode('div', 'wb-summary', uiText('只把历史记录中的待处理事项，与当前周期记录中的完成或阶段性结果做对照；未记录不等于未完成。')));
 
   const data = state.workbench.closure.data;
   const items = closureItems(data);
   const metrics = wbNode('div', 'wb-closure-metrics');
   metrics.append(
-    wbNode('span', '', `识别 ${items.length} 项`)
+    wbNode('span', '', uiText(`识别 ${items.length} 项`))
   );
   card.appendChild(metrics);
 
@@ -2049,24 +2180,24 @@ function renderWorkbenchClosureCard() {
   if (state.workbench.closure.generating) {
     const progress = wbNode('div', 'wb-closure-progress');
     progress.appendChild(wbNode('span', 'wb-closure-spinner'));
-    progress.appendChild(wbNode('span', '', state.workbench.closure.progressNote || '正在分析记录…'));
+    progress.appendChild(wbNode('span', '', uiText(state.workbench.closure.progressNote || '正在分析记录…')));
     card.appendChild(progress);
   } else if (items.length) {
     const list = wbNode('div', 'wb-closure-list');
     items.slice(0, 4).forEach(item => list.appendChild(renderClosureItem(item, true)));
-    if (items.length > 4) list.appendChild(wbNode('div', 'wb-closure-more', `还有 ${items.length - 4} 项，打开完整结果查看`));
+    if (items.length > 4) list.appendChild(wbNode('div', 'wb-closure-more', uiText(`还有 ${items.length - 4} 项，打开完整结果查看`)));
     card.appendChild(list);
   } else {
-    card.appendChild(wbNode('div', 'wb-empty', data ? '当前记录中暂未识别出明确的近期闭环。可以重新分析，或继续保持自然记录。' : '生成后会显示“历史提及过、近期又出现完成结果”的事项。'));
+    card.appendChild(wbNode('div', 'wb-empty', uiText(data ? '当前记录中暂未识别出明确的近期闭环。可以重新分析，或继续保持自然记录。' : '生成后会显示“历史提及过、近期又出现完成结果”的事项。')));
   }
   const actions = wbNode('div', 'wb-closure-actions');
-  const generate = wbNode('button', `wb-action${data && info.className !== 'warn' ? '' : ' primary'}`, data ? (info.className === 'warn' ? '更新近期闭环' : '重新分析闭环') : '分析近期闭环');
+  const generate = wbNode('button', `wb-action${data && info.className !== 'warn' ? '' : ' primary'}`, uiText(data ? (info.className === 'warn' ? '更新近期闭环' : '重新分析闭环') : '分析近期闭环'));
   generate.type = 'button';
   generate.disabled = !state.settings?.ai?.configured || state.workbench.closure.generating;
   generate.addEventListener('click', () => generateWorkbenchClosure(info.className !== 'warn' && !!data));
   actions.appendChild(generate);
   if (data) {
-    const view = wbNode('button', 'wb-action', '查看完整结果');
+    const view = wbNode('button', 'wb-action', uiText('查看完整结果'));
     view.type = 'button';
     view.addEventListener('click', openClosureModal);
     actions.appendChild(view);
@@ -2075,7 +2206,7 @@ function renderWorkbenchClosureCard() {
   return card;
 }
 
-function renderWeeklyWorkbench() {
+function renderWeeklyWorkbench({ force = false } = {}) {
   if (!weeklyWorkbench) return;
   const closure = state.workbench.closure;
   const card = weeklyWorkbench.querySelector('.wb-closure-card');
@@ -2085,10 +2216,10 @@ function renderWeeklyWorkbench() {
     hasThinking: !!card?.querySelector('.wb-closure-thinking'),
     hasProgress: !!card?.querySelector('.wb-closure-progress')
   });
-  if (livePlan === 'patch') {
+  if (!force && livePlan === 'patch') {
     const thinkingPatched = syncClosureThinkingNode(card.querySelector('.wb-closure-thinking'));
     const progressText = card.querySelector('.wb-closure-progress')?.children?.[1];
-    if (progressText) progressText.textContent = closure.progressNote || '正在分析记录…';
+    if (progressText) progressText.textContent = uiText(closure.progressNote || '正在分析记录…');
     if (thinkingPatched) {
       updateWorkbenchThumb();
       return;
@@ -2100,37 +2231,57 @@ function renderWeeklyWorkbench() {
 }
 
 function syncWeeklyWorkbenchViewport() {
+  const wasVisible = isClosureWorkbenchVisible();
   const wide = window.matchMedia('(min-width: 1200px)').matches;
   const visible = wide && !viewMain.hidden;
   weeklyWorkbench.hidden = !visible;
   updateWorkbenchThumb();
+  const visibleNow = isClosureWorkbenchVisible();
+  closureAutoRefresh.update({ visible: visibleNow });
+  if (visibleNow && !wasVisible) resumeVisibleClosureAutomation('visible');
 }
 
 window.addEventListener('resize', syncWeeklyWorkbenchViewport);
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) closureAutoRefresh.update({ visible: false });
+  else resumeVisibleClosureAutomation('visible');
+});
+window.addEventListener('blur', () => closureAutoRefresh.update({ visible: false }));
+window.addEventListener('focus', () => resumeVisibleClosureAutomation('visible'));
 
 let workbenchClosureRequestId = 0;
 
-async function loadWorkbenchClosure({ preserveThinking = true } = {}) {
+async function loadWorkbenchClosure({
+  preserveThinking = true,
+  autoReason = 'source-change',
+  schedule = true
+} = {}) {
   const requestId = ++workbenchClosureRequestId;
   const closure = state.workbench.closure;
   if (closure.generating) return;
+  closureAutoRefresh.cancel();
   closure.thinking = preserveThinking
     ? thinkingState.preserveThinking(closure.thinking)
     : createClosureThinking();
   if (!state.settings?.ai?.configured) {
     closure.data = null;
     closure.cacheStatus = 'missing';
+    closure.recentCount = 0;
+    closure.historicalCount = 0;
     closure.loading = false;
     closure.error = '';
     closure.progressNote = '';
+    syncClosureAutoRefresh(autoReason, false);
     renderTerminologyUI();
     renderWeeklyWorkbench();
     return;
   }
   const bounds = workbenchWeekBounds();
+  closure.periodKey = closurePeriodKey(bounds);
   closure.loading = true;
   closure.error = '';
   renderWeeklyWorkbench();
+  let loaded = false;
   try {
     const res = await window.api.getCachedClosure({
       start: bounds.start,
@@ -2141,29 +2292,37 @@ async function loadWorkbenchClosure({ preserveThinking = true } = {}) {
     if (!res.ok) throw new Error(res.error || '无法读取近期闭环');
     closure.data = res.summary || null;
     closure.cacheStatus = res.cacheStatus || 'missing';
+    closure.recentCount = Number(res.recentCount) || 0;
+    closure.historicalCount = Number(res.historicalCount) || 0;
     closure.progressNote = '';
+    loaded = true;
   } catch (error) {
     if (requestId !== workbenchClosureRequestId) return;
     closure.data = null;
     closure.cacheStatus = 'missing';
+    closure.recentCount = 0;
+    closure.historicalCount = 0;
     closure.error = error?.message || '无法读取近期闭环';
   } finally {
     if (requestId === workbenchClosureRequestId) {
       closure.loading = false;
       renderTerminologyUI();
       renderWeeklyWorkbench();
+      syncClosureAutoRefresh(loaded ? autoReason : 'load-error', loaded && schedule);
     }
   }
 }
 
-async function generateWorkbenchClosure(force = false) {
+async function generateWorkbenchClosure(force = false, { automatic = false } = {}) {
   const closure = state.workbench.closure;
   if (closure.generating) return;
+  if (automatic && !isClosureWorkbenchVisible()) return;
   if (!state.settings?.ai?.configured) {
-    toast('请先到设置中连接 AI');
+    if (!automatic) toast(uiText('请先到设置中连接 AI'));
     return;
   }
   const bounds = workbenchWeekBounds();
+  closureAutoRefresh.beginAttempt(closurePeriodKey(bounds));
   closure.generating = true;
   closure.error = '';
   closure.progressNote = '正在连接 AI，准备对照历史记录…';
@@ -2183,37 +2342,67 @@ async function generateWorkbenchClosure(force = false) {
     if (!res.ok) throw new Error(res.error || '近期闭环生成失败');
     closure.data = res.summary || null;
     closure.cacheStatus = res.cacheStatus || 'fresh';
+    closure.error = '';
     closure.progressNote = '近期闭环已保存。';
     closure.thinking = thinkingState.finalizeThinkingState(closure.thinking, 'saved');
     closure.thinking.progressNote = '近期闭环已保存；详细过程默认收起。';
     completed = true;
-    toast(res.cached ? '已读取已保存的近期闭环' : '近期闭环已生成');
+    if (!automatic) toast(uiText(res.cached ? '已读取已保存的近期闭环' : '近期闭环已生成'));
   } catch (error) {
     closure.error = error?.message || '近期闭环生成失败';
     closure.thinking = thinkingState.finalizeThinkingState(closure.thinking, 'error');
     closure.thinking.progressNote = closure.error;
-    toast(closure.error);
+    if (!automatic) toast(uiText(closure.error));
   } finally {
     clearInterval(closureThinkingTimer);
     closureThinkingTimer = null;
     closure.generating = false;
+    closureAutoRefresh.endAttempt();
     renderWeeklyWorkbench();
-    if (completed) loadWorkbenchClosure({ preserveThinking: true });
+    if (completed) {
+      await loadWorkbenchClosure({ preserveThinking: true, autoReason: 'post-generation' });
+    } else {
+      syncClosureAutoRefresh('retry');
+    }
   }
+}
+
+let visibleClosureAutomationRequest = null;
+
+function resumeVisibleClosureAutomation(reason = 'visible') {
+  if (!state.settings || !isClosureWorkbenchVisible()) return Promise.resolve(null);
+  if (visibleClosureAutomationRequest) return visibleClosureAutomationRequest;
+
+  const request = Promise.resolve()
+    .then(() => ensureTerminologyDiscovery())
+    .then(discovery => discovery || null)
+    .then(() => {
+      if (!isClosureWorkbenchVisible()) return null;
+      return loadWorkbenchClosure({
+        preserveThinking: true,
+        autoReason: reason,
+        schedule: true
+      });
+    })
+    .finally(() => {
+      if (visibleClosureAutomationRequest === request) visibleClosureAutomationRequest = null;
+    });
+  visibleClosureAutomationRequest = request;
+  return request;
 }
 
 function renderClosureModal() {
   const data = state.workbench.closure.data;
   if (!data) return;
-  closureModalNote.textContent = `只基于 ${data.start} 至 ${data.end} 的本期记录和历史记录做前后对照；历史记录不完整时不会推断项目整体状态。`;
+  closureModalNote.textContent = uiText(`只基于 ${data.start} 至 ${data.end} 的本期记录和历史记录做前后对照；历史记录不完整时不会推断项目整体状态。`);
   closureModalContent.innerHTML = '';
   const items = closureItems(data);
   if (items.length) {
-    const title = wbNode('div', 'closure-modal-section-title', `识别到 ${items.length} 项近期完成或阶段性闭环`);
+    const title = wbNode('div', 'closure-modal-section-title', uiText(`识别到 ${items.length} 项近期完成或阶段性闭环`));
     closureModalContent.appendChild(title);
     items.forEach(item => closureModalContent.appendChild(renderClosureItem(item, false)));
   } else {
-    closureModalContent.appendChild(wbNode('div', 'wb-empty', '当前记录中暂未识别出明确的近期闭环。'));
+    closureModalContent.appendChild(wbNode('div', 'wb-empty', uiText('当前记录中暂未识别出明确的近期闭环。')));
   }
 }
 
@@ -2237,7 +2426,7 @@ function confirmClosureSuggestion(suggestion) {
       suggestion.alias,
       term?.scope || ''
     );
-    if (!res.ok) { toast(res.error || '术语别名保存失败'); return; }
+    if (!res.ok) { toast(uiText(res.error || '术语别名保存失败')); return; }
     if (state.settings) {
       state.settings.terminology = res.terminology || [];
       if (state.settings.terminologyDiscovery) state.settings.terminologyDiscovery.termCount = state.settings.terminology.length;
@@ -2254,7 +2443,7 @@ function confirmClosureSuggestion(suggestion) {
     renderTerminologyUI();
     if (!closureModal.hidden) renderClosureModal();
     renderWeeklyWorkbench();
-    toast(`已记住：${suggestion.alias} → ${suggestion.canonical_name}`);
+    toast(uiText(`已记住：${suggestion.alias} → ${suggestion.canonical_name}`));
   })();
 }
 
@@ -2341,7 +2530,7 @@ function renderRangeChip() {
   rangeChip.style.display = label ? '' : 'none';
   rangeChip.innerHTML = '';
   if (label) {
-    rangeChip.append(label + ' ');
+  rangeChip.append(uiText(label) + ' ');
     const x = document.createElement('span');
     x.className = 'chip-x';
     x.textContent = '×';
@@ -2388,10 +2577,10 @@ function renderHeatmapPanel(weeks) {
   head.className = 'activity-head';
   const title = document.createElement('div');
   title.className = 'activity-title';
-  title.textContent = '工作量 · 近 26 周';
+  title.textContent = uiText('工作量 · 近 26 周');
   const summary = document.createElement('span');
   summary.className = 'activity-summary';
-  summary.textContent = `${total} 条记录`;
+  summary.textContent = uiText(`${total} 条记录`);
   const headMeta = document.createElement('div');
   headMeta.className = 'activity-head-meta';
   headMeta.appendChild(summary);
@@ -2401,9 +2590,9 @@ function renderHeatmapPanel(weeks) {
   body.className = 'activity-heatmap-body';
   const labels = document.createElement('div');
   labels.className = 'heatmap-weekdays';
-  ['一', '', '三', '', '五', '', '日'].forEach(label => {
+  [0, 1, 2, 3, 4, 5, 6].forEach((dayIndex, index) => {
     const item = document.createElement('span');
-    item.textContent = label;
+    item.textContent = index % 2 === 0 ? localizedWeekday(dayIndex) : '';
     labels.appendChild(item);
   });
 
@@ -2417,7 +2606,7 @@ function renderHeatmapPanel(weeks) {
   weeks.forEach((week, column) => {
     const label = document.createElement('span');
     const month = week[0].date.slice(0, 7);
-    if (column === 0 || month !== previousMonth) label.textContent = `${Number(month.slice(5))}月`;
+    if (column === 0 || month !== previousMonth) label.textContent = localizedMonth(Number(month.slice(5)));
     previousMonth = month;
     months.appendChild(label);
   });
@@ -2432,7 +2621,7 @@ function renderHeatmapPanel(weeks) {
       const button = document.createElement('button');
       button.type = 'button';
       button.className = `heatmap-cell level-${heatmapLevel(cell.count, max)}`;
-      button.title = `${cell.date} · ${cell.count} 条记录`;
+      button.title = `${cell.date} · ${uiText(`${cell.count} 条记录`)}`;
       button.setAttribute('aria-label', button.title);
       if (cell.date === today) button.classList.add('today');
       button.addEventListener('click', () => setRangeFocus({ type: 'day', day: cell.date }));
@@ -2444,13 +2633,13 @@ function renderHeatmapPanel(weeks) {
 
   const legend = document.createElement('div');
   legend.className = 'heatmap-legend';
-  legend.append('少');
+  legend.append(uiText('少'));
   for (let level = 0; level <= 4; level += 1) {
     const sample = document.createElement('span');
     sample.className = `heatmap-cell level-${level}`;
     legend.appendChild(sample);
   }
-  legend.append('多');
+  legend.append(uiText('多'));
   headMeta.prepend(legend);
   panel.append(head, body);
   return panel;
@@ -2467,10 +2656,10 @@ function renderHistogramPanel(days) {
   head.className = 'activity-head';
   const title = document.createElement('div');
   title.className = 'activity-title';
-  title.textContent = '趋势 · 近 14 天';
+  title.textContent = uiText('趋势 · 近 14 天');
   const summary = document.createElement('span');
   summary.className = 'activity-summary';
-  summary.textContent = `${total} 条记录`;
+  summary.textContent = uiText(`${total} 条记录`);
   head.append(title, summary);
 
   const bars = document.createElement('div');
@@ -2479,7 +2668,7 @@ function renderHistogramPanel(days) {
     const column = document.createElement('button');
     column.type = 'button';
     column.className = 'activity-col';
-    column.title = `${day.date} · ${day.count} 条`;
+    column.title = `${day.date} · ${uiText(`${day.count} 条`)}`;
     column.setAttribute('aria-label', column.title);
     if (day.date === today) column.classList.add('today');
 
@@ -2534,9 +2723,9 @@ function renderList() {
     em.textContent = '📝';
     const tip = document.createElement('div');
     tip.className = 'tip';
-    tip.textContent = state.entries.length
+    tip.textContent = uiText(state.entries.length
       ? (isFiltering() ? '当前筛选范围内没有记录' : '还没有记录')
-      : '还没有记录，按 Alt+Shift+D 或在上方输入第一条';
+      : '还没有记录，按 Alt+Shift+D 或在上方输入第一条');
     div.append(em, tip);
     listEl.appendChild(div);
     return;
@@ -2565,13 +2754,13 @@ function renderList() {
     if (rel) {
       const r = document.createElement('span');
       r.className = 'rel';
-      r.textContent = rel;
+      r.textContent = uiText(rel);
       dateSpan.appendChild(r);
     }
-    dateSpan.append(`${day} 星期${weekdayOf(day)}`);
+    dateSpan.append(`${day} ${localizedWeekday(day)}`);
     const count = document.createElement('span');
     count.className = 'day-count';
-    count.textContent = `${items.length} 条`;
+    count.textContent = uiText(`${items.length} 条`);
     head.append(dateSpan, count);
 
     const wrap = document.createElement('div');
@@ -2617,13 +2806,13 @@ function buildEntryEl(e) {
 
     const btnEdit = document.createElement('button');
     btnEdit.className = 'mini-btn';
-    btnEdit.title = '编辑';
+    btnEdit.title = uiText('编辑');
     btnEdit.innerHTML = ICONS.pencil;
     btnEdit.onclick = () => startEdit(el, e);
 
     const btnDel = document.createElement('button');
     btnDel.className = 'mini-btn danger';
-    btnDel.title = '删除';
+    btnDel.title = uiText('删除');
     btnDel.innerHTML = ICONS.trash;
     btnDel.onclick = () => removeEntry(e);
 
@@ -2656,18 +2845,18 @@ function startEdit(el, e) {
 
   const cancel = document.createElement('button');
   cancel.className = 'btn small';
-  cancel.textContent = '取消';
+  cancel.textContent = uiText('取消');
   cancel.onclick = renderList;
 
   const save = document.createElement('button');
   save.className = 'btn small primary';
-  save.textContent = '保存';
+  save.textContent = uiText('保存');
   save.onclick = async () => {
     const text = ta.value.trim();
     if (!text) { ta.focus(); return; }
     const ts = tsInput.value ? new Date(tsInput.value).getTime() : e.ts;
     await window.api.update(e.id, { text, ts });
-    toast('已更新 ✓');
+    toast(uiText('已更新 ✓'));
     refresh();
   };
 
@@ -2685,7 +2874,7 @@ function startEdit(el, e) {
 async function removeEntry(e) {
   await window.api.remove(e.id);
   refresh();
-  toast('已删除 1 条记录', {
+  toast(uiText('已删除 1 条记录'), {
     label: '撤销',
     fn: async () => { await window.api.add(e.text, e.ts); refresh(); }
   });
@@ -2722,15 +2911,15 @@ $('#mg-selectall').addEventListener('click', () => {
 
 function disarmDelete() {
   mgDelete.classList.remove('armed');
-  mgDelete.textContent = '删除选中';
+  mgDelete.textContent = uiText('删除选中');
 }
 
 mgDelete.addEventListener('click', async () => {
   const n = state.selected.size;
-  if (!n) { toast('请先勾选要删除的记录'); return; }
+  if (!n) { toast(uiText('请先勾选要删除的记录')); return; }
   if (!mgDelete.classList.contains('armed')) {
     mgDelete.classList.add('armed');
-    mgDelete.textContent = `确认删除 ${n} 条`;
+    mgDelete.textContent = uiText(`确认删除 ${n} 条`);
     clearTimeout(armTimer);
     armTimer = setTimeout(disarmDelete, 3000);
     return;
@@ -2739,7 +2928,7 @@ mgDelete.addEventListener('click', async () => {
   const res = await window.api.deleteMany([...state.selected]);
   state.selected.clear();
   disarmDelete();
-  toast(`已删除 ${res.removed} 条`);
+  toast(uiText(`已删除 ${res.removed} 条`));
   refresh();
 });
 
@@ -2747,7 +2936,7 @@ function updateManageUI() {
   manageBar.hidden = !state.manage;
   $('#list-toolbar').style.display = state.manage ? 'none' : '';
   btnManage.hidden = state.manage;
-  mgCount.textContent = `已选 ${state.selected.size} 条`;
+  mgCount.textContent = uiText(`已选 ${state.selected.size} 条`);
   if (state.selected.size === 0) disarmDelete();
 }
 
@@ -2756,6 +2945,7 @@ function updateManageUI() {
 const hkDisplay = $('#hk-display');
 const hkMsg = $('#hk-msg');
 const themeSeg = $('#theme-seg');
+const themeFamilySelect = $('#theme-family-select');
 const localeSelect = $('#set-locale');
 const autoStart = $('#set-autostart');
 const silentStart = $('#set-silent');
@@ -2837,7 +3027,7 @@ const EYE_OFF_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
 
 function renderAiKeyToggle(visible) {
   aiKeyToggle.innerHTML = visible ? EYE_OFF_ICON : EYE_ICON;
-  aiKeyToggle.title = visible ? '隐藏 API Key' : '显示 API Key';
+  aiKeyToggle.title = uiText(visible ? '隐藏 API Key' : '显示 API Key');
   aiKeyToggle.setAttribute('aria-label', aiKeyToggle.title);
 }
 
@@ -2870,7 +3060,7 @@ aiKey.addEventListener('blur', () => {
 aiKeyToggle.addEventListener('click', async () => {
   if (aiKey.dataset.masked === 'true' || (!aiKey.value && state.settings?.ai?.configured)) {
     const res = await window.api.revealAiKey();
-    if (!res.ok) { toast(res.error || '无法读取 API Key'); return; }
+    if (!res.ok) { toast(uiText(res.error || '无法读取 API Key')); return; }
     aiKey.value = res.apiKey;
     aiKey.type = 'text';
     aiKey.dataset.masked = 'false';
@@ -2890,14 +3080,15 @@ function syncSilentRow() {
 
 async function loadSettingsUI() {
   const s = await window.api.getSettings();
-  if (window.DRI18n && s.locale && window.DRI18n.locale !== s.locale) {
+  if (window.DRI18n && s.locale) {
+    // 即使当前 locale 值相同，也要等待外置语言包加载完成，避免首次启动时只显示内置回退文案。
     await window.DRI18n.setLocale(s.locale);
   }
   state.terminologyDiscovery.thinking = thinkingState.preserveThinking(state.terminologyDiscovery.thinking);
   state.settings = s;
   state.savedFilters = Array.isArray(s.savedFilters) ? s.savedFilters : [];
   renderSavedFilterOptions();
-  hkDisplay.textContent = s.hotkey || '未设置';
+  hkDisplay.textContent = s.hotkey || uiText('未设置');
   $('#hotkey-tip').textContent = s.hotkey || '--';
   $('#set-datapath').textContent = s.dataFile;
   autoStart.checked = s.openAtLogin;
@@ -2913,33 +3104,76 @@ async function loadSettingsUI() {
   syncSilentRow();
   hkMsg.textContent = '';
   syncThemeSeg();
+  syncThemeFamilySelect();
   if (localeSelect) {
     localeSelect.value = s.locale || 'zh-CN';
     syncCustomSelect(localeSelect);
   }
+  refreshLocalizedViews();
   renderWeeklyWorkbench();
-  loadWorkbenchClosure();
+  loadWorkbenchClosure({ autoReason: 'startup', schedule: false });
   autoTestAiOnStartup().finally(() => {
-    // 首次启动的连接检查结束后再启动术语识别，避免两个请求同时抢占同一份 AI 配置。
-    ensureTerminologyDiscovery();
+    // 首次启动的连接检查结束后，只在近期闭环实际可见时启动后续 AI 任务。
+    resumeVisibleClosureAutomation('startup');
   });
+}
+
+function refreshLocalizedViews() {
+  const editingEntry = listEl?.querySelector('.entry.edit');
+  renderTodayPanel();
+  renderStats();
+  renderActivity();
+  buildMonthOptions();
+  populateYearOptions();
+  renderSavedFilterOptions();
+  renderRangeChip();
+  if (!editingEntry) renderList();
+  else syncFilterControls();
+  renderExportPreview();
+  renderReportState();
+  renderReportThinking();
+  renderTerminologyUI();
+  renderTerminologyDiscoveryUI();
+  renderWeeklyWorkbench({ force: true });
+  syncAiSettingsUI(state.settings?.ai);
+  syncAiEntry();
+  syncThemeSeg();
+  syncThemeFamilySelect();
+  syncSilentRow();
+  window.DRI18n?.applyDocument();
+  syncAllCustomSelects();
 }
 
 localeSelect?.addEventListener('change', async () => {
   const next = localeSelect.value;
   const res = await window.api.setSettings({ locale: next });
   if (!res?.ok) {
-    toast(res?.error || '语言设置失败');
+    toast(uiText(res?.error || '语言设置失败'));
     if (state.settings?.locale) {
       localeSelect.value = state.settings.locale;
       syncCustomSelect(localeSelect);
     }
+    return;
   }
+  if (res.settings) state.settings = res.settings;
 });
 
 window.api.onLocaleChanged?.(locale => {
-  if (!locale || !window.DRI18n || window.DRI18n.locale === locale) return;
-  window.DRI18n.setLocale(locale).catch(() => {
+  if (!locale || !window.DRI18n) return;
+  window.DRI18n.setLocale(locale).then(() => {
+    return window.api.getSettings().then(localizedSettings => {
+      if (localizedSettings?.locale === locale) state.settings = localizedSettings;
+      if (localeSelect) localeSelect.value = locale;
+      // 语言包先更新原生选项，再刷新自定义下拉框的触发按钮和菜单文字。
+      syncAllCustomSelects();
+      // AI 提示词也按当前语言重新读取；这里只刷新当前语言的视图，
+      // 不会把旧语言的用户自定义内容写到新语言中。
+      syncTemplateUI();
+      syncClosurePromptUI();
+      syncTerminologyPromptUI();
+      refreshLocalizedViews();
+    });
+  }).catch(() => {
     // 语言包读取失败时保留当前界面，不让切换语言影响主页面内容。
   });
 });
@@ -2950,7 +3184,7 @@ function fillAiModelSelect(select, ai, selected) {
   if (!models.length) {
     const o = document.createElement('option');
     o.value = selected || '';
-    o.textContent = selected || '请先测试连接';
+    o.textContent = selected || uiText('请先测试连接');
     select.appendChild(o);
   } else {
     for (const model of models) {
@@ -2999,29 +3233,29 @@ function syncAiSettingsUI(ai = state.settings?.ai) {
     : ai.lastError
     ? '连接失败'
     : '已配置';
-  aiStateBadge.textContent = connectionLabel;
+  aiStateBadge.textContent = uiText(connectionLabel);
   aiStateBadge.classList.toggle('ok', configured && !!ai.lastTestOk);
   if (aiEntryState) {
-    aiEntryState.textContent = connectionLabel;
+    aiEntryState.textContent = uiText(connectionLabel);
     aiEntryState.classList.toggle('ok', configured && !!ai.lastTestOk);
   }
-  aiModelSub.textContent = aiConnectionChecking
+  aiModelSub.textContent = uiText(aiConnectionChecking
     ? '正在自动检查连接并读取当前可用模型…'
     : ai?.lastError
     || (ai?.lastTestAt
       ? `最近测试：${new Date(ai.lastTestAt).toLocaleString()}`
       : configured
       ? '已保存配置，软件启动时会自动检查连接'
-      : '点击测试连接后自动读取当前可用模型');
-  aiClosureModelSub.textContent = ai?.closureModel
+      : '点击测试连接后自动读取当前可用模型'));
+  aiClosureModelSub.textContent = uiText(ai?.closureModel
     ? `当前用于近期闭环；与周期报告模型独立。`
-    : '测试连接后会自动选择更适合语义判断的模型；也可单独切换。';
+    : '测试连接后会自动选择更适合语义判断的模型；也可单独切换。');
   aiReasoningEffort.value = reasoningEffort;
   syncCustomSelect(aiReasoningEffort);
-  aiReasoningSub.textContent = reasoningNotes[reasoningEffort];
+  aiReasoningSub.textContent = uiText(reasoningNotes[reasoningEffort]);
   aiClosureReasoningEffort.value = closureReasoningEffort;
   syncCustomSelect(aiClosureReasoningEffort);
-  aiClosureReasoningSub.textContent = closureReasoningNotes[closureReasoningEffort];
+  aiClosureReasoningSub.textContent = uiText(closureReasoningNotes[closureReasoningEffort]);
   syncAiModels(ai);
   if (aiTest) aiTest.disabled = aiConnectionChecking;
   aiMsg.textContent = '';
@@ -3070,10 +3304,10 @@ function renderTerminologyThinking() {
   const thinking = state.terminologyDiscovery.thinking || createTerminologyThinking();
   terminologyThinking.hidden = !thinking.visible;
   terminologyThinkingContent.hidden = !thinking.open;
-  terminologyThinkingToggle.textContent = thinking.open ? '收起详细过程' : '查看详细过程';
+  terminologyThinkingToggle.textContent = uiText(thinking.open ? '收起详细过程' : '查看详细过程');
   terminologyThinkingToggle.setAttribute('aria-expanded', String(thinking.open));
-  terminologyThinkingNote.textContent = thinking.progressNote
-    || '实时状态代表术语识别进度；详细过程默认收起，不会修改原始日报。';
+  terminologyThinkingNote.textContent = uiText(thinking.progressNote
+    || '实时状态代表术语识别进度；详细过程默认收起，不会修改原始日报。');
 
   const elapsed = thinkingState.elapsedSeconds(thinking);
   const batchLabel = thinking.totalSegments > 1 && thinking.segment
@@ -3081,24 +3315,27 @@ function renderTerminologyThinking() {
     : '';
   const outputLength = thinking.content.length || thinking.contentLength;
   const outputLabel = outputLength > 0 ? ` · 已收到 ${outputLength} 字` : '';
-  if (thinking.phase === 'segment') terminologyThinkingStatus.textContent = `准备识别日报${batchLabel} · ${elapsed}s`;
-  else if (thinking.phase === 'thinking') terminologyThinkingStatus.textContent = `AI 正在思考${batchLabel} · ${elapsed}s`;
-  else if (thinking.phase === 'writing') terminologyThinkingStatus.textContent = `正在整理 AI 输出${batchLabel}${outputLabel} · ${elapsed}s`;
-  else if (thinking.phase === 'segment-done') terminologyThinkingStatus.textContent = `第 ${thinking.segment || 1} 批识别完成 · ${elapsed}s`;
-  else if (thinking.phase === 'saved') terminologyThinkingStatus.textContent = `术语词典已保存 · ${elapsed}s`;
-  else if (thinking.phase === 'error') terminologyThinkingStatus.textContent = '识别失败';
-  else terminologyThinkingStatus.textContent = `AI 正在处理${batchLabel} · ${elapsed}s`;
+  if (thinking.phase === 'segment') terminologyThinkingStatus.textContent = uiText(`准备识别日报${batchLabel} · ${elapsed}s`);
+  else if (thinking.phase === 'thinking') terminologyThinkingStatus.textContent = uiText(`AI 正在思考${batchLabel} · ${elapsed}s`);
+  else if (thinking.phase === 'writing') terminologyThinkingStatus.textContent = uiText(`正在整理 AI 输出${batchLabel}${outputLabel} · ${elapsed}s`);
+  else if (thinking.phase === 'segment-done') terminologyThinkingStatus.textContent = uiText(`第 ${thinking.segment || 1} 批识别完成 · ${elapsed}s`);
+  else if (thinking.phase === 'saved') terminologyThinkingStatus.textContent = uiText(`术语词典已保存 · ${elapsed}s`);
+  else if (thinking.phase === 'error') terminologyThinkingStatus.textContent = uiText('识别失败');
+  else terminologyThinkingStatus.textContent = uiText(`AI 正在处理${batchLabel} · ${elapsed}s`);
 
   const blocks = [];
-  if (thinking.text) blocks.push(`思考过程：\n${thinking.text}`);
-  if (thinking.content) blocks.push(`AI 输出：\n${thinking.content}`);
+  if (thinkingTextMatchesLocale(thinking) && thinking.text) blocks.push(`${uiText('思考过程：')}\n${thinking.text}`);
+  if (thinkingTextMatchesLocale(thinking) && thinking.content) blocks.push(`${uiText('AI 输出：')}\n${thinking.content}`);
+  if (thinking.text && !thinkingTextMatchesLocale(thinking)) {
+    blocks.push(uiText('当前语言与本次 AI 过程的生成语言不同，已隐藏原始思考文本。'));
+  }
   if (!blocks.length) {
     const waiting = ['segment', 'thinking', 'writing', 'continuing', 'recovering', 'fallback'].includes(thinking.phase);
-    blocks.push(waiting
+    blocks.push(uiText(waiting
       ? '正在等待 AI 返回内容；返回后会在这里实时显示。'
       : thinking.phase === 'error'
         ? '本次未收到可展示的 AI 输出。'
-        : '本次没有可展示的 AI 输出。');
+        : '本次没有可展示的 AI 输出。'));
   }
   terminologyThinkingContent.textContent = blocks.join('\n\n');
   if (thinking.open) terminologyThinkingContent.scrollTop = terminologyThinkingContent.scrollHeight;
@@ -3111,26 +3348,30 @@ function renderTerminologyDiscoveryUI() {
   const ui = state.terminologyDiscovery;
   const configured = !!state.settings?.ai?.configured;
   terminologyDiscover.disabled = !configured || ui.running;
-  terminologyDiscover.textContent = discovery.initialized ? '重新识别并合并' : '识别全部日报';
+  terminologyDiscover.textContent = uiText(discovery.initialized ? '重新识别并合并' : '识别全部日报');
 
   if (ui.running) {
+    terminologyDiscoveryStatus.textContent = uiText(terminologyDiscoveryStatus.textContent);
     terminologyDiscoveryStatus.textContent = ui.note || '正在读取全部日报；不会修改原始记录。';
+    terminologyDiscoveryStatus.textContent = uiText(terminologyDiscoveryStatus.textContent);
     return;
   }
   if (ui.error) {
-    terminologyDiscoveryStatus.textContent = ui.error;
+    terminologyDiscoveryStatus.textContent = uiText(ui.error);
     return;
   }
   if (!configured) {
     terminologyDiscoveryStatus.textContent = '连接 AI 后自动开始；不会修改任何原始记录。';
+    terminologyDiscoveryStatus.textContent = uiText(terminologyDiscoveryStatus.textContent);
     return;
   }
   if (discovery.initialized) {
     const when = discovery.lastRunAt ? new Date(discovery.lastRunAt).toLocaleString() : '已完成';
     terminologyDiscoveryStatus.textContent = `已读取 ${discovery.recordCount || 0} 条日报，形成 ${discovery.termCount || 0} 组术语；上次识别：${when}。可再次识别并合并。`;
+    terminologyDiscoveryStatus.textContent = uiText(terminologyDiscoveryStatus.textContent);
     return;
   }
-  terminologyDiscoveryStatus.textContent = '连接已就绪，首次识别会读取全部日报；不会修改任何原始记录。';
+  terminologyDiscoveryStatus.textContent = uiText('连接已就绪，首次识别会读取全部日报；不会修改任何原始记录。');
 }
 
 async function discoverTerminology(force = false, { silent = false } = {}) {
@@ -3156,7 +3397,7 @@ async function discoverTerminology(force = false, { silent = false } = {}) {
         'error'
       );
       state.terminologyDiscovery.thinking.progressNote = state.terminologyDiscovery.error;
-      if (!silent) toast(state.terminologyDiscovery.error);
+      if (!silent) toast(uiText(state.terminologyDiscovery.error));
       return res;
     }
     if (state.settings) {
@@ -3182,9 +3423,9 @@ async function discoverTerminology(force = false, { silent = false } = {}) {
     renderTerminologyUI();
     renderTerminologyDiscoveryUI();
     if (!silent && !res.skipped) {
-      toast(res.stats?.consolidationFallback
+      toast(uiText(res.stats?.consolidationFallback
         ? '术语已识别；归并阶段暂未完成，候选结果已保留，可再次识别并合并'
-        : `术语词典已更新，共 ${res.terminology?.length || 0} 组`);
+        : `术语词典已更新，共 ${res.terminology?.length || 0} 组`));
     }
     return res;
   }).catch(error => {
@@ -3195,7 +3436,7 @@ async function discoverTerminology(force = false, { silent = false } = {}) {
       'error'
     );
     state.terminologyDiscovery.thinking.progressNote = state.terminologyDiscovery.error;
-    if (!silent) toast(state.terminologyDiscovery.error);
+    if (!silent) toast(uiText(state.terminologyDiscovery.error));
     return { ok: false, error: state.terminologyDiscovery.error };
   }).finally(() => {
     clearInterval(terminologyThinkingTimer);
@@ -3208,7 +3449,11 @@ async function discoverTerminology(force = false, { silent = false } = {}) {
 }
 
 function ensureTerminologyDiscovery() {
-  if (!state.settings?.ai?.configured || state.settings?.terminologyDiscovery?.initialized) {
+  if (
+    !state.settings?.ai?.configured
+    || state.settings?.terminologyDiscovery?.initialized
+    || !isClosureWorkbenchVisible()
+  ) {
     renderTerminologyDiscoveryUI();
     return null;
   }
@@ -3260,6 +3505,13 @@ function syncThemeSeg() {
   }
 }
 
+function syncThemeFamilySelect() {
+  const active = state.settings?.themeFamily || 'gold';
+  if (!themeFamilySelect) return;
+  themeFamilySelect.value = active;
+  syncCustomSelect(themeFamilySelect);
+}
+
 themeSeg.addEventListener('click', async ev => {
   const btn = ev.target.closest('button[data-v]');
   if (!btn) return;
@@ -3268,19 +3520,26 @@ themeSeg.addEventListener('click', async ev => {
   syncThemeSeg();
 });
 
+themeFamilySelect.addEventListener('change', async () => {
+  const nextFamily = themeFamilySelect.value;
+  const res = await window.api.setSettings({ themeFamily: nextFamily });
+  if (res.ok && state.settings) state.settings.themeFamily = nextFamily;
+  syncThemeFamilySelect();
+});
+
 autoStart.addEventListener('change', async () => {
   const res = await window.api.setSettings({ openAtLogin: autoStart.checked });
-  if (!res.ok) { autoStart.checked = !autoStart.checked; toast(res.error || '设置失败'); }
+  if (!res.ok) { autoStart.checked = !autoStart.checked; toast(uiText(res.error || '设置失败')); }
   else {
-    toast(autoStart.checked ? '将在开机时自动启动' : '已关闭开机自启');
+    toast(uiText(autoStart.checked ? '将在开机时自动启动' : '已关闭开机自启'));
     syncSilentRow();
   }
 });
 
 silentStart.addEventListener('change', async () => {
   const res = await window.api.setSettings({ silentStart: silentStart.checked });
-  if (!res.ok) { silentStart.checked = !silentStart.checked; toast(res.error || '设置失败'); }
-  else toast(silentStart.checked ? '开机将静默驻留托盘' : '开机将显示主窗口');
+  if (!res.ok) { silentStart.checked = !silentStart.checked; toast(uiText(res.error || '设置失败')); }
+  else toast(uiText(silentStart.checked ? '开机将静默驻留托盘' : '开机将显示主窗口'));
 });
 
 $('#set-openfolder').addEventListener('click', () => window.api.openDataFolder());
@@ -3293,18 +3552,18 @@ dataBackup.addEventListener('click', async () => {
   if (dataBackup.disabled) return;
   dataBackup.disabled = true;
   dataMsg.className = 'set-msg';
-  dataMsg.textContent = '正在整理日报、总结和设置…';
+  dataMsg.textContent = uiText('正在整理日报、总结和设置…');
   try {
     const res = await window.api.exportBackup();
     if (!res.ok) {
-      dataMsg.textContent = res.canceled ? '' : (res.error || '备份导出失败');
+      dataMsg.textContent = res.canceled ? '' : uiText(res.error || '备份导出失败');
       return;
     }
     dataMsg.className = 'set-msg success';
-    dataMsg.textContent = `备份已导出：${res.summary.entries} 条记录，${res.summary.reports} 份总结，${res.summary.closureSummaries || 0} 份闭环结果`;
-    toast('完整备份已导出');
+    dataMsg.textContent = uiText(`备份已导出：${res.summary.entries} 条记录，${res.summary.reports} 份总结，${res.summary.closureSummaries || 0} 份闭环结果`);
+    toast(uiText('完整备份已导出'));
   } catch (error) {
-    dataMsg.textContent = `备份导出失败：${error?.message || '无法连接本地数据服务'}`;
+    dataMsg.textContent = uiText(`备份导出失败：${error?.message || '无法连接本地数据服务'}`);
   } finally {
     dataBackup.disabled = false;
   }
@@ -3313,7 +3572,7 @@ dataBackup.addEventListener('click', async () => {
 dataRestore.addEventListener('click', async () => {
   if (dataRestore.disabled) return;
   if (reportGenerationManager.hasActiveJobs()) {
-    dataMsg.textContent = 'AI 总结正在生成，请完成后再恢复备份。';
+    dataMsg.textContent = uiText('AI 总结正在生成，请完成后再恢复备份。');
     return;
   }
   const confirmed = await askConfirmation(
@@ -3323,11 +3582,11 @@ dataRestore.addEventListener('click', async () => {
   if (!confirmed) return;
   dataRestore.disabled = true;
   dataMsg.className = 'set-msg';
-  dataMsg.textContent = '正在校验并恢复备份…';
+  dataMsg.textContent = uiText('正在校验并恢复备份…');
   try {
     const res = await window.api.restoreBackup();
     if (!res.ok) {
-      dataMsg.textContent = res.canceled ? '' : (res.error || '备份恢复失败');
+      dataMsg.textContent = res.canceled ? '' : uiText(res.error || '备份恢复失败');
       return;
     }
     state.manage = false;
@@ -3351,10 +3610,10 @@ dataRestore.addEventListener('click', async () => {
     await loadSettingsUI();
     await refresh();
     dataMsg.className = 'set-msg success';
-    dataMsg.textContent = `恢复完成：${res.summary.entries} 条记录，${res.summary.reports} 份总结；恢复前安全备份已自动保留。`;
-    toast('备份已恢复');
+    dataMsg.textContent = uiText(`恢复完成：${res.summary.entries} 条记录，${res.summary.reports} 份总结；恢复前安全备份已自动保留。`);
+    toast(uiText('备份已恢复'));
   } catch (error) {
-    dataMsg.textContent = `备份恢复失败：${error?.message || '无法连接本地数据服务'}`;
+    dataMsg.textContent = uiText(`备份恢复失败：${error?.message || '无法连接本地数据服务'}`);
   } finally {
     dataRestore.disabled = false;
   }
@@ -3364,12 +3623,12 @@ $('#ai-test').addEventListener('click', async () => {
   const button = $('#ai-test');
   button.disabled = true;
   aiMsg.className = 'set-msg';
-  aiMsg.textContent = '正在测试连接并读取模型…';
+  aiMsg.textContent = uiText('正在测试连接并读取模型…');
   const enteredKey = aiKey.dataset.masked === 'true' ? '' : aiKey.value.trim();
   const res = await window.api.testAi(enteredKey);
   button.disabled = false;
   if (!res.ok) {
-    aiMsg.textContent = res.error || '连接失败';
+    aiMsg.textContent = uiText(res.error || '连接失败');
     if (state.settings?.ai) state.settings.ai = res.ai || state.settings.ai;
     syncAiSettingsUI(state.settings?.ai);
     if (!aiKey.value.trim() || aiKey.dataset.masked === 'true') setMaskedAiKey(state.settings?.ai);
@@ -3380,35 +3639,35 @@ $('#ai-test').addEventListener('click', async () => {
   state.settings.ai = { ...res.ai, configured: true };
   syncAiSettingsUI(state.settings.ai);
   syncAiEntry();
-  loadWorkbenchClosure();
+  loadWorkbenchClosure({ autoReason: 'configuration-change' });
   ensureTerminologyDiscovery();
   aiMsg.className = 'set-msg success';
-  aiMsg.textContent = res.modelChanged || res.closureModelChanged
+  aiMsg.textContent = uiText(res.modelChanged || res.closureModelChanged
     ? `连接成功，周期报告模型：${res.ai.model}；闭环模型：${res.ai.closureModel}，请保存配置`
-    : `连接成功，发现 ${res.ai.models.length} 个可用模型，请保存配置`;
-  toast('连接成功，请保存配置');
+    : `连接成功，发现 ${res.ai.models.length} 个可用模型，请保存配置`);
+  toast(uiText('连接成功，请保存配置'));
 });
 
 aiSave.addEventListener('click', async () => {
   aiSave.disabled = true;
   aiMsg.className = 'set-msg';
-  aiMsg.textContent = '正在保存 AI 配置…';
+  aiMsg.textContent = uiText('正在保存 AI 配置…');
   const enteredKey = aiKey.dataset.masked === 'true' ? '' : aiKey.value.trim();
   const res = await window.api.saveAi(enteredKey);
   aiSave.disabled = false;
   if (!res.ok) {
-    aiMsg.textContent = res.error || 'AI 配置保存失败';
+    aiMsg.textContent = uiText(res.error || 'AI 配置保存失败');
     return;
   }
   state.settings.ai = res.ai;
   setMaskedAiKey(res.ai);
   syncAiSettingsUI(res.ai);
   syncAiEntry();
-  loadWorkbenchClosure();
+  loadWorkbenchClosure({ autoReason: 'configuration-change' });
   ensureTerminologyDiscovery();
   aiMsg.className = 'set-msg success';
-  aiMsg.textContent = 'AI 配置已保存';
-  toast('AI 配置已保存');
+  aiMsg.textContent = uiText('AI 配置已保存');
+  toast(uiText('AI 配置已保存'));
 });
 
 aiModel.addEventListener('change', async () => {
@@ -3418,8 +3677,8 @@ aiModel.addEventListener('change', async () => {
     state.settings.ai = res.ai;
     syncAiSettingsUI(res.ai);
     syncAiEntry();
-    aiMsg.textContent = '模型已更换，请重新测试连接';
-  } else aiMsg.textContent = res.error || '模型更新失败';
+    aiMsg.textContent = uiText('模型已更换，请重新测试连接');
+  } else aiMsg.textContent = uiText(res.error || '模型更新失败');
 });
 
 aiClosureModel.addEventListener('change', async () => {
@@ -3429,8 +3688,8 @@ aiClosureModel.addEventListener('change', async () => {
     state.settings.ai = res.ai;
     syncAiSettingsUI(res.ai);
     syncAiEntry();
-    aiMsg.textContent = '闭环模型已更换，请重新测试连接';
-  } else aiMsg.textContent = res.error || '闭环模型更新失败';
+    aiMsg.textContent = uiText('闭环模型已更换，请重新测试连接');
+  } else aiMsg.textContent = uiText(res.error || '闭环模型更新失败');
 });
 
 aiReasoningEffort.addEventListener('change', async () => {
@@ -3447,12 +3706,12 @@ aiReasoningEffort.addEventListener('change', async () => {
   if (!res.ok) {
     aiReasoningEffort.value = previous;
     syncCustomSelect(aiReasoningEffort);
-    aiMsg.textContent = res.error || '思考强度保存失败';
+    aiMsg.textContent = uiText(res.error || '思考强度保存失败');
     return;
   }
   state.settings.ai = res.ai;
   syncAiSettingsUI(res.ai);
-  toast('思考强度已保存，仅影响下一次重新生成');
+  toast(uiText('思考强度已保存，仅影响下一次重新生成'));
 });
 
 aiClosureReasoningEffort.addEventListener('change', async () => {
@@ -3469,12 +3728,12 @@ aiClosureReasoningEffort.addEventListener('change', async () => {
   if (!res.ok) {
     aiClosureReasoningEffort.value = previous;
     syncCustomSelect(aiClosureReasoningEffort);
-    aiMsg.textContent = res.error || '闭环思考强度保存失败';
+    aiMsg.textContent = uiText(res.error || '闭环思考强度保存失败');
     return;
   }
   state.settings.ai = res.ai;
   syncAiSettingsUI(res.ai);
-  toast('闭环思考强度已保存，仅影响下一次近期闭环生成');
+  toast(uiText('闭环思考强度已保存，仅影响下一次近期闭环生成'));
 });
 
 $('#ai-clear').addEventListener('click', async () => {
@@ -3499,8 +3758,8 @@ $('#ai-clear').addEventListener('click', async () => {
     terminologyThinkingTimer = null;
     state.terminologyDiscovery.thinking = createTerminologyThinking();
     renderTerminologyDiscoveryUI();
-    loadWorkbenchClosure({ preserveThinking: false });
-    toast('AI 配置已清除');
+    loadWorkbenchClosure({ preserveThinking: false, autoReason: 'configuration-change' });
+    toast(uiText('AI 配置已清除'));
   }
 });
 
@@ -3514,72 +3773,74 @@ templateSeg.addEventListener('click', ev => {
 $('#template-save').addEventListener('click', async () => {
   const value = templateText.value.trim();
   const res = await window.api.setReportTemplate(templateType, value);
-  if (!res.ok) { templateMsg.textContent = res.error || '模板保存失败'; return; }
+  if (!res.ok) { templateMsg.textContent = uiText(res.error || '模板保存失败'); return; }
   state.settings.reportTemplates[templateType] = value;
   templateMsg.className = 'set-msg success';
-  templateMsg.textContent = '模板已保存';
-  toast('总结模板已保存');
+  templateMsg.textContent = uiText('模板已保存');
+  toast(uiText('总结模板已保存'));
 });
 
 $('#template-reset').addEventListener('click', async () => {
-  const value = DEFAULT_TEMPLATES[templateType];
+  const value = state.settings?.reportTemplateDefaults?.[templateType] || DEFAULT_TEMPLATES[templateType];
   const res = await window.api.setReportTemplate(templateType, value);
-  if (!res.ok) { templateMsg.textContent = res.error || '恢复失败'; return; }
+  if (!res.ok) { templateMsg.textContent = uiText(res.error || '恢复失败'); return; }
   state.settings.reportTemplates[templateType] = value;
   syncTemplateUI();
-  toast('已恢复默认模板');
+  toast(uiText('已恢复默认模板'));
 });
 
 $('#closure-prompt-save').addEventListener('click', async () => {
   const value = closurePromptText.value.trim();
   const res = await window.api.setClosurePrompt(value);
   if (!res.ok) {
-    closurePromptMsg.textContent = res.error || '闭环提示词保存失败';
+    closurePromptMsg.textContent = uiText(res.error || '闭环提示词保存失败');
     return;
   }
   state.settings.closurePrompt = res.prompt;
   closurePromptMsg.className = 'set-msg success';
-  closurePromptMsg.textContent = '闭环提示词已保存';
-  await loadWorkbenchClosure();
-  toast('近期闭环提示词已保存');
+  closurePromptMsg.textContent = uiText('闭环提示词已保存');
+  await loadWorkbenchClosure({ autoReason: 'configuration-change' });
+  toast(uiText('近期闭环提示词已保存'));
 });
 
 $('#closure-prompt-reset').addEventListener('click', async () => {
   const value = state.settings?.closurePromptDefault || DEFAULT_CLOSURE_PROMPT;
   const res = await window.api.setClosurePrompt(value);
   if (!res.ok) {
-    closurePromptMsg.textContent = res.error || '恢复默认提示词失败';
+    closurePromptMsg.textContent = uiText(res.error || '恢复默认提示词失败');
     return;
   }
   state.settings.closurePrompt = res.prompt;
+  state.settings.closurePromptSource = res.source;
   syncClosurePromptUI();
-  await loadWorkbenchClosure();
-  toast('近期闭环提示词已恢复默认');
+  await loadWorkbenchClosure({ autoReason: 'configuration-change' });
+  toast(uiText('近期闭环提示词已恢复默认'));
 });
 
 terminologyPromptSave.addEventListener('click', async () => {
   const value = terminologyPromptText.value.trim();
   const res = await window.api.setTerminologyDiscoveryPrompt(value);
   if (!res.ok) {
-    terminologyPromptMsg.textContent = res.error || '术语识别提示词保存失败';
+    terminologyPromptMsg.textContent = uiText(res.error || '术语识别提示词保存失败');
     return;
   }
   state.settings.terminologyDiscoveryPrompt = res.prompt;
   terminologyPromptMsg.className = 'set-msg success';
-  terminologyPromptMsg.textContent = '术语识别提示词已保存';
-  toast('术语识别提示词已保存');
+  terminologyPromptMsg.textContent = uiText('术语识别提示词已保存');
+  toast(uiText('术语识别提示词已保存'));
 });
 
 terminologyPromptReset.addEventListener('click', async () => {
   const value = state.settings?.terminologyDiscoveryPromptDefault || DEFAULT_TERMINOLOGY_DISCOVERY_PROMPT;
   const res = await window.api.setTerminologyDiscoveryPrompt(value);
   if (!res.ok) {
-    terminologyPromptMsg.textContent = res.error || '恢复默认提示词失败';
+    terminologyPromptMsg.textContent = uiText(res.error || '恢复默认提示词失败');
     return;
   }
   state.settings.terminologyDiscoveryPrompt = res.prompt;
+  state.settings.terminologyDiscoveryPromptSource = res.source;
   syncTerminologyPromptUI();
-  toast('术语识别提示词已恢复默认');
+  toast(uiText('术语识别提示词已恢复默认'));
 });
 
 terminologyDiscover.addEventListener('click', () => {
@@ -3601,9 +3862,9 @@ function resetTerminologyForm() {
   termNote.value = '';
   termMsg.textContent = '';
   termMsg.className = 'set-msg';
-  termSave.textContent = '添加术语';
+  termSave.textContent = uiText('添加术语');
   termCancel.hidden = true;
-  if (terminologyEditorTitle) terminologyEditorTitle.textContent = '新增术语';
+  if (terminologyEditorTitle) terminologyEditorTitle.textContent = uiText('新增术语');
 }
 
 function renderTerminologyPending() {
@@ -3615,7 +3876,7 @@ function renderTerminologyPending() {
 
   terminologyPending.hidden = !suggestions.length;
   terminologyPendingList.innerHTML = '';
-  if (terminologyPendingCount) terminologyPendingCount.textContent = suggestions.length ? `${suggestions.length} 项` : '';
+  if (terminologyPendingCount) terminologyPendingCount.textContent = suggestions.length ? uiText(`${suggestions.length} 项`) : '';
   if (suggestions.length) {
     appendClosureSuggestions(terminologyPendingList, { needs_confirmation: suggestions }, false, false);
   }
@@ -3636,17 +3897,17 @@ function renderTerminologyUI() {
     ].filter(Boolean).join(' '), query))
     : allTerms;
   if (terminologyListCount) {
-    terminologyListCount.textContent = query
+    terminologyListCount.textContent = uiText(query
       ? `匹配 ${terms.length} / ${allTerms.length} 组术语`
-      : `${allTerms.length} 组术语`;
+      : `${allTerms.length} 组术语`);
   }
   if (terminologySearchClear) terminologySearchClear.hidden = !query;
   if (!allTerms.length) {
-    terminologyList.appendChild(wbNode('div', 'terminology-empty', '还没有可用的术语对照；首次识别完成后会显示在这里，也可以手动添加。'));
+    terminologyList.appendChild(wbNode('div', 'terminology-empty', uiText('还没有可用的术语对照；首次识别完成后会显示在这里，也可以手动添加。')));
     return;
   }
   if (!terms.length) {
-    terminologyList.appendChild(wbNode('div', 'terminology-empty', `没有找到与“${query}”匹配的术语；可以直接在上方新增术语。`));
+    terminologyList.appendChild(wbNode('div', 'terminology-empty', uiText(`没有找到与“${query}”匹配的术语；可以直接在上方新增术语。`)));
     return;
   }
   for (const term of terms) {
@@ -3659,12 +3920,12 @@ function renderTerminologyUI() {
     name.textContent = term.canonicalName;
     const aliases = document.createElement('div');
     aliases.className = 'terminology-aliases';
-    aliases.textContent = term.aliases?.length ? `常用说法：${term.aliases.join('、')}` : '尚未添加常用说法';
+    aliases.textContent = uiText(term.aliases?.length ? `常用说法：${term.aliases.join('、')}` : '尚未添加常用说法');
     copy.append(name, aliases);
     if (term.scope || term.note) {
       const note = document.createElement('div');
       note.className = 'terminology-note';
-      note.textContent = [term.scope ? `范围：${term.scope}` : '', term.note || ''].filter(Boolean).join(' · ');
+      note.textContent = uiText([term.scope ? `范围：${term.scope}` : '', term.note || ''].filter(Boolean).join(' · '));
       copy.appendChild(note);
     }
     const actions = document.createElement('div');
@@ -3672,23 +3933,23 @@ function renderTerminologyUI() {
     const edit = document.createElement('button');
     edit.type = 'button';
     edit.className = 'link-btn';
-    edit.textContent = '编辑';
+    edit.textContent = uiText('编辑');
     edit.addEventListener('click', () => {
       editingTerminologyId = term.id;
       termCanonical.value = term.canonicalName;
       termScope.value = term.scope || '';
       termAliases.value = (term.aliases || []).join('\n');
       termNote.value = term.note || '';
-      termSave.textContent = '保存修改';
+      termSave.textContent = uiText('保存修改');
       termCancel.hidden = false;
       termMsg.textContent = '';
-      if (terminologyEditorTitle) terminologyEditorTitle.textContent = '编辑术语';
+      if (terminologyEditorTitle) terminologyEditorTitle.textContent = uiText('编辑术语');
       termCanonical.focus();
     });
     const remove = document.createElement('button');
     remove.type = 'button';
     remove.className = 'link-btn danger-link';
-    remove.textContent = '删除';
+    remove.textContent = uiText('删除');
     remove.addEventListener('click', async () => {
       const confirmed = await askConfirmation(`删除术语“${term.canonicalName}”？之后 AI 不再优先使用这组规范。`, {
         title: '删除术语',
@@ -3697,13 +3958,13 @@ function renderTerminologyUI() {
       });
       if (!confirmed) return;
       const res = await window.api.setTerminology(allTerms.filter(item => item.id !== term.id));
-      if (!res.ok) { termMsg.textContent = res.error || '术语删除失败'; return; }
+      if (!res.ok) { termMsg.textContent = uiText(res.error || '术语删除失败'); return; }
       state.settings.terminology = res.terminology;
       if (state.settings.terminologyDiscovery) state.settings.terminologyDiscovery.termCount = state.settings.terminology.length;
       if (editingTerminologyId === term.id) resetTerminologyForm();
       renderTerminologyUI();
-      await loadWorkbenchClosure();
-      toast('术语已删除');
+      await loadWorkbenchClosure({ autoReason: 'configuration-change' });
+      toast(uiText('术语已删除'));
     });
     actions.append(edit, remove);
     row.append(copy, actions);
@@ -3725,8 +3986,8 @@ function parseTerminologyAliases(value) {
 termSave.addEventListener('click', async () => {
   const canonicalName = termCanonical.value.trim();
   const aliases = parseTerminologyAliases(termAliases.value);
-  if (!canonicalName) { termMsg.textContent = '请填写规范输出名称'; termCanonical.focus(); return; }
-  if (!aliases.length) { termMsg.textContent = '请至少填写一个常用说法'; termAliases.focus(); return; }
+  if (!canonicalName) { termMsg.textContent = uiText('请填写规范输出名称'); termCanonical.focus(); return; }
+  if (!aliases.length) { termMsg.textContent = uiText('请至少填写一个常用说法'); termAliases.focus(); return; }
   const current = Array.isArray(state.settings?.terminology) ? state.settings.terminology : [];
   const draft = {
     id: editingTerminologyId || `term-${Date.now()}`,
@@ -3740,13 +4001,13 @@ termSave.addEventListener('click', async () => {
     : [draft, ...current];
   const wasEditing = !!editingTerminologyId;
   const res = await window.api.setTerminology(next);
-  if (!res.ok) { termMsg.textContent = res.error || '术语保存失败'; return; }
+  if (!res.ok) { termMsg.textContent = uiText(res.error || '术语保存失败'); return; }
   state.settings.terminology = res.terminology;
   if (state.settings.terminologyDiscovery) state.settings.terminologyDiscovery.termCount = state.settings.terminology.length;
   resetTerminologyForm();
   renderTerminologyUI();
-  await loadWorkbenchClosure();
-  toast(wasEditing ? '术语已更新' : '术语已添加');
+  await loadWorkbenchClosure({ autoReason: 'configuration-change' });
+  toast(uiText(wasEditing ? '术语已更新' : '术语已添加'));
 });
 
 termCancel.addEventListener('click', resetTerminologyForm);
@@ -3765,15 +4026,15 @@ function normKey(e) {
 function exitRecording(ok) {
   state.recording = false;
   hkDisplay.classList.remove('recording');
-  hkDisplay.textContent = (state.settings && state.settings.hotkey) || '未设置';
+  hkDisplay.textContent = (state.settings && state.settings.hotkey) || uiText('未设置');
   if (!ok) hkMsg.textContent = '';
 }
 
 $('#hk-record').addEventListener('click', () => {
   state.recording = true;
   hkDisplay.classList.add('recording');
-  hkDisplay.textContent = '请按下组合键…';
-  hkMsg.textContent = 'Esc 取消';
+  hkDisplay.textContent = uiText('请按下组合键…');
+  hkMsg.textContent = uiText('Esc 取消');
 });
 
 $('#hk-reset').addEventListener('click', async () => {
@@ -3784,7 +4045,7 @@ $('#hk-reset').addEventListener('click', async () => {
     exitRecording(true);
     hkMsg.textContent = '';
     $('#hotkey-tip').textContent = res.settings.hotkey;
-    toast('已恢复默认快捷键');
+    toast(uiText('已恢复默认快捷键'));
   } else {
     hkMsg.textContent = res.error;
   }
@@ -3800,9 +4061,9 @@ document.addEventListener('keydown', async e => {
     if (e.ctrlKey) mods.push('Ctrl');
     if (e.altKey) mods.push('Alt');
     if (e.shiftKey) mods.push('Shift');
-    if (!mods.length && !e.metaKey) { hkMsg.textContent = '需包含 Ctrl / Alt / Shift 中至少一个修饰键'; return; }
+    if (!mods.length && !e.metaKey) { hkMsg.textContent = uiText('需包含 Ctrl / Alt / Shift 中至少一个修饰键'); return; }
     const key = normKey(e);
-    if (!key) { hkMsg.textContent = '请再按一个字母 / 数字 / F1-F12 键'; return; }
+    if (!key) { hkMsg.textContent = uiText('请再按一个字母 / 数字 / F1-F12 键'); return; }
     const accel = [...mods, key].join('+');
     const res = await window.api.setSettings({ hotkey: accel });
     if (res.ok) {
@@ -3810,10 +4071,10 @@ document.addEventListener('keydown', async e => {
       exitRecording(true);
       hkMsg.textContent = '';
       $('#hotkey-tip').textContent = res.settings.hotkey;
-      toast(`快捷键已更新为 ${res.settings.hotkey}`);
+      toast(uiText(`快捷键已更新为 ${res.settings.hotkey}`));
     } else {
-      hkDisplay.textContent = '请按下组合键…';
-      hkMsg.textContent = `${res.error}，请重试`;
+      hkDisplay.textContent = uiText('请按下组合键…');
+      hkMsg.textContent = uiText(`${res.error}，请重试`);
     }
     return;
   }
@@ -3908,7 +4169,7 @@ document.querySelectorAll('textarea[data-resizable="true"]').forEach(installText
 
 customSelect?.enhanceAll(document);
 
-async function refresh() {
+async function refresh({ autoReason = 'source-change', schedule = true } = {}) {
   state.entries = await window.api.list();
   renderTodayPanel();
   renderStats();
@@ -3917,13 +4178,13 @@ async function refresh() {
   renderList();
   renderWeeklyWorkbench();
   if (state.settings?.ai?.configured) {
-    loadWorkbenchClosure();
+    loadWorkbenchClosure({ autoReason, schedule });
   }
   renderExportPreview();
   if (typeof updateListThumb === 'function') updateListThumb();
 }
 
-(function init() {
+(async function init() {
   window.api.getTheme().then(applyTheme);
   syncComposerTime();
   defaultRange();
@@ -3931,7 +4192,9 @@ async function refresh() {
   dateFilterPopover.append(rangeChip);
   renderRangeChip();
   window.api.onEntriesChanged(refresh);
-  loadSettingsUI();
-  refresh();
+  syncWeeklyWorkbenchViewport();
+  // 先加载设置和外置语言包，再做首轮页面渲染，避免英文/日文界面首帧短暂出现中文。
+  await loadSettingsUI();
+  await refresh({ autoReason: 'startup', schedule: false });
   composerText.focus();
 })();

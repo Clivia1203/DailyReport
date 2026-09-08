@@ -54,7 +54,7 @@
               <div class="toolbar-group date-filter-group" id="date-filter-group">
                 <button class="btn small toolbar-control date-filter-toggle" id="date-filter-toggle" type="button" aria-haspopup="true" aria-expanded="false">
                   <span id="date-filter-label">日期筛选</span>
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg>
+                  <span class="custom-select-chevron" aria-hidden="true"></span>
                 </button>
                 <div class="filter-popover date-filter-popover" id="date-filter-popover" hidden>
                   <div class="filter-popover-head">
@@ -87,8 +87,8 @@
               <button class="btn small primary" id="btn-composer" title="新记录（Ctrl+N）">记录</button>
               <button class="btn small ai-report-btn" id="btn-report" hidden>AI 总结</button>
               <div class="toolbar-group more-group" id="more-group">
-                <button class="btn small" id="btn-more" type="button" aria-haspopup="true" aria-expanded="false">更多
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg>
+                <button class="btn small" id="btn-more" type="button" aria-haspopup="true" aria-expanded="false"><span class="more-label">更多</span>
+                  <span class="custom-select-chevron" aria-hidden="true"></span>
                 </button>
                 <div class="more-menu" id="more-menu" hidden>
                   <button class="menu-item" id="btn-export-open" type="button">导出</button>
@@ -160,10 +160,8 @@
 
         <section class="card report-thinking" id="report-thinking" hidden>
           <div class="report-thinking-head">
-            <div>
-              <span class="report-thinking-title">AI 工作过程</span>
-              <span class="report-thinking-status" id="report-thinking-status">正在连接…</span>
-            </div>
+            <span class="report-thinking-title">AI 工作过程</span>
+            <span class="report-thinking-status" id="report-thinking-status">正在连接…</span>
             <button class="link-btn" id="report-thinking-toggle">查看详细过程</button>
           </div>
           <div class="report-thinking-note" id="report-thinking-note">实时状态代表实际生成进度；详细过程仅用于查看，不会写入总结或导出文件。</div>
@@ -250,8 +248,19 @@
         <div class="card set-group">
           <div class="set-title">外观</div>
           <div class="set-row">
-            <div class="set-info">界面主题
-              <div class="set-sub">跟随系统时随 Windows 深浅色自动切换</div>
+            <div class="set-info">主题配色
+              <div class="set-sub">选择应用强调色和背景风格；不改变应用图标。</div>
+            </div>
+            <select id="theme-family-select" class="theme-family-select" aria-label="主题配色">
+              <option value="gold">向阳金</option>
+              <option value="sky">晴空蓝</option>
+              <option value="mint">薄荷林</option>
+              <option value="violet">暮紫</option>
+            </select>
+          </div>
+          <div class="set-row">
+            <div class="set-info">显示模式
+              <div class="set-sub">选择亮色、暗色或跟随系统</div>
             </div>
             <div class="segmented" id="theme-seg">
               <button data-v="auto">跟随系统</button>
@@ -608,6 +617,7 @@
   <script src="../lib/text-search.js"></script>
   <script src="../lib/thinking-snapshot.js"></script>
   <script src="../lib/locale.js"></script>
+  <script src="closure-autorefresh.js"></script>
   <script src="report-lifecycle.js"></script>
   <script src="thinking-state.js"></script>
   <script src="report-generation.js"></script>

@@ -2,15 +2,28 @@ const input = document.getElementById('quick-input');
 const status = document.getElementById('quick-status');
 const dt = document.getElementById('quick-dt');
 
+const uiText = value => window.DRI18n?.t ? window.DRI18n.t(String(value ?? '')) : String(value ?? '');
+
 /* 主题跟随主窗口（主进程下发） */
-const applyTheme = t => { document.documentElement.dataset.theme = t; };
+const applyTheme = t => {
+  const fallbackFamily = document.documentElement.dataset.themeFamily || 'gold';
+  const fallbackMode = document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light';
+  const next = t && typeof t === 'object'
+    ? {
+      family: ['gold', 'sky', 'mint', 'violet'].includes(t.family) ? t.family : fallbackFamily,
+      mode: ['light', 'dark'].includes(t.mode) ? t.mode : fallbackMode
+    }
+    : { family: fallbackFamily, mode: t === 'dark' ? 'dark' : 'light' };
+  document.documentElement.dataset.theme = next.mode;
+  document.documentElement.dataset.themeFamily = next.family;
+};
 window.api.getTheme().then(applyTheme);
 window.api.onThemeChanged(applyTheme);
 window.api.onLocaleChanged?.(locale => {
-  if (!locale || !window.DRI18n || window.DRI18n.locale === locale) return;
+  if (!locale || !window.DRI18n) return;
   window.DRI18n.setLocale(locale).catch(() => {
     // 语言包读取失败时保留当前快速记录条，不中断记录输入。
-  });
+  }).finally(renderNow);
 });
 
 const pad = n => String(n).padStart(2, '0');
@@ -18,9 +31,10 @@ const pad = n => String(n).padStart(2, '0');
 function renderNow() {
   const d = new Date();
   const weekdays = '日一二三四五六';
-  dt.textContent =
+  dt.textContent = uiText(
     `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}` +
-    ` 星期${weekdays[d.getDay()]} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+    ` 星期${weekdays[d.getDay()]}`
+  ) + ` ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
 let hiding = false;
