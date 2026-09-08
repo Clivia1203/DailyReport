@@ -177,3 +177,9 @@ test('小窗口将问候和统计压缩为有层次的工作概览栏，极窄�
   assert.doesNotMatch(cssSource, /#view-main \.main-titlebar > \.today-panel::(?:before|after)/);
   assert.doesNotMatch(cssSource, /#view-main #stats-strip \.stat-card::after/);
 });
+
+test('宽屏统计数字相对整张卡片居中，不受语言标签宽度影响', () => {
+  assert.match(cssSource, /@media \(min-width:\s*1200px\)[\s\S]*\.stat-card\s*\{[\s\S]*display:\s*grid;[\s\S]*grid-template-columns:\s*minmax\(0, 1fr\) auto minmax\(0, 1fr\);/);
+  assert.match(cssSource, /@media \(min-width:\s*1200px\)[\s\S]*\.stat-value\s*\{[\s\S]*grid-column:\s*2;/);
+  assert.match(cssSource, /@media \(min-width:\s*1200px\)[\s\S]*\.stat-label\s*\{[\s\S]*grid-column:\s*3;[\s\S]*justify-self:\s*end;/);
+});

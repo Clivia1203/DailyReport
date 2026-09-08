@@ -9,7 +9,7 @@
   } catch (e) { /* 忽略 */ }
   if (typeof t === 'string' && t.includes('|')) {
     var parts = t.split('|');
-    if (['gold', 'sky', 'mint', 'violet'].includes(parts[0])) family = parts[0];
+    if (['gold', 'sky', 'mint', 'violet', 'navy', 'graphite', 'pine', 'amber', 'indigo', 'steel'].includes(parts[0])) family = parts[0];
     if (parts[1] === 'light' || parts[1] === 'dark') mode = parts[1];
   } else if (t === 'light' || t === 'dark') {
     mode = t;

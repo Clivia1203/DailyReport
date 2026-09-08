@@ -74,6 +74,11 @@ test('设置页底部展示应用关于信息', () => {
   assert.match(preloadSource, /getAppInfo:\s*\(\)\s*=>\s*ipcRenderer\.invoke\('app:info'/);
 });
 
+test('顶栏使用应用图标作为品牌标识', () => {
+  assert.match(htmlSource, /<img class="brand-icon" src="\.\.\/assets\/icon\.png"[^>]*draggable="false"/);
+  assert.match(cssSource, /\.brand-icon\s*\{[\s\S]*width:\s*20px[\s\S]*height:\s*20px[\s\S]*-webkit-user-drag:\s*none/);
+});
+
 test('所有原生下拉框统一由应用内自定义菜单呈现', () => {
   assert.equal((htmlSource.match(/<select\b/g) || []).length, 13);
   assert.match(htmlSource, /custom-select\.js[\s\S]*app\.js/);
@@ -161,10 +166,10 @@ test('软件启动时自动检查已保存的 AI 配置，且同一会话不会�
   assert.doesNotMatch(appSource, /AI 已配置，待测试/);
 });
 
-test('主题配色覆盖四套主题家族，并保留亮暗模式切换', () => {
+test('主题配色覆盖十套主题家族，并保留亮暗模式切换', () => {
   assert.match(htmlSource, /<select id="theme-family-select" class="theme-family-select"/);
   assert.doesNotMatch(htmlSource, /theme-family-seg/);
-  for (const family of ['gold', 'sky', 'mint', 'violet']) {
+  for (const family of ['gold', 'sky', 'mint', 'violet', 'navy', 'graphite', 'pine', 'amber', 'indigo', 'steel']) {
     assert.match(htmlSource, new RegExp(`<option value="${family}">`));
     assert.match(cssSource, new RegExp(`data-theme-family="${family}"`));
   }
@@ -176,7 +181,7 @@ test('主题配色覆盖四套主题家族，并保留亮暗模式切换', () =>
   assert.match(appSource, /setSettings\(\{ themeFamily: nextFamily \}\)/);
   assert.match(appSource, /if \(res\.ok && state\.settings\) state\.settings\.themeFamily = nextFamily;\s*syncThemeFamilySelect\(\);/);
   assert.match(cssSource, /.theme-family-select\s*\{[^}]*width:\s*148px/);
-  assert.match(cssSource, /\[data-theme="dark"\]\[data-theme-family="violet"\]/);
+  assert.match(cssSource, /\[data-theme="dark"\]\[data-theme-family="steel"\]/);
   assert.match(cssSource, /--scrollbar-thumb:[^;]+/);
   assert.match(cssSource, /::-webkit-scrollbar-thumb\s*\{[^}]*background:\s*var\(--scrollbar-thumb\)/);
 });
@@ -187,10 +192,22 @@ test('所有主题的控件表面、边框和辅助文字保持可辨识对比�
     ['sky-light', '[data-theme-family="sky"]'],
     ['mint-light', '[data-theme-family="mint"]'],
     ['violet-light', '[data-theme-family="violet"]'],
+    ['navy-light', '[data-theme-family="navy"]'],
+    ['graphite-light', '[data-theme-family="graphite"]'],
+    ['pine-light', '[data-theme-family="pine"]'],
+    ['amber-light', '[data-theme-family="amber"]'],
+    ['indigo-light', '[data-theme-family="indigo"]'],
+    ['steel-light', '[data-theme-family="steel"]'],
     ['gold-dark', '[data-theme="dark"][data-theme-family="gold"]'],
     ['sky-dark', '[data-theme="dark"][data-theme-family="sky"]'],
     ['mint-dark', '[data-theme="dark"][data-theme-family="mint"]'],
-    ['violet-dark', '[data-theme="dark"][data-theme-family="violet"]']
+    ['violet-dark', '[data-theme="dark"][data-theme-family="violet"]'],
+    ['navy-dark', '[data-theme="dark"][data-theme-family="navy"]'],
+    ['graphite-dark', '[data-theme="dark"][data-theme-family="graphite"]'],
+    ['pine-dark', '[data-theme="dark"][data-theme-family="pine"]'],
+    ['amber-dark', '[data-theme="dark"][data-theme-family="amber"]'],
+    ['indigo-dark', '[data-theme="dark"][data-theme-family="indigo"]'],
+    ['steel-dark', '[data-theme="dark"][data-theme-family="steel"]']
   ];
 
   for (const [name, selector] of themes) {

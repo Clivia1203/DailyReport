@@ -99,7 +99,9 @@ test('主题家族和亮暗模式同步到主窗口与快速记录条', () => {
   const styleSource = fs.readFileSync(path.join(__dirname, 'renderer', 'style.css'), 'utf8');
   const quickStyleSource = fs.readFileSync(path.join(__dirname, 'renderer', 'quick.css'), 'utf8');
 
-  assert.match(mainSource, /const THEME_FAMILIES = \['gold', 'sky', 'mint', 'violet'\]/);
+  for (const family of ['gold', 'sky', 'mint', 'violet', 'navy', 'graphite', 'pine', 'amber', 'indigo', 'steel']) {
+    assert.match(mainSource, new RegExp(`['"]${family}['"]`));
+  }
   assert.match(mainSource, /themeFamily/);
   assert.match(mainSource, /webContents\.send\('theme:changed', t\)/);
   assert.match(preloadSource, /getTheme:\s*\(\)\s*=>\s*ipcRenderer\.invoke\('theme:get'/);

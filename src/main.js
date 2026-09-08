@@ -176,7 +176,10 @@ function readInstallerLocale() {
   }
 }
 
-const THEME_FAMILIES = ['gold', 'sky', 'mint', 'violet'];
+const THEME_FAMILIES = [
+  'gold', 'sky', 'mint', 'violet',
+  'navy', 'graphite', 'pine', 'amber', 'indigo', 'steel'
+];
 
 const THEME_WINDOW_COLORS = {
   gold: {
@@ -194,13 +197,37 @@ const THEME_WINDOW_COLORS = {
   violet: {
     light: { color: '#faf7ff', symbolColor: '#27223a' },
     dark: { color: '#171424', symbolColor: '#eae8f4' }
+  },
+  navy: {
+    light: { color: '#f3f6fa', symbolColor: '#1f2c3a' },
+    dark: { color: '#111923', symbolColor: '#e6edf3' }
+  },
+  graphite: {
+    light: { color: '#f2f6f6', symbolColor: '#213438' },
+    dark: { color: '#121b1d', symbolColor: '#e5eeee' }
+  },
+  pine: {
+    light: { color: '#f2f6f3', symbolColor: '#20352d' },
+    dark: { color: '#111c17', symbolColor: '#e5eee8' }
+  },
+  amber: {
+    light: { color: '#f5f5f2', symbolColor: '#2e3234' },
+    dark: { color: '#1d1f20', symbolColor: '#ecedeb' }
+  },
+  indigo: {
+    light: { color: '#f4f5f9', symbolColor: '#282e3e' },
+    dark: { color: '#161a25', symbolColor: '#e8ebf4' }
+  },
+  steel: {
+    light: { color: '#f3f5f7', symbolColor: '#26323c' },
+    dark: { color: '#151b20', symbolColor: '#e6edf2' }
   }
 };
 
 const DEFAULT_SETTINGS = {
   locale: DEFAULT_LOCALE,
   theme: 'auto',          // 'auto' | 'light' | 'dark'
-  themeFamily: 'gold',    // 'gold' | 'sky' | 'mint' | 'violet'
+  themeFamily: 'gold',    // gold/sky/mint/violet + navy/graphite/pine/amber/indigo/steel
   hotkey: DEFAULT_HOTKEY, // 唤起快速记录条的全局快捷键
   openAtLogin: false,     // 开机自启（写入系统启动项，默认关闭）
   silentStart: false,     // 静默启动：开机后仅驻留托盘，不显示主窗口

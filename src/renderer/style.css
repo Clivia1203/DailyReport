@@ -125,6 +125,186 @@
   --scrollbar-thumb: #a89bd8;
 }
 
+[data-theme-family="navy"] {
+  --bg: #f3f6fa;
+  --card: #ffffff;
+  --border: #bccbd9;
+  --border-strong: #8fa5bc;
+  --text: #1f2c3a;
+  --text-2: #536577;
+  --text-3: #738496;
+  --accent: #385c82;
+  --accent-hover: #294967;
+  --accent-text: #ffffff;
+  --accent-soft: #e2eaf2;
+  --danger: #a4474e;
+  --danger-soft: #f7e4e4;
+  --danger-text: #ffffff;
+  --input-bg: #e3ebf2;
+  --success: #1d6e5a;
+  --success-soft: #ddefe9;
+  --warning: #8a5a13;
+  --warning-soft: #f6efd9;
+  --heatmap-1: #dce7f0;
+  --heatmap-2: #b8cbdb;
+  --heatmap-3: #86a7c1;
+  --heatmap-4: #4f789d;
+  --overlay: rgb(31 44 58 / 35%);
+  --shadow: 0 12px 30px rgb(48 74 100 / 12%);
+  --shadow-float: 0 16px 48px rgb(48 74 100 / 22%);
+  --scrollbar-thumb: #8fa5bc;
+}
+
+[data-theme-family="graphite"] {
+  --bg: #f2f6f6;
+  --card: #ffffff;
+  --border: #b3c8ca;
+  --border-strong: #8eacad;
+  --text: #213438;
+  --text-2: #536c70;
+  --text-3: #74898c;
+  --accent: #356568;
+  --accent-hover: #284f52;
+  --accent-text: #ffffff;
+  --accent-soft: #ddebeb;
+  --danger: #a34850;
+  --danger-soft: #f7e4e5;
+  --danger-text: #ffffff;
+  --input-bg: #e2ecec;
+  --success: #2a6b56;
+  --success-soft: #ddeee8;
+  --warning: #8a5f1e;
+  --warning-soft: #f5edd8;
+  --heatmap-1: #dceceb;
+  --heatmap-2: #b8d6d3;
+  --heatmap-3: #85b6b2;
+  --heatmap-4: #4f8583;
+  --overlay: rgb(33 52 56 / 35%);
+  --shadow: 0 12px 30px rgb(38 83 86 / 12%);
+  --shadow-float: 0 16px 48px rgb(38 83 86 / 22%);
+  --scrollbar-thumb: #8eacad;
+}
+
+[data-theme-family="pine"] {
+  --bg: #f2f6f3;
+  --card: #ffffff;
+  --border: #b9cec2;
+  --border-strong: #8faf9c;
+  --text: #20352d;
+  --text-2: #557066;
+  --text-3: #788e84;
+  --accent: #356a53;
+  --accent-hover: #28523f;
+  --accent-text: #ffffff;
+  --accent-soft: #dfeee5;
+  --danger: #a54850;
+  --danger-soft: #f7e4e5;
+  --danger-text: #ffffff;
+  --input-bg: #e2eee6;
+  --success: #2e7157;
+  --success-soft: #deeee6;
+  --warning: #8a5c13;
+  --warning-soft: #f6eed8;
+  --heatmap-1: #dcede3;
+  --heatmap-2: #b9d6c4;
+  --heatmap-3: #8ab89f;
+  --heatmap-4: #4f896c;
+  --overlay: rgb(32 53 45 / 35%);
+  --shadow: 0 12px 30px rgb(43 91 70 / 12%);
+  --shadow-float: 0 16px 48px rgb(43 91 70 / 22%);
+  --scrollbar-thumb: #8faf9c;
+}
+
+[data-theme-family="amber"] {
+  --bg: #f5f5f2;
+  --card: #ffffff;
+  --border: #c3c7c1;
+  --border-strong: #9fa59c;
+  --text: #2e3234;
+  --text-2: #566166;
+  --text-3: #81898a;
+  --accent: #87612e;
+  --accent-hover: #6e4d23;
+  --accent-text: #fffaf2;
+  --accent-soft: #f1e7d6;
+  --danger: #a5484e;
+  --danger-soft: #f7e4e4;
+  --danger-text: #ffffff;
+  --input-bg: #e6e8e4;
+  --success: #2c6e59;
+  --success-soft: #deeee7;
+  --warning: #8a5d1a;
+  --warning-soft: #f6ebd4;
+  --heatmap-1: #e8ddcb;
+  --heatmap-2: #d5c19f;
+  --heatmap-3: #b79a65;
+  --heatmap-4: #8c6a34;
+  --overlay: rgb(46 50 52 / 35%);
+  --shadow: 0 12px 30px rgb(78 70 50 / 12%);
+  --shadow-float: 0 16px 48px rgb(78 70 50 / 22%);
+  --scrollbar-thumb: #9fa59c;
+}
+
+[data-theme-family="indigo"] {
+  --bg: #f4f5f9;
+  --card: #ffffff;
+  --border: #c2c9d8;
+  --border-strong: #9ba6be;
+  --text: #282e3e;
+  --text-2: #5b6478;
+  --text-3: #7e879a;
+  --accent: #596a94;
+  --accent-hover: #47577d;
+  --accent-text: #ffffff;
+  --accent-soft: #e4e8f2;
+  --danger: #a64a54;
+  --danger-soft: #f7e4e6;
+  --danger-text: #ffffff;
+  --input-bg: #e7eaf2;
+  --success: #2e6e59;
+  --success-soft: #dfeee7;
+  --warning: #895c17;
+  --warning-soft: #f6ecd7;
+  --heatmap-1: #e1e5f0;
+  --heatmap-2: #c3ccdf;
+  --heatmap-3: #9caac6;
+  --heatmap-4: #6477a2;
+  --overlay: rgb(40 46 62 / 35%);
+  --shadow: 0 12px 30px rgb(67 80 125 / 12%);
+  --shadow-float: 0 16px 48px rgb(67 80 125 / 22%);
+  --scrollbar-thumb: #9ba6be;
+}
+
+[data-theme-family="steel"] {
+  --bg: #f3f5f7;
+  --card: #ffffff;
+  --border: #bec9d1;
+  --border-strong: #94a3ae;
+  --text: #26323c;
+  --text-2: #586873;
+  --text-3: #7b8992;
+  --accent: #506b7d;
+  --accent-hover: #3e5665;
+  --accent-text: #ffffff;
+  --accent-soft: #e2eaf0;
+  --danger: #a44851;
+  --danger-soft: #f7e4e5;
+  --danger-text: #ffffff;
+  --input-bg: #e5edf1;
+  --success: #2d6c58;
+  --success-soft: #deeee7;
+  --warning: #875a15;
+  --warning-soft: #f5ebd5;
+  --heatmap-1: #dee8ed;
+  --heatmap-2: #b9cbd4;
+  --heatmap-3: #8caab8;
+  --heatmap-4: #5b7e91;
+  --overlay: rgb(38 50 60 / 35%);
+  --shadow: 0 12px 30px rgb(66 88 105 / 12%);
+  --shadow-float: 0 16px 48px rgb(66 88 105 / 22%);
+  --scrollbar-thumb: #94a3ae;
+}
+
 [data-theme="dark"][data-theme-family="gold"] {
   --bg: #19150d;
   --card: #262016;
@@ -245,6 +425,186 @@
   --scrollbar-thumb: #7969a5;
 }
 
+[data-theme="dark"][data-theme-family="navy"] {
+  --bg: #111923;
+  --card: #1b2733;
+  --border: #425668;
+  --border-strong: #68829a;
+  --text: #e6edf3;
+  --text-2: #a8b8c6;
+  --text-3: #7d90a2;
+  --accent: #7fa6c7;
+  --accent-hover: #9bb9d5;
+  --accent-text: #13202b;
+  --accent-soft: #263a4d;
+  --danger: #dc858d;
+  --danger-soft: #4a2930;
+  --danger-text: #28171a;
+  --input-bg: #223342;
+  --success: #63b39a;
+  --success-soft: #1e3d34;
+  --warning: #d4a45a;
+  --warning-soft: #433721;
+  --heatmap-1: #213444;
+  --heatmap-2: #2e4e68;
+  --heatmap-3: #4a7596;
+  --heatmap-4: #7fa6c7;
+  --overlay: rgb(0 0 0 / 45%);
+  --shadow: 0 12px 30px rgb(0 0 0 / 30%);
+  --shadow-float: 0 16px 48px rgb(0 0 0 / 44%);
+  --scrollbar-thumb: #68829a;
+}
+
+[data-theme="dark"][data-theme-family="graphite"] {
+  --bg: #121b1d;
+  --card: #1c2b2d;
+  --border: #446567;
+  --border-strong: #668f91;
+  --text: #e5eeee;
+  --text-2: #a8b9ba;
+  --text-3: #7f9698;
+  --accent: #72a8a8;
+  --accent-hover: #8ec0be;
+  --accent-text: #132526;
+  --accent-soft: #254041;
+  --danger: #dc858e;
+  --danger-soft: #4a2a31;
+  --danger-text: #28171b;
+  --input-bg: #223739;
+  --success: #6bb79a;
+  --success-soft: #1f4035;
+  --warning: #d4a65c;
+  --warning-soft: #493a22;
+  --heatmap-1: #213b3c;
+  --heatmap-2: #2e5557;
+  --heatmap-3: #4c7f80;
+  --heatmap-4: #72a8a8;
+  --overlay: rgb(0 0 0 / 45%);
+  --shadow: 0 12px 30px rgb(0 0 0 / 30%);
+  --shadow-float: 0 16px 48px rgb(0 0 0 / 44%);
+  --scrollbar-thumb: #668f91;
+}
+
+[data-theme="dark"][data-theme-family="pine"] {
+  --bg: #111c17;
+  --card: #1b2b22;
+  --border: #456850;
+  --border-strong: #679279;
+  --text: #e5eee8;
+  --text-2: #a7b9ad;
+  --text-3: #7e9585;
+  --accent: #72a98b;
+  --accent-hover: #8bc3a1;
+  --accent-text: #13251b;
+  --accent-soft: #254335;
+  --danger: #dc858e;
+  --danger-soft: #4a2a31;
+  --danger-text: #28171b;
+  --input-bg: #22382b;
+  --success: #6cbc97;
+  --success-soft: #1f4032;
+  --warning: #d4a65e;
+  --warning-soft: #493a22;
+  --heatmap-1: #203a2c;
+  --heatmap-2: #2d5741;
+  --heatmap-3: #4e8465;
+  --heatmap-4: #72a98b;
+  --overlay: rgb(0 0 0 / 45%);
+  --shadow: 0 12px 30px rgb(0 0 0 / 30%);
+  --shadow-float: 0 16px 48px rgb(0 0 0 / 44%);
+  --scrollbar-thumb: #679279;
+}
+
+[data-theme="dark"][data-theme-family="amber"] {
+  --bg: #1d1f20;
+  --card: #292c2d;
+  --border: #555b5c;
+  --border-strong: #7f8783;
+  --text: #ecedeb;
+  --text-2: #b6bdbb;
+  --text-3: #8f9795;
+  --accent: #d0a05a;
+  --accent-hover: #e1b978;
+  --accent-text: #2c271e;
+  --accent-soft: #463a28;
+  --danger: #da8188;
+  --danger-soft: #492a2e;
+  --danger-text: #29171b;
+  --input-bg: #34393a;
+  --success: #62ad90;
+  --success-soft: #1f3d33;
+  --warning: #d3a65c;
+  --warning-soft: #493a22;
+  --heatmap-1: #3e372a;
+  --heatmap-2: #635338;
+  --heatmap-3: #917449;
+  --heatmap-4: #d0a05a;
+  --overlay: rgb(0 0 0 / 45%);
+  --shadow: 0 12px 30px rgb(0 0 0 / 30%);
+  --shadow-float: 0 16px 48px rgb(0 0 0 / 44%);
+  --scrollbar-thumb: #7f8783;
+}
+
+[data-theme="dark"][data-theme-family="indigo"] {
+  --bg: #161a25;
+  --card: #222837;
+  --border: #4b5772;
+  --border-strong: #707f9f;
+  --text: #e8ebf4;
+  --text-2: #aab3c5;
+  --text-3: #818ba4;
+  --accent: #9aafd8;
+  --accent-hover: #b1c1e2;
+  --accent-text: #20283a;
+  --accent-soft: #303a55;
+  --danger: #db828d;
+  --danger-soft: #4b2b35;
+  --danger-text: #28171d;
+  --input-bg: #293248;
+  --success: #68b79a;
+  --success-soft: #203f34;
+  --warning: #d4a75e;
+  --warning-soft: #4a3b22;
+  --heatmap-1: #2f3951;
+  --heatmap-2: #475573;
+  --heatmap-3: #667a9f;
+  --heatmap-4: #8798c3;
+  --overlay: rgb(0 0 0 / 45%);
+  --shadow: 0 12px 30px rgb(0 0 0 / 32%);
+  --shadow-float: 0 16px 48px rgb(0 0 0 / 46%);
+  --scrollbar-thumb: #707f9f;
+}
+
+[data-theme="dark"][data-theme-family="steel"] {
+  --bg: #151b20;
+  --card: #212a31;
+  --border: #465661;
+  --border-strong: #6f8491;
+  --text: #e6edf2;
+  --text-2: #aab7be;
+  --text-3: #7f909a;
+  --accent: #9abaca;
+  --accent-hover: #b2cbd6;
+  --accent-text: #16232b;
+  --accent-soft: #2a404d;
+  --danger: #db828b;
+  --danger-soft: #4a2a30;
+  --danger-text: #28171b;
+  --input-bg: #283942;
+  --success: #68b397;
+  --success-soft: #203f35;
+  --warning: #d3a45a;
+  --warning-soft: #4a3a21;
+  --heatmap-1: #2c3c46;
+  --heatmap-2: #3d5664;
+  --heatmap-3: #587c8c;
+  --heatmap-4: #7ea2b4;
+  --overlay: rgb(0 0 0 / 45%);
+  --shadow: 0 12px 30px rgb(0 0 0 / 30%);
+  --shadow-float: 0 16px 48px rgb(0 0 0 / 44%);
+  --scrollbar-thumb: #6f8491;
+}
+
 * { box-sizing: border-box; margin: 0; padding: 0; }
 
 html, body { height: 100%; }
@@ -322,10 +682,11 @@ textarea,
 
 .brand { display: flex; align-items: center; gap: 10px; }
 
-.brand-dot {
-  width: 10px; height: 10px; border-radius: 50%;
-  background: var(--accent);
-  box-shadow: 0 0 0 4px var(--accent-soft);
+.brand-icon {
+  width: 20px; height: 20px; flex: none;
+  object-fit: contain;
+  -webkit-user-select: none; user-select: none;
+  -webkit-user-drag: none;
 }
 
 .brand-name { font-size: 15px; font-weight: 650; letter-spacing: .01em; }
@@ -1519,11 +1880,13 @@ body.textarea-resizing * { cursor: nwse-resize !important; user-select: none !im
   /* 统计卡纵排：数值左、标签右 */
   .stats-strip { flex-direction: column; gap: 10px; }
   .stat-card {
-    display: flex; align-items: baseline; justify-content: space-between;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+    align-items: baseline;
     padding: 12px 16px;
   }
-  .stat-value { flex: 1 1 auto; font-size: 22px; text-align: center; }
-  .stat-label { flex: none; text-align: right; }
+  .stat-value { grid-column: 2; font-size: 22px; text-align: center; }
+  .stat-label { grid-column: 3; text-align: right; justify-self: end; }
 }
 
 /* ---------- 小窗口紧凑工作概览 ---------- */

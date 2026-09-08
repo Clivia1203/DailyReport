@@ -252,7 +252,7 @@ function normalizeThemeState(theme) {
   const cachedMode = document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light';
   if (theme && typeof theme === 'object') {
     return {
-      family: ['gold', 'sky', 'mint', 'violet'].includes(theme.family) ? theme.family : cachedFamily,
+      family: ['gold', 'sky', 'mint', 'violet', 'navy', 'graphite', 'pine', 'amber', 'indigo', 'steel'].includes(theme.family) ? theme.family : cachedFamily,
       mode: ['light', 'dark'].includes(theme.mode) ? theme.mode : cachedMode
     };
   }

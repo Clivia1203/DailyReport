@@ -44,7 +44,7 @@ const applyTheme = t => {
   const fallbackMode = document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light';
   const next = t && typeof t === 'object'
     ? {
-      family: ['gold', 'sky', 'mint', 'violet'].includes(t.family) ? t.family : fallbackFamily,
+      family: ['gold', 'sky', 'mint', 'violet', 'navy', 'graphite', 'pine', 'amber', 'indigo', 'steel'].includes(t.family) ? t.family : fallbackFamily,
       mode: ['light', 'dark'].includes(t.mode) ? t.mode : fallbackMode
     }
     : { family: fallbackFamily, mode: t === 'dark' ? 'dark' : 'light' };
