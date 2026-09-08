@@ -10,6 +10,8 @@ contextBridge.exposeInMainWorld('api', {
 
   // 设置
   loadLocale: locale => ipcRenderer.invoke('locale:load', locale),
+  getLocale: () => ipcRenderer.invoke('locale:get'),
+  getAppInfo: () => ipcRenderer.invoke('app:info'),
   getSettings: () => ipcRenderer.invoke('settings:get'),
   setSettings: patch => ipcRenderer.invoke('settings:set', patch),
   onLocaleChanged: cb => {
@@ -71,7 +73,20 @@ contextBridge.exposeInMainWorld('api', {
 
   // 快速记录条
   hideQuick: generation => ipcRenderer.send('quick:hide', generation),
-  setModalCover: on => ipcRenderer.send('window:modal-cover', on),
+  resizeQuick: height => ipcRenderer.send('quick:resize', height),
+
+  // 主窗口自绘标题栏
+  windowControls: {
+    minimize: () => ipcRenderer.send('window:minimize'),
+    toggleMaximize: () => ipcRenderer.send('window:toggle-maximize'),
+    close: () => ipcRenderer.send('window:close'),
+    getState: () => ipcRenderer.invoke('window:state:get'),
+    onStateChanged: cb => {
+      const h = (_e, state) => cb(state);
+      ipcRenderer.on('window:state', h);
+      return () => ipcRenderer.removeListener('window:state', h);
+    }
+  },
 
   // 主题（主进程统一管理，多窗口同步）
   getTheme: () => ipcRenderer.invoke('theme:get'),

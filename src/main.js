@@ -104,6 +104,8 @@ const DEFAULT_HOTKEY = 'Alt+Shift+D';
 // 窗口比可见的圆角输入条大一圈（上下 16/56px、左右 28px），
 // 多出的透明区域用来容纳 CSS 阴影，避免阴影被窗口边界切成方形
 const QUICK_SIZE = { width: 736, height: 176 };
+const QUICK_MAX_HEIGHT = 320;
+const QUICK_RESIZE_DURATION = 180;
 
 // 关闭 GPU 加速：透明小窗在部分机器上偶发 DWM 合成闪烁（弹出瞬间黑/白块）。
 // 本应用界面简单，软件渲染完全够用，以此换取透明窗口的显示稳定性。
@@ -123,6 +125,25 @@ let tray = null;
 let mainWindow = null;
 let quickWindow = null;
 let quitting = false;
+
+function isMainWindowEvent(event) {
+  return Boolean(mainWindow && !mainWindow.isDestroyed() && event.sender === mainWindow.webContents);
+}
+
+function mainWindowState() {
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    return { maximized: false, fullscreen: false };
+  }
+  return {
+    maximized: mainWindow.isMaximized(),
+    fullscreen: mainWindow.isFullScreen()
+  };
+}
+
+function broadcastMainWindowState() {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  mainWindow.webContents.send('window:state', mainWindowState());
+}
 
 /* ---------------- 主题：主进程统一持有，两个窗口同步 ---------------- */
 
@@ -147,20 +168,20 @@ const THEME_FAMILIES = ['gold', 'sky', 'mint', 'violet'];
 
 const THEME_WINDOW_COLORS = {
   gold: {
-    light: { color: '#fffaf1', symbolColor: '#2e2a22', cover: '#b9ae98' },
-    dark: { color: '#19150d', symbolColor: '#eee6d7', cover: '#4a4030' }
+    light: { color: '#fffaf1', symbolColor: '#2e2a22' },
+    dark: { color: '#19150d', symbolColor: '#eee6d7' }
   },
   sky: {
-    light: { color: '#f4f8ff', symbolColor: '#1b2538', cover: '#b3bdce' },
-    dark: { color: '#111827', symbolColor: '#e5e9f2', cover: '#303b50' }
+    light: { color: '#f4f8ff', symbolColor: '#1b2538' },
+    dark: { color: '#111827', symbolColor: '#e5e9f2' }
   },
   mint: {
-    light: { color: '#f2fbf7', symbolColor: '#17322b', cover: '#b2c1b9' },
-    dark: { color: '#0f1e1a', symbolColor: '#e3f0ea', cover: '#2f423a' }
+    light: { color: '#f2fbf7', symbolColor: '#17322b' },
+    dark: { color: '#0f1e1a', symbolColor: '#e3f0ea' }
   },
   violet: {
-    light: { color: '#faf7ff', symbolColor: '#27223a', cover: '#b8b0c5' },
-    dark: { color: '#171424', symbolColor: '#eae8f4', cover: '#3d354d' }
+    light: { color: '#faf7ff', symbolColor: '#27223a' },
+    dark: { color: '#171424', symbolColor: '#eae8f4' }
   }
 };
 
@@ -372,21 +393,9 @@ function themeWindowColors(theme = resolvedTheme()) {
     || THEME_WINDOW_COLORS.gold.light;
 }
 
-// 模态打开时把标题栏覆盖层染成遮罩色，原生控制按钮无法被 CSS 盖住，只能同色隐没
-let modalCoverActive = false;
-
-function chromeOverlayColors() {
-  const colors = themeWindowColors();
-  if (modalCoverActive) {
-    return { color: colors.cover, symbolColor: colors.cover };
-  }
-  return { color: colors.color, symbolColor: colors.symbolColor };
-}
-
-function applyChromeOverlay() {
+function applyThemeWindowBackground() {
   if (process.platform === 'win32' && mainWindow && !mainWindow.isDestroyed()) {
     try {
-      mainWindow.setTitleBarOverlay(chromeOverlayColors());
       mainWindow.setBackgroundColor(themeWindowColors().color);
     } catch { /* 窗口未就绪时忽略 */ }
   }
@@ -397,7 +406,7 @@ function broadcastTheme() {
   for (const w of [mainWindow, quickWindow]) {
     if (w && !w.isDestroyed()) w.webContents.send('theme:changed', t);
   }
-  applyChromeOverlay();
+  applyThemeWindowBackground();
 }
 
 function broadcastLocale() {
@@ -2308,10 +2317,30 @@ ipcMain.on('quick:hide', (_e, generation) => {
   hideQuickNow();
 });
 
-ipcMain.on('window:modal-cover', (_e, on) => {
-  modalCoverActive = !!on;
-  applyChromeOverlay();
+ipcMain.on('quick:resize', (event, requestedHeight) => {
+  if (!quickWindow || event.sender !== quickWindow.webContents) return;
+  resizeQuickWindow(requestedHeight);
 });
+
+ipcMain.on('window:minimize', event => {
+  if (!isMainWindowEvent(event)) return;
+  mainWindow.minimize();
+});
+
+ipcMain.on('window:toggle-maximize', event => {
+  if (!isMainWindowEvent(event)) return;
+  if (mainWindow.isMaximized()) mainWindow.unmaximize();
+  else mainWindow.maximize();
+});
+
+ipcMain.on('window:close', event => {
+  if (!isMainWindowEvent(event)) return;
+  mainWindow.close();
+});
+
+ipcMain.handle('window:state:get', event => (
+  isMainWindowEvent(event) ? mainWindowState() : { maximized: false, fullscreen: false }
+));
 
 ipcMain.handle('theme:get', () => resolvedTheme());
 
@@ -2349,6 +2378,13 @@ ipcMain.handle('locale:load', (_event, requestedLocale) => {
     return { ok: false, error: '语言文件读取失败' };
   }
 });
+
+ipcMain.handle('locale:get', () => settings.locale);
+
+ipcMain.handle('app:info', () => ({
+  name: app.getName(),
+  version: app.getVersion()
+}));
 
 ipcMain.handle('settings:get', () => settingsForClient());
 
@@ -2499,6 +2535,15 @@ let quickFocusTimer = null;
 let quickPresentTimer = null;
 let quickResetPending = null;
 let quickBlurController = null;
+let quickResizeTimer = null;
+let quickResizeTarget = QUICK_SIZE.height;
+
+function cancelQuickResize() {
+  if (quickResizeTimer !== null) {
+    clearInterval(quickResizeTimer);
+    quickResizeTimer = null;
+  }
+}
 
 function cancelQuickPresentation() {
   if (quickPresentTimer !== null) {
@@ -2537,6 +2582,7 @@ ipcMain.on('quick:reset-ready', (event, generation) => {
 });
 
 function hideQuickNow() {
+  cancelQuickResize();
   if (quickBlurController) quickBlurController.cancel();
   cancelQuickPresentation();
   if (quickFocusTimer) { clearTimeout(quickFocusTimer); quickFocusTimer = null; }
@@ -2614,8 +2660,8 @@ function createMainWindow() {
     show: false,
     backgroundColor: colors.color,
     autoHideMenuBar: true,
-    titleBarStyle: 'hidden',
-    titleBarOverlay: { color: colors.color, symbolColor: colors.symbolColor, height: 40 },
+    frame: false,
+    thickFrame: true,
     icon: path.join(ASSETS, 'icon.png'),
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
@@ -2633,7 +2679,12 @@ function createMainWindow() {
     if (process.argv.includes('--open-settings')) {
       mainWindow.webContents.send('ui:navigate', 'settings');
     }
+    broadcastMainWindowState();
   });
+  mainWindow.on('maximize', broadcastMainWindowState);
+  mainWindow.on('unmaximize', broadcastMainWindowState);
+  mainWindow.on('enter-full-screen', broadcastMainWindowState);
+  mainWindow.on('leave-full-screen', broadcastMainWindowState);
   // 关闭主窗口 = 隐藏到托盘，程序继续常驻，从托盘菜单真正退出
   mainWindow.on('close', e => {
     if (!quitting) {
@@ -2690,6 +2741,7 @@ function createQuickWindow() {
   windowRef.on('closed', () => {
     if (quickWindow !== windowRef) return;
     blurController.cancel();
+    cancelQuickResize();
     quickBlurController = null;
     cancelQuickPresentation();
     if (quickFocusTimer) { clearTimeout(quickFocusTimer); quickFocusTimer = null; }
@@ -2699,20 +2751,72 @@ function createQuickWindow() {
   });
 }
 
+function quickBoundsForHeight(height) {
+  const { workArea } = screen.getPrimaryDisplay();
+  return {
+    x: Math.round(workArea.x + (workArea.width - QUICK_SIZE.width) / 2),
+    // 视觉上输入条底边距工作区底部约 80px（高度中含 56px 透明阴影区）
+    y: Math.round(workArea.y + workArea.height - height - 24),
+    width: QUICK_SIZE.width,
+    height
+  };
+}
+
+function applyQuickBounds(height) {
+  if (!quickWindow || quickWindow.isDestroyed()) return;
+  const next = quickBoundsForHeight(height);
+  const current = quickWindow.getBounds();
+  if (current.x !== next.x || current.y !== next.y || current.width !== next.width || current.height !== next.height) {
+    quickWindow.setBounds(next, false);
+  }
+}
+
+function resizeQuickWindow(requestedHeight) {
+  if (!quickWindow || quickWindow.isDestroyed()) return;
+  const parsed = Number(requestedHeight);
+  if (!Number.isFinite(parsed)) return;
+
+  const target = Math.min(QUICK_MAX_HEIGHT, Math.max(QUICK_SIZE.height, Math.round(parsed)));
+  quickResizeTarget = target;
+  const start = quickWindow.getBounds().height;
+  if (start === target) {
+    cancelQuickResize();
+    return;
+  }
+
+  // 连续输入时复用同一个定时器，只更新目标高度，避免原生窗口动画反复重启而抖动。
+  if (quickResizeTimer !== null) return;
+
+  let segmentStart = start;
+  let segmentTarget = target;
+  let startedAt = Date.now();
+  const tick = () => {
+    if (!quickWindow || quickWindow.isDestroyed()) {
+      cancelQuickResize();
+      return;
+    }
+    if (quickResizeTarget !== segmentTarget) {
+      segmentStart = quickWindow.getBounds().height;
+      segmentTarget = quickResizeTarget;
+      startedAt = Date.now();
+    }
+    const progress = Math.min(1, (Date.now() - startedAt) / QUICK_RESIZE_DURATION);
+    const eased = 1 - Math.pow(1 - progress, 3);
+    applyQuickBounds(Math.round(segmentStart + (segmentTarget - segmentStart) * eased));
+    if (progress >= 1 && quickWindow.getBounds().height === quickResizeTarget) {
+      cancelQuickResize();
+      applyQuickBounds(quickResizeTarget);
+    }
+  };
+  tick();
+  quickResizeTimer = setInterval(tick, 16);
+}
+
 function updateQuickBounds() {
   if (!quickWindow || quickWindow.isDestroyed()) return;
-  const { workArea } = screen.getPrimaryDisplay();
-  const x = Math.round(workArea.x + (workArea.width - QUICK_SIZE.width) / 2);
-  // 视觉上输入条底边距工作区底部约 80px（高度中含 56px 透明阴影区）
-  const y = Math.round(workArea.y + workArea.height - QUICK_SIZE.height - 24);
-  // DPI/分辨率变化的兜底自愈：仅在尺寸/位置实际偏离时才设置，
-  // 无条件的 setSize/setPosition 会让透明窗口重建表面，正是残余闪烁来源之一
-  const [w, h] = quickWindow.getSize();
-  if (w !== QUICK_SIZE.width || h !== QUICK_SIZE.height) {
-    quickWindow.setSize(QUICK_SIZE.width, QUICK_SIZE.height, false);
-  }
-  const [px, py] = quickWindow.getPosition();
-  if (px !== x || py !== y) quickWindow.setPosition(x, y, false);
+  cancelQuickResize();
+  quickResizeTarget = QUICK_SIZE.height;
+  applyQuickBounds(QUICK_SIZE.height);
 }
 
 function presentQuick() {

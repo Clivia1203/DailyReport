@@ -24,6 +24,12 @@ test('小窗口设置页的 AI 设置入口属于同一滚动内容流', () => {
   assert.doesNotMatch(entryRule[1], /z-index:\s*5;/s);
 });
 
+test('AI 设置入口在宽而矮的窗口中不会被纵向 flex 压缩', () => {
+  const entryRule = cssSource.match(/\.settings-ai-entry\s*\{([^}]*)\}/s);
+  assert.ok(entryRule, 'AI 设置入口基础规则不存在');
+  assert.match(entryRule[1], /flex:\s*0\s+0\s+auto\s*;/s);
+});
+
 test('AI 设置入口在所有窗口尺寸共用同一条页面跳转逻辑', () => {
   assert.match(appSource, /#btn-ai-settings'\)\.addEventListener\('click',[\s\S]*showView\('ai-settings'\)/);
 });

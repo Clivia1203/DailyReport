@@ -61,6 +61,19 @@ test('设置页将普通设置与 AI 设置分开，AI 设置提供左右项目�
   assert.match(appSource, /setAiSettingsPanel\('service'\)/);
 });
 
+test('设置页底部展示应用关于信息', () => {
+  const general = sectionSource('view-settings');
+  assert.match(general, /class="card set-group about-card"/);
+  assert.match(general, /<div class="set-title">关于<\/div>/);
+  assert.match(general, /<img class="about-icon" src="\.\.\/assets\/icon\.png"[^>]*draggable="false"/);
+  assert.match(general, /id="about-name">日报随手记<\/div>/);
+  assert.match(general, /id="about-version">v0\.3\.0<\/span>/);
+  assert.match(cssSource, /\.about-body\s*\{[\s\S]*align-items:center/);
+  assert.match(cssSource, /\.about-icon\s*\{[\s\S]*-webkit-user-drag:none/);
+  assert.match(appSource, /Promise\.resolve\(window\.api\.getAppInfo\?\.\(\)\)/);
+  assert.match(preloadSource, /getAppInfo:\s*\(\)\s*=>\s*ipcRenderer\.invoke\('app:info'/);
+});
+
 test('所有原生下拉框统一由应用内自定义菜单呈现', () => {
   assert.equal((htmlSource.match(/<select\b/g) || []).length, 12);
   assert.match(htmlSource, /custom-select\.js[\s\S]*app\.js/);

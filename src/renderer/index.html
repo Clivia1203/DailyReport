@@ -9,7 +9,7 @@
 </head>
 <body>
   <div class="app">
-    <header class="topbar">
+    <header class="topbar" id="app-topbar">
       <div class="brand">
         <span class="brand-dot"></span>
         <span class="brand-name">日报随手记</span>
@@ -19,6 +19,18 @@
         <button class="icon-btn" id="btn-settings" title="设置">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="21" y1="4" x2="14" y2="4"/><line x1="10" y1="4" x2="3" y2="4"/><line x1="21" y1="12" x2="12" y2="12"/><line x1="8" y1="12" x2="3" y2="12"/><line x1="21" y1="20" x2="16" y2="20"/><line x1="12" y1="20" x2="3" y2="20"/><line x1="14" y1="2" x2="14" y2="6"/><line x1="8" y1="10" x2="8" y2="14"/><line x1="16" y1="18" x2="16" y2="22"/></svg>
         </button>
+        <div class="window-controls" id="window-controls" role="group" aria-label="窗口控制">
+          <button class="window-control" id="window-minimize" type="button" title="最小化" aria-label="最小化">
+            <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 8h10"/></svg>
+          </button>
+          <button class="window-control" id="window-maximize" type="button" title="最大化" aria-label="最大化" aria-pressed="false">
+            <svg class="window-control-icon maximize" viewBox="0 0 16 16" aria-hidden="true"><rect x="3.25" y="3.25" width="9.5" height="9.5" rx=".75"/></svg>
+            <svg class="window-control-icon restore" viewBox="0 0 16 16" aria-hidden="true"><path d="M5.25 5.25h7.5v7.5h-7.5z"/><path d="M3.25 10.75V3.25h7.5"/></svg>
+          </button>
+          <button class="window-control close" id="window-close" type="button" title="关闭" aria-label="关闭">
+            <svg viewBox="0 0 16 16" aria-hidden="true"><path d="m4 4 8 8M12 4l-8 8"/></svg>
+          </button>
+        </div>
       </div>
     </header>
 
@@ -319,6 +331,22 @@
           </div>
           <div class="set-msg" id="data-msg"></div>
           </div><!-- /data group -->
+
+          <div class="card set-group about-card">
+            <div class="set-title">关于</div>
+            <div class="about-body">
+              <img class="about-icon" src="../assets/icon.png" alt="" aria-hidden="true" draggable="false">
+              <div class="about-copy">
+                <div class="about-name" id="about-name">日报随手记</div>
+                <div class="set-sub">本地优先的工作记录与日报工具</div>
+              </div>
+              <div class="about-version">
+                <span class="about-version-label">版本</span>
+                <span class="about-version-value" id="about-version">v0.3.0</span>
+              </div>
+            </div>
+          </div>
+
           </div><!-- /settings-scroll -->
           <div class="ov-thumb" id="settings-thumb"></div>
         </div><!-- /scroll-wrap -->
