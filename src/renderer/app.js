@@ -2501,7 +2501,7 @@ function renderWeeklyWorkbench({ force = false } = {}) {
 function syncWeeklyWorkbenchViewport() {
   const wasVisible = isClosureWorkbenchVisible();
   const wide = window.matchMedia('(min-width: 1200px)').matches;
-  const visible = wide && !viewMain.hidden;
+  const visible = wide && !viewMain.hidden && !!state.settings?.ai?.configured;
   weeklyWorkbench.hidden = !visible;
   updateWorkbenchThumb();
   const visibleNow = isClosureWorkbenchVisible();
@@ -3391,6 +3391,7 @@ async function loadSettingsUI() {
   }
   state.terminologyDiscovery.thinking = thinkingState.preserveThinking(state.terminologyDiscovery.thinking);
   state.settings = s;
+  syncWeeklyWorkbenchViewport();
   state.savedFilters = Array.isArray(s.savedFilters) ? s.savedFilters : [];
   renderSavedFilterOptions();
   hkDisplay.textContent = s.hotkey || uiText('未设置');

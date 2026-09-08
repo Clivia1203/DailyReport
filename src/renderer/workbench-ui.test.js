@@ -47,6 +47,12 @@ test('近期闭环自动分析受大窗口可见性、内容变化和冷却时�
   assert.match(appSource, /resumeVisibleClosureAutomation\('visible'\)/);
 });
 
+test('未配置 AI 时隐藏左侧近期闭环卡片，连接后再恢复显示', () => {
+  assert.match(appSource, /const visible = wide && !viewMain\.hidden && !!state\.settings\?\.ai\?\.configured/);
+  assert.match(appSource, /state\.settings = s;\s*syncWeeklyWorkbenchViewport\(\);/);
+  assert.match(appSource, /weeklyWorkbench\.hidden = !visible/);
+});
+
 test('首次术语识别也不会在后台或小窗口自动调用 AI', () => {
   assert.match(appSource, /function ensureTerminologyDiscovery\(\)[\s\S]*!isClosureWorkbenchVisible\(\)/);
   assert.match(appSource, /document\.addEventListener\('visibilitychange',[\s\S]*resumeVisibleClosureAutomation\('visible'\)/);
