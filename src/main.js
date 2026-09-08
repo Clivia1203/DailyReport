@@ -101,6 +101,15 @@ const {
   filterResolvedClosureSuggestions
 } = require('./lib/closure-utils');
 const { createQuickBlurController } = require('./lib/quick-blur-controller');
+const {
+  DEFAULT_PROVIDER_ID,
+  getProvider,
+  normalizeProviderId,
+  normalizeBaseUrl,
+  preferredModels,
+  extractModelIds,
+  buildChatRequestBody
+} = require('./lib/ai-providers');
 
 const ASSETS = path.join(__dirname, 'assets');
 const DEFAULT_HOTKEY = 'Alt+Shift+D';
@@ -196,6 +205,7 @@ const DEFAULT_SETTINGS = {
   openAtLogin: false,     // 开机自启（写入系统启动项，默认关闭）
   silentStart: false,     // 静默启动：开机后仅驻留托盘，不显示主窗口
   ai: {
+    providerId: DEFAULT_PROVIDER_ID,
     baseUrl: 'https://api.deepseek.com',
     model: '',
     closureModel: '',
@@ -328,7 +338,8 @@ function loadSettings() {
       if (typeof s.openAtLogin === 'boolean') settings.openAtLogin = s.openAtLogin;
       if (typeof s.silentStart === 'boolean') settings.silentStart = s.silentStart;
       if (s.ai && typeof s.ai === 'object') {
-        if (typeof s.ai.baseUrl === 'string' && s.ai.baseUrl) settings.ai.baseUrl = s.ai.baseUrl;
+        if (typeof s.ai.providerId === 'string') settings.ai.providerId = normalizeProviderId(s.ai.providerId);
+        settings.ai.baseUrl = normalizeBaseUrl(s.ai.baseUrl, settings.ai.providerId);
         if (typeof s.ai.model === 'string') settings.ai.model = s.ai.model;
         if (typeof s.ai.closureModel === 'string') settings.ai.closureModel = s.ai.closureModel;
         if (Array.isArray(s.ai.models)) settings.ai.models = [...new Set(s.ai.models.filter(x => typeof x === 'string' && x.trim()))];
@@ -610,9 +621,8 @@ function normalizeRestoredSettings(snapshot) {
   restored.openAtLogin = !!restored.openAtLogin;
   restored.silentStart = !!restored.silentStart;
   restored.ai = { ...DEFAULT_SETTINGS.ai, ...(restored.ai || {}) };
-  restored.ai.baseUrl = typeof restored.ai.baseUrl === 'string' && restored.ai.baseUrl.trim()
-    ? restored.ai.baseUrl.trim()
-    : DEFAULT_SETTINGS.ai.baseUrl;
+  restored.ai.providerId = normalizeProviderId(restored.ai.providerId);
+  restored.ai.baseUrl = normalizeBaseUrl(restored.ai.baseUrl, restored.ai.providerId);
   restored.ai.model = typeof restored.ai.model === 'string' ? restored.ai.model.trim() : '';
   restored.ai.closureModel = typeof restored.ai.closureModel === 'string' ? restored.ai.closureModel.trim() : '';
   restored.ai.models = Array.isArray(restored.ai.models)
@@ -673,7 +683,7 @@ function localizedWeekday(dateStr, locale = settings.locale) {
     .format(new Date(`${dateStr}T00:00:00`));
 }
 
-/* ---------------- DeepSeek 与周期总结 ---------------- */
+/* ---------------- AI 平台与周期总结 ---------------- */
 
 // v4-pro 的完整总结可能需要几十秒；保留足够的服务端推理时间，避免客户端 45 秒提前中断。
 const AI_TIMEOUT_MS = 150000;
@@ -719,8 +729,11 @@ function encryptApiKey(value) {
 }
 
 function aiPublicState(models = settings.ai.models) {
+  const provider = getProvider(settings.ai.providerId);
   return {
     configured: !!settings.ai.encryptedApiKey,
+    providerId: provider.id,
+    providerName: provider.label,
     maskedApiKey: maskedApiKey(),
     baseUrl: settings.ai.baseUrl,
     model: settings.ai.model,
@@ -728,15 +741,40 @@ function aiPublicState(models = settings.ai.models) {
     models: Array.isArray(models) ? models : [],
     reasoningEffort: normalizeReasoningEffort(settings.ai.reasoningEffort),
     closureReasoningEffort: normalizeReasoningEffort(settings.ai.closureReasoningEffort),
+    supportsReasoningControl: provider.supportsReasoningControl,
     lastTestAt: settings.ai.lastTestAt,
     lastTestOk: settings.ai.lastTestOk,
     lastError: settings.ai.lastError
   };
 }
 
-async function deepSeekRequest(endpoint, apiKey, init = {}) {
+function aiConnection(overrides = {}) {
+  const providerId = normalizeProviderId(overrides.providerId ?? settings.ai.providerId);
+  const baseUrl = normalizeBaseUrl(overrides.baseUrl ?? settings.ai.baseUrl, providerId);
+  if (!baseUrl) throw new Error('请填写 API 地址');
+  return { providerId, baseUrl };
+}
+
+function applyAiConnection(connection) {
+  const changed = settings.ai.providerId !== connection.providerId
+    || settings.ai.baseUrl !== connection.baseUrl;
+  settings.ai.providerId = connection.providerId;
+  settings.ai.baseUrl = connection.baseUrl;
+  if (changed) {
+    settings.ai.model = '';
+    settings.ai.closureModel = '';
+    settings.ai.models = [];
+    settings.ai.lastTestAt = 0;
+    settings.ai.lastTestOk = false;
+    settings.ai.lastError = '';
+  }
+  return changed;
+}
+
+async function aiRequest(endpoint, apiKey, init = {}, connection = null) {
   if (typeof fetch !== 'function') throw new Error('当前运行环境不支持网络请求');
-  const base = String(settings.ai.baseUrl || 'https://api.deepseek.com').replace(/\/+$/, '');
+  const target = connection || aiConnection();
+  const base = target.baseUrl;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), AI_TIMEOUT_MS);
   try {
@@ -765,9 +803,10 @@ async function deepSeekRequest(endpoint, apiKey, init = {}) {
   }
 }
 
-async function deepSeekStream(endpoint, apiKey, init = {}, onDelta = () => {}) {
+async function aiStream(endpoint, apiKey, init = {}, onDelta = () => {}, connection = null) {
   if (typeof fetch !== 'function') throw new Error('当前运行环境不支持网络请求');
-  const base = String(settings.ai.baseUrl || 'https://api.deepseek.com').replace(/\/+$/, '');
+  const target = connection || aiConnection();
+  const base = target.baseUrl;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), AI_TIMEOUT_MS);
   try {
@@ -842,11 +881,9 @@ async function deepSeekStream(endpoint, apiKey, init = {}, onDelta = () => {}) {
   }
 }
 
-async function fetchAvailableModels(apiKey) {
-  const data = await deepSeekRequest('/models', apiKey);
-  const models = Array.isArray(data?.data)
-    ? data.data.map(x => typeof x === 'string' ? x : x?.id).filter(Boolean)
-    : [];
+async function fetchAvailableModels(apiKey, connection = null) {
+  const data = await aiRequest('/models', apiKey, {}, connection);
+  const models = extractModelIds(data);
   if (!models.length) throw new Error('接口已连接，但没有返回可用模型');
   return [...new Set(models)];
 }
@@ -854,15 +891,14 @@ async function fetchAvailableModels(apiKey) {
 function chooseModel(models, current) {
   if (current && models.includes(current)) return current;
   // 仅作为新模型列表中的偏好排序；实际可用模型永远以 /models 返回为准。
-  // 周期总结优先选择响应更快的 Flash；用户已选中的模型仍然保留。
-  const preferred = ['deepseek-v4-flash', 'deepseek-v4-pro'];
+  const preferred = preferredModels(settings.ai.providerId, 'report');
   return preferred.find(x => models.includes(x)) || models[0];
 }
 
 function chooseClosureModel(models, current) {
   if (current && models.includes(current)) return current;
   // 闭环需要做历史语义对应，默认优先能力更强的模型；用户仍可在设置中切换。
-  const preferred = ['deepseek-v4-pro', 'deepseek-reasoner', 'deepseek-v4-flash', 'deepseek-chat'];
+  const preferred = preferredModels(settings.ai.providerId, 'closure');
   return preferred.find(x => models.includes(x)) || models[0];
 }
 
@@ -903,20 +939,20 @@ async function requestTerminologyDiscovery({ key, model, prompt, locale = settin
     try {
       let reasoning = '';
       let content = '';
-      await deepSeekStream('/chat/completions', key, {
+      await aiStream('/chat/completions', key, {
         method: 'POST',
-        body: JSON.stringify({
+        body: JSON.stringify(buildChatRequestBody(settings.ai.providerId, {
           model,
           messages: [
             { role: 'system', content: discoverySystemPrompt(locale) },
             { role: 'user', content: requestPrompt }
           ],
-          ...(thinkingEnabled ? { thinking: { type: 'enabled' }, reasoning_effort: closureReasoningEffort() } : {}),
-          ...(jsonModeEnabled ? { response_format: { type: 'json_object' } } : {}),
-          stream: true,
-          stream_options: { include_usage: true },
-          max_tokens: MAX_DISCOVERY_OUTPUT_TOKENS
-        })
+          thinkingEnabled,
+          reasoningEffort: closureReasoningEffort(),
+          jsonModeEnabled,
+          streamOptions: { include_usage: true },
+          maxTokens: MAX_DISCOVERY_OUTPUT_TOKENS
+        }))
       }, delta => {
         if (delta.reasoning) {
           reasoning += delta.reasoning;
@@ -1188,18 +1224,16 @@ async function generateReportSegment({ key, model, prompt, segmentIndex, segment
     // 续写只负责接上正文，不再重复开启思考，避免一次截断被多轮推理放大为长时间等待。
     const thinkingEnabled = continuationCount === 0;
     try {
-      const streamResult = await deepSeekStream('/chat/completions', key, {
+      const streamResult = await aiStream('/chat/completions', key, {
         method: 'POST',
-        body: JSON.stringify({
+        body: JSON.stringify(buildChatRequestBody(settings.ai.providerId, {
           model,
           messages,
-          ...(thinkingEnabled
-            ? { thinking: { type: 'enabled' }, reasoning_effort: continuationCount === 0 ? reasoningEffort : 'low' }
-            : { thinking: { type: 'disabled' } }),
-          stream: true,
-          stream_options: { include_usage: true },
-          max_tokens: maxTokens
-        })
+          thinkingEnabled,
+          reasoningEffort: continuationCount === 0 ? reasoningEffort : 'low',
+          streamOptions: { include_usage: true },
+          maxTokens
+        }))
       }, delta => {
         if (delta.reasoning) {
           reasoning += delta.reasoning;
@@ -1325,16 +1359,16 @@ async function generateClosureSegment({ key, model, prompt, segmentIndex, segmen
 
     let receivedContent = false;
     try {
-      const streamResult = await deepSeekStream('/chat/completions', key, {
+      const streamResult = await aiStream('/chat/completions', key, {
         method: 'POST',
-        body: JSON.stringify({
+        body: JSON.stringify(buildChatRequestBody(settings.ai.providerId, {
           model,
           messages,
-          ...(thinkingEnabled ? { thinking: { type: 'enabled' }, reasoning_effort: closureReasoningEffort() } : {}),
-          stream: true,
-          stream_options: { include_usage: true },
-          max_tokens: maxTokens
-        })
+          thinkingEnabled,
+          reasoningEffort: closureReasoningEffort(),
+          streamOptions: { include_usage: true },
+          maxTokens
+        }))
       }, delta => {
         if (delta.reasoning) {
           reasoningLength += delta.reasoning.length;
@@ -1644,12 +1678,25 @@ ipcMain.handle('ai:reveal', () => {
   return key ? { ok: true, apiKey: key } : { ok: false, error: '本机安全存储中没有可读取的 API Key' };
 });
 
-ipcMain.handle('ai:test', async (_e, { apiKey } = {}) => {
-  const suppliedKey = String(apiKey || '').trim();
-  const key = suppliedKey || apiKeyFromStorage();
-  if (!key) return { ok: false, error: '请先填写 DeepSeek API Key' };
+ipcMain.handle('ai:test', async (_e, payload = {}) => {
+  const input = typeof payload === 'string' ? { apiKey: payload } : (payload || {});
+  let connection;
   try {
-    const models = await fetchAvailableModels(key);
+    connection = aiConnection(input);
+  } catch (error) {
+    return { ok: false, error: error?.message || 'AI 连接配置无效', ai: aiPublicState() };
+  }
+  const suppliedKey = String(input.apiKey || '').trim();
+  const connectionChanged = settings.ai.providerId !== connection.providerId
+    || settings.ai.baseUrl !== connection.baseUrl;
+  if (connectionChanged && !suppliedKey) {
+    return { ok: false, error: '切换 AI 平台后请重新填写 API Key', ai: aiPublicState() };
+  }
+  applyAiConnection(connection);
+  const key = suppliedKey || apiKeyFromStorage();
+  if (!key) return { ok: false, error: '请先填写 API Key', ai: aiPublicState() };
+  try {
+    const models = await fetchAvailableModels(key, connection);
     const selected = chooseModel(models, settings.ai.model);
     const closureSelected = chooseClosureModel(models, settings.ai.closureModel);
     const modelChanged = selected !== settings.ai.model;
@@ -1675,11 +1722,19 @@ ipcMain.handle('ai:test', async (_e, { apiKey } = {}) => {
   }
 });
 
-ipcMain.handle('ai:save', (_e, { apiKey } = {}) => {
-  const suppliedKey = String(apiKey || '').trim();
+ipcMain.handle('ai:save', (_e, payload = {}) => {
+  const input = typeof payload === 'string' ? { apiKey: payload } : (payload || {});
   try {
+    const connection = aiConnection(input);
+    const suppliedKey = String(input.apiKey || '').trim();
+    const connectionChanged = settings.ai.providerId !== connection.providerId
+      || settings.ai.baseUrl !== connection.baseUrl;
+    if (connectionChanged && !suppliedKey) {
+      return { ok: false, error: '切换 AI 平台后请重新填写 API Key', ai: aiPublicState() };
+    }
+    applyAiConnection(connection);
     if (suppliedKey) settings.ai.encryptedApiKey = encryptApiKey(suppliedKey);
-    if (!settings.ai.encryptedApiKey) return { ok: false, error: '请先填写 DeepSeek API Key' };
+    if (!settings.ai.encryptedApiKey) return { ok: false, error: '请先填写 API Key', ai: aiPublicState() };
     saveSettings();
     return { ok: true, ai: aiPublicState() };
   } catch (error) {
@@ -1754,7 +1809,7 @@ function sendTerminologyProgress(event, progress) {
 ipcMain.handle('terminology:discover', async (event, payload = {}) => {
   const force = !!payload.force;
   const key = apiKeyFromStorage();
-  if (!key) return { ok: false, error: '尚未配置 DeepSeek API Key，请先到设置中连接 AI' };
+  if (!key) return { ok: false, error: '尚未配置 API Key，请先到设置中连接 AI' };
 
   const entries = loadDB().entries;
   const sourceHashValue = terminologyDiscoverySourceHash(entries);
@@ -1922,7 +1977,7 @@ ipcMain.handle('closure:generate', async (event, payload = {}) => {
   }
 
   const key = apiKeyFromStorage();
-  if (!key) return { ok: false, error: '尚未配置 DeepSeek API Key，请先到设置中连接 AI' };
+  if (!key) return { ok: false, error: '尚未配置 API Key，请先到设置中连接 AI' };
 
   let models;
   try {
@@ -2111,7 +2166,7 @@ ipcMain.handle('report:generate', async (event, payload = {}) => {
   }
 
   const key = apiKeyFromStorage();
-  if (!key) return { ok: false, error: '尚未配置 DeepSeek API Key，请先到设置中连接 AI' };
+  if (!key) return { ok: false, error: '尚未配置 API Key，请先到设置中连接 AI' };
 
   let models;
   try {

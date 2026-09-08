@@ -3,6 +3,7 @@ const thinkingState = window.DRThinkingState;
 const thinkingSnapshot = window.DRThinkingSnapshot;
 const customSelect = window.DRCustomSelect;
 const reportPeriodRules = window.DRReportPeriod;
+const aiProviders = window.DRAiProviders;
 
 // 所有由应用生成的界面文案都从本地化层取值；日报原文、用户自定义提示词和 AI 正文不经过这里改写。
 function uiText(value) {
@@ -1011,7 +1012,7 @@ function reportJobMessage(job) {
       ? `已加入生成队列，前面还有 ${pending - 1} 个任务。`
       : '已加入生成队列，等待可用的 AI 请求…';
   }
-  return '正在连接 DeepSeek 并生成总结，请稍候…';
+  return '正在连接 AI 并生成总结，请稍候…';
 }
 
 function syncReportControls() {
@@ -1309,7 +1310,7 @@ function beginReportThinking() {
   thinking.jobId = job?.id || '';
   thinking.progressNote = status === 'queued'
     ? '已加入生成队列，等待可用的 AI 请求…'
-    : '正在连接 DeepSeek，准备分析原始记录…';
+    : '正在连接 AI，准备分析原始记录…';
   saveReportThinking(period, thinking);
   syncReportThinkingTimer();
   return thinking;
@@ -1327,7 +1328,7 @@ function markReportJobStarted(job) {
     ...current,
     visible: true,
     phase: 'thinking',
-    progressNote: '正在连接 DeepSeek，准备分析原始记录…'
+    progressNote: '正在连接 AI，准备分析原始记录…'
   };
   thinking.locale = current.locale || uiLocale();
   saveReportThinking(job.period, thinking);
@@ -1660,7 +1661,7 @@ async function openReportView() {
   if (!state.settings) await loadSettingsUI();
   if (!state.settings?.ai?.configured) {
     showView('settings');
-    toast(uiText('请先在设置中配置 DeepSeek API'));
+    toast(uiText('请先在设置中配置 AI 服务'));
     return;
   }
   showView('report');
@@ -3232,6 +3233,8 @@ const localeSelect = $('#set-locale');
 const autoStart = $('#set-autostart');
 const silentStart = $('#set-silent');
 const rowSilent = $('#row-silentstart');
+const aiProvider = $('#ai-provider');
+const aiBaseUrl = $('#ai-base-url');
 const aiKey = $('#ai-key');
 const aiKeyToggle = $('#ai-key-toggle');
 const aiModel = $('#ai-model');
@@ -3488,6 +3491,9 @@ function syncAiModels(ai) {
 
 function syncAiSettingsUI(ai = state.settings?.ai) {
   const configured = !!ai?.configured;
+  const providerId = aiProviders?.normalizeProviderId(ai?.providerId) || ai?.providerId || 'deepseek';
+  const provider = aiProviders?.getProvider(providerId);
+  const reasoningSupported = ai?.supportsReasoningControl !== false;
   const reasoningEffort = ['auto', 'low', 'high', 'max'].includes(ai?.reasoningEffort)
     ? ai.reasoningEffort
     : 'auto';
@@ -3532,12 +3538,25 @@ function syncAiSettingsUI(ai = state.settings?.ai) {
   aiClosureModelSub.textContent = uiText(ai?.closureModel
     ? `当前用于近期闭环；与周期报告模型独立。`
     : '测试连接后会自动选择更适合语义判断的模型；也可单独切换。');
+  if (aiProvider) {
+    aiProvider.value = providerId;
+    syncCustomSelect(aiProvider);
+  }
+  if (aiBaseUrl) {
+    aiBaseUrl.value = ai?.baseUrl || provider?.defaultBaseUrl || '';
+  }
   aiReasoningEffort.value = reasoningEffort;
+  aiReasoningEffort.disabled = !reasoningSupported;
   syncCustomSelect(aiReasoningEffort);
-  aiReasoningSub.textContent = uiText(reasoningNotes[reasoningEffort]);
+  aiReasoningSub.textContent = uiText(reasoningSupported
+    ? reasoningNotes[reasoningEffort]
+    : '当前平台不提供统一的思考强度参数，由模型自行控制。');
   aiClosureReasoningEffort.value = closureReasoningEffort;
+  aiClosureReasoningEffort.disabled = !reasoningSupported;
   syncCustomSelect(aiClosureReasoningEffort);
-  aiClosureReasoningSub.textContent = uiText(closureReasoningNotes[closureReasoningEffort]);
+  aiClosureReasoningSub.textContent = uiText(reasoningSupported
+    ? closureReasoningNotes[closureReasoningEffort]
+    : '当前平台不提供统一的思考强度参数，由模型自行控制。');
   syncAiModels(ai);
   if (aiTest) aiTest.disabled = aiConnectionChecking;
   aiMsg.textContent = '';
@@ -3554,6 +3573,14 @@ function setAiSettingsPanel(name) {
   }
   for (const panel of aiSettingsPanels) panel.hidden = panel.dataset.aiPanel !== name;
 }
+
+aiProvider?.addEventListener('change', () => {
+  const provider = aiProviders?.getProvider(aiProvider.value);
+  if (aiBaseUrl && provider) aiBaseUrl.value = provider.defaultBaseUrl || '';
+  aiMsg.textContent = '';
+  fillAiModelSelect(aiModel, { configured: false, models: [] }, '');
+  fillAiModelSelect(aiClosureModel, { configured: false, models: [] }, '');
+});
 
 for (const item of aiNavItems) {
   item.addEventListener('click', () => setAiSettingsPanel(item.dataset.aiPanel));
@@ -3907,7 +3934,11 @@ $('#ai-test').addEventListener('click', async () => {
   aiMsg.className = 'set-msg';
   aiMsg.textContent = uiText('正在测试连接并读取模型…');
   const enteredKey = aiKey.dataset.masked === 'true' ? '' : aiKey.value.trim();
-  const res = await window.api.testAi(enteredKey);
+  const res = await window.api.testAi({
+    providerId: aiProvider?.value || 'deepseek',
+    baseUrl: aiBaseUrl?.value.trim() || '',
+    apiKey: enteredKey
+  });
   button.disabled = false;
   if (!res.ok) {
     aiMsg.textContent = uiText(res.error || '连接失败');
@@ -3935,7 +3966,11 @@ aiSave.addEventListener('click', async () => {
   aiMsg.className = 'set-msg';
   aiMsg.textContent = uiText('正在保存 AI 配置…');
   const enteredKey = aiKey.dataset.masked === 'true' ? '' : aiKey.value.trim();
-  const res = await window.api.saveAi(enteredKey);
+  const res = await window.api.saveAi({
+    providerId: aiProvider?.value || 'deepseek',
+    baseUrl: aiBaseUrl?.value.trim() || '',
+    apiKey: enteredKey
+  });
   aiSave.disabled = false;
   if (!res.ok) {
     aiMsg.textContent = uiText(res.error || 'AI 配置保存失败');
@@ -4020,7 +4055,7 @@ aiClosureReasoningEffort.addEventListener('change', async () => {
 
 $('#ai-clear').addEventListener('click', async () => {
   if (!state.settings?.ai?.configured) return;
-  const confirmed = await askConfirmation('清除 DeepSeek 配置后，AI 总结功能将隐藏。确定继续吗？', {
+  const confirmed = await askConfirmation('清除 AI 配置后，AI 总结功能将隐藏。确定继续吗？', {
     title: '清除 AI 配置',
     confirmLabel: '清除配置',
     danger: true

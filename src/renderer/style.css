@@ -1906,6 +1906,8 @@ body.textarea-resizing * { cursor: nwse-resize !important; user-select: none !im
 .ai-key-control { display:flex; align-items:center; gap:7px; flex:0 1 auto; max-width:100%; flex-wrap:wrap; }
 .ai-key-input { width:240px; max-width:100%; height:36px; padding:0 12px; border:1px solid var(--border); border-radius:10px; background:var(--input-bg); color:var(--text); outline:none; font-family:Consolas, "Courier New", monospace; }
 .ai-key-input:focus { border-color:var(--accent); background:var(--card); }
+.ai-base-url-input { width:300px; max-width:100%; height:36px; padding:0 12px; border:1px solid var(--border); border-radius:10px; background:var(--input-bg); color:var(--text); outline:none; font:inherit; }
+.ai-base-url-input:focus { border-color:var(--accent); background:var(--card); }
 .ai-key-toggle { width:36px; height:36px; flex:none; }
 .ai-key-toggle svg { width:17px; height:17px; }
 .ai-model-select { min-width:180px; max-width:260px; }

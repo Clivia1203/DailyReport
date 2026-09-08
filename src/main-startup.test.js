@@ -66,8 +66,9 @@ test('术语识别使用流式响应，模型生成期间持续回传 AI 输出'
   const start = mainSource.indexOf('async function requestTerminologyDiscovery');
   const end = mainSource.indexOf('\nasync function discoverTerminologyFromEntries', start);
   const requestSource = mainSource.slice(start, end === -1 ? mainSource.length : end);
-  assert.match(requestSource, /await deepSeekStream\(/);
-  assert.match(requestSource, /stream:\s*true/);
+  assert.match(requestSource, /await aiStream\(/);
+  assert.match(requestSource, /buildChatRequestBody\(settings\.ai\.providerId/);
+  assert.match(fs.readFileSync(path.join(__dirname, 'lib', 'ai-providers.js'), 'utf8'), /stream:\s*options\.stream !== false/);
   assert.match(requestSource, /delta\.content[\s\S]*content \+= delta\.content/);
 });
 

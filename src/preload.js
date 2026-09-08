@@ -32,11 +32,11 @@ contextBridge.exposeInMainWorld('api', {
   // 导出
   exportRange: (start, end, format) => ipcRenderer.invoke('export:run', { start, end, format }),
 
-  // DeepSeek 与周期总结
+  // AI 平台与周期总结
   getAiStatus: () => ipcRenderer.invoke('ai:status'),
   revealAiKey: () => ipcRenderer.invoke('ai:reveal'),
-  testAi: apiKey => ipcRenderer.invoke('ai:test', { apiKey }),
-  saveAi: apiKey => ipcRenderer.invoke('ai:save', { apiKey }),
+  testAi: config => ipcRenderer.invoke('ai:test', typeof config === 'string' ? { apiKey: config } : (config || {})),
+  saveAi: config => ipcRenderer.invoke('ai:save', typeof config === 'string' ? { apiKey: config } : (config || {})),
   clearAi: () => ipcRenderer.invoke('ai:clear'),
   setAiModel: model => ipcRenderer.invoke('ai:setModel', { model }),
   setAiClosureModel: model => ipcRenderer.invoke('ai:setClosureModel', { model }),

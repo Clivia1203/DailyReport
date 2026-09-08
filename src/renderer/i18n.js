@@ -214,6 +214,13 @@
       '筛选名称': 'Filter name',
       '例如：本月重点工作': 'e.g. monthly priorities',
       'AI 设置项目': 'AI settings sections',
+      'AI 平台': 'AI platform',
+      '选择平台预设；自定义平台需使用 OpenAI 兼容接口。': 'Choose a platform preset; custom platforms must use an OpenAI-compatible interface.',
+      '平台类型': 'Platform type',
+      '预设平台会自动填入 API 地址，也可以切换到自定义兼容平台。': 'Presets fill the API address automatically; you can also switch to a custom compatible platform.',
+      '自定义 OpenAI 兼容': 'Custom OpenAI-compatible',
+      'API 地址': 'API endpoint',
+      '用于连接接口的基础地址；预设平台会自动填入，也可以手动修改。': 'Base address used to connect to the API; presets fill this automatically, and it can be edited.',
       '选择': 'Select'
       , '快速记录': 'Quick entry'
       , '自动记录当前时间': 'Record the current time automatically'
@@ -230,7 +237,7 @@
       , '选择周期后点击“生成总结”。': 'Select a period, then click “Generate summary”.'
       , '总结已生成，已保留全部原始记录。': 'Summary generated; all original records are preserved.'
       , '总结已生成，日报原文仍已保留；可以重新生成以补齐报告。': 'Summary generated; the original entries are preserved. Regenerate to complete the report.'
-      , '请先在设置中配置 DeepSeek API': 'Configure the DeepSeek API in Settings first'
+      , '请先在设置中配置 AI 服务': 'Configure the AI service in Settings first'
       , '本周期总结正在生成，请稍候。': 'This period summary is being generated. Please wait.'
       , '请先生成总结': 'Generate a summary first'
       , '总结已复制': 'Summary copied'
@@ -509,6 +516,13 @@
       '筛选名称': 'フィルター名',
       '例如：本月重点工作': '例：今月の重点事項',
       'AI 设置项目': 'AI 設定項目',
+      'AI 平台': 'AI プラットフォーム',
+      '选择平台预设；自定义平台需使用 OpenAI 兼容接口。': 'プラットフォームのプリセットを選択します。カスタムプラットフォームは OpenAI 互換インターフェースを使用してください。',
+      '平台类型': 'プラットフォームの種類',
+      '预设平台会自动填入 API 地址，也可以切换到自定义兼容平台。': 'プリセットは API アドレスを自動入力します。カスタム互換プラットフォームに切り替えることもできます。',
+      '自定义 OpenAI 兼容': 'カスタム OpenAI 互換',
+      'API 地址': 'API アドレス',
+      '用于连接接口的基础地址；预设平台会自动填入，也可以手动修改。': '接続に使用する API のベースアドレス。プリセットは自動入力され、手動で変更できます。',
       '选择': '選択'
       , '快速记录': 'クイック記録'
       , '自动记录当前时间': '現在時刻を自動記録'
@@ -525,7 +539,7 @@
       , '选择周期后点击“生成总结”。': '期間を選択して「まとめを生成」をクリックしてください。'
       , '总结已生成，已保留全部原始记录。': 'まとめを生成しました。元の記録はすべて保持されています。'
       , '总结已生成，日报原文仍已保留；可以重新生成以补齐报告。': 'まとめを生成しました。元の日報は保持されています。不足分は再生成できます。'
-      , '请先在设置中配置 DeepSeek API': '先に設定で DeepSeek API を設定してください'
+      , '请先在设置中配置 AI 服务': '先に設定で AI サービスを設定してください'
       , '本周期总结正在生成，请稍候。': 'この期間のまとめを生成中です。しばらくお待ちください。'
       , '请先生成总结': '先にまとめを生成してください'
       , '总结已复制': 'まとめをコピーしました'
@@ -850,8 +864,8 @@
     if (source === '已加入生成队列，等待可用的 AI 请求…') {
       return locale === 'en-US' ? 'Queued; waiting for an available AI request…' : '生成キューに追加しました。利用可能な AI リクエストを待っています…';
     }
-    if (source === '正在连接 DeepSeek，准备分析原始记录…') {
-      return locale === 'en-US' ? 'Connecting to DeepSeek and preparing to analyze the original entries…' : 'DeepSeek に接続し、元の記録を分析する準備をしています…';
+    if (source === '正在连接 AI，准备分析原始记录…') {
+      return locale === 'en-US' ? 'Connecting to AI and preparing to analyze the original entries…' : 'AI に接続し、元の記録を分析する準備をしています…';
     }
     match = /^正在分析第 (\d+)\/(\d+) 段原始记录…$/.exec(source);
     if (match) return locale === 'en-US'

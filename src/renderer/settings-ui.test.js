@@ -75,7 +75,7 @@ test('设置页底部展示应用关于信息', () => {
 });
 
 test('所有原生下拉框统一由应用内自定义菜单呈现', () => {
-  assert.equal((htmlSource.match(/<select\b/g) || []).length, 12);
+  assert.equal((htmlSource.match(/<select\b/g) || []).length, 13);
   assert.match(htmlSource, /custom-select\.js[\s\S]*app\.js/);
   assert.match(appSource, /customSelect\?\.enhanceAll\(document\)/);
   assert.match(appSource, /function syncCustomSelect\(select\)/);
@@ -110,11 +110,19 @@ test('AI 服务将连接测试与配置保存拆成两个明确动作', () => {
 
   assert.match(service, /id="ai-test"[^>]*>测试连接<\/button>/);
   assert.match(service, /id="ai-save"[^>]*>保存配置<\/button>/);
+  assert.match(service, /id="ai-provider"/);
+  assert.match(service, /id="ai-base-url"/);
+  assert.match(service, /value="deepseek"/);
+  assert.match(service, /value="openai"/);
+  assert.match(service, /value="custom"/);
   assert.doesNotMatch(service, /测试连接并保存/);
   assert.match(appSource, /\$\('#ai-test'\)\.addEventListener\('click'[\s\S]*window\.api\.testAi/);
+  assert.match(appSource, /window\.api\.testAi\(\{[\s\S]*providerId:[\s\S]*baseUrl:/);
   assert.match(appSource, /const aiSave = \$\('#ai-save'\)/);
   assert.match(appSource, /aiSave\.addEventListener\('click'[\s\S]*window\.api\.saveAi/);
-  assert.match(preloadSource, /saveAi:\s*apiKey\s*=>\s*ipcRenderer\.invoke\('ai:save'/);
+  assert.match(appSource, /window\.api\.saveAi\(\{[\s\S]*providerId:[\s\S]*baseUrl:/);
+  assert.match(preloadSource, /saveAi:\s*config\s*=>\s*ipcRenderer\.invoke\('ai:save'/);
+  assert.match(preloadSource, /testAi:\s*config\s*=>\s*ipcRenderer\.invoke\('ai:test'/);
 });
 
 test('软件启动时自动检查已保存的 AI 配置，且同一会话不会重复检查', () => {

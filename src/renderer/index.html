@@ -412,10 +412,26 @@
             <section class="card set-group ai-settings-panel" data-ai-panel="service">
               <div class="set-title">AI 服务</div>
               <div class="set-row">
-                <div class="set-info">DeepSeek API
-                  <div class="set-sub">使用你自己的 API Key。Key 保存在本机 Windows 安全存储中，页面默认只显示掩码。</div>
+                <div class="set-info">AI 平台
+                  <div class="set-sub">选择平台预设；自定义平台需使用 OpenAI 兼容接口。</div>
                 </div>
                 <span class="ai-state-badge" id="ai-state-badge">未配置</span>
+              </div>
+              <div class="set-row">
+                <div class="set-info">平台类型
+                  <div class="set-sub">预设平台会自动填入 API 地址，也可以切换到自定义兼容平台。</div>
+                </div>
+                <select id="ai-provider" class="ai-model-select" title="AI 平台">
+                  <option value="deepseek">DeepSeek</option>
+                  <option value="openai">OpenAI</option>
+                  <option value="custom">自定义 OpenAI 兼容</option>
+                </select>
+              </div>
+              <div class="set-row">
+                <div class="set-info">API 地址
+                  <div class="set-sub">用于连接接口的基础地址；预设平台会自动填入，也可以手动修改。</div>
+                </div>
+                <input type="url" id="ai-base-url" class="ai-base-url-input" placeholder="https://api.example.com/v1" autocomplete="off">
               </div>
               <div class="set-row ai-key-row">
                 <div class="set-info">API Key
@@ -667,6 +683,7 @@
   <script src="../lib/filter-presets.js"></script>
   <script src="../lib/text-search.js"></script>
   <script src="../lib/thinking-snapshot.js"></script>
+  <script src="../lib/ai-providers.js"></script>
   <script src="../lib/locale.js"></script>
   <script src="closure-autorefresh.js"></script>
   <script src="report-lifecycle.js"></script>
