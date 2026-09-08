@@ -1725,8 +1725,8 @@ body.textarea-resizing * { cursor: nwse-resize !important; user-select: none !im
 }
 .report-calendar-day:hover:not(:disabled) { border-color:var(--border-strong); background:var(--input-bg); color:var(--text); }
 .report-calendar-day.outside { color:var(--text-3); }
-.report-calendar-day.today { border-color:var(--text-2); }
-.report-calendar-day.selected-day { border-color:var(--accent); background:var(--accent); color:var(--accent-text); }
+.report-calendar-day.today { border-color:var(--accent); background:var(--accent-soft); color:var(--accent); }
+.report-calendar-day.selected-day { border-color:var(--accent); background:var(--accent-soft); color:var(--accent); }
 .report-calendar-day.selected-month { background:var(--accent-soft); color:var(--accent); }
 .report-calendar-day:disabled { opacity:.34; cursor:not-allowed; }
 .report-calendar-day:hover:not(:disabled) .report-calendar-record-dot { background:currentColor; }

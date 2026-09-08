@@ -35,3 +35,10 @@ test('选中周内悬停单日保持原有浅色层次并具备高对比度', ()
   assert.match(cssSource, /\.report-calendar-day:hover:not\(:disabled\) \.report-calendar-record-dot\s*\{[\s\S]*background:currentColor;/);
   assert.doesNotMatch(cssSource, /\.report-calendar-week\.selected-week \.report-calendar-day:hover:not\(:disabled\)\s*\{[\s\S]*background:var\(--accent\);/);
 });
+
+test('当天日期在不同报告周期中使用统一浅色标识', () => {
+  assert.match(cssSource, /\.report-calendar-day\.today\s*\{[\s\S]*border-color:var\(--accent\);[\s\S]*background:var\(--accent-soft\);[\s\S]*color:var\(--accent\);/);
+  assert.match(cssSource, /\.report-calendar-day\.selected-day\s*\{[\s\S]*border-color:var\(--accent\);[\s\S]*background:var\(--accent-soft\);[\s\S]*color:var\(--accent\);/);
+  assert.match(cssSource, /\.report-calendar-day\.selected-month\s*\{[\s\S]*background:var\(--accent-soft\);[\s\S]*color:var\(--accent\);/);
+  assert.doesNotMatch(cssSource, /\.report-calendar-day\.selected-day\s*\{[\s\S]*background:var\(--accent\);[\s\S]*color:var\(--accent-text\);/);
+});
