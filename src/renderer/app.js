@@ -3345,6 +3345,20 @@ function setMaskedAiKey(ai) {
   renderAiKeyToggle(false);
 }
 
+function readAiKeyDraft() {
+  const masked = aiKey.dataset.masked === 'true';
+  const saved = aiKey.dataset.saved === 'true';
+  const value = masked ? '' : aiKey.value.trim();
+  const configured = !!state.settings?.ai?.configured;
+  const preserveExistingApiKey = configured && (masked || saved);
+  return {
+    value,
+    useStoredApiKey: preserveExistingApiKey,
+    preserveExistingApiKey,
+    clearRequested: !masked && !saved && !value
+  };
+}
+
 aiKey.addEventListener('focus', () => {
   if (aiKey.dataset.masked !== 'true') return;
   aiKey.value = '';
@@ -3359,11 +3373,14 @@ aiKey.addEventListener('input', () => {
 });
 
 aiKey.addEventListener('blur', () => {
-  if (!aiKey.value.trim() && state.settings?.ai?.configured) setMaskedAiKey(state.settings.ai);
+  if (!aiKey.value.trim() && state.settings?.ai?.configured && aiKey.dataset.saved === 'true') {
+    setMaskedAiKey(state.settings.ai);
+  }
 });
 
 aiKeyToggle.addEventListener('click', async () => {
-  if (aiKey.dataset.masked === 'true' || (!aiKey.value && state.settings?.ai?.configured)) {
+  const draft = readAiKeyDraft();
+  if (draft.preserveExistingApiKey && !draft.value) {
     const res = await window.api.revealAiKey();
     if (!res.ok) { toast(uiText(res.error || '无法读取 API Key')); return; }
     aiKey.value = res.apiKey;
@@ -3966,14 +3983,16 @@ $('#ai-test').addEventListener('click', async () => {
   button.disabled = true;
   aiMsg.className = 'set-msg';
   aiMsg.textContent = uiText('正在测试连接并读取模型…');
-  const enteredKey = aiKey.dataset.masked === 'true' ? '' : aiKey.value.trim();
+  const draft = readAiKeyDraft();
+  const enteredKey = draft.value;
   let res;
   try {
     res = await window.api.testAi({
       requestId,
       providerId: aiProvider?.value || 'deepseek',
       baseUrl: aiBaseUrl?.value.trim() || '',
-      apiKey: enteredKey
+      apiKey: enteredKey,
+      useStoredApiKey: draft.useStoredApiKey
     });
   } catch (error) {
     res = { ok: false, error: error?.message || '连接失败' };
@@ -3986,7 +4005,8 @@ $('#ai-test').addEventListener('click', async () => {
     aiMsg.textContent = uiText(res.error || '连接失败');
     if (state.settings?.ai) state.settings.ai = res.ai || state.settings.ai;
     syncAiSettingsUI(state.settings?.ai);
-    if (!aiKey.value.trim() || aiKey.dataset.masked === 'true') setMaskedAiKey(state.settings?.ai);
+    const currentDraft = readAiKeyDraft();
+    if (currentDraft.preserveExistingApiKey && !currentDraft.value) setMaskedAiKey(state.settings?.ai);
     syncAiEntry();
     return;
   }
@@ -4007,11 +4027,14 @@ aiSave.addEventListener('click', async () => {
   aiSave.disabled = true;
   aiMsg.className = 'set-msg';
   aiMsg.textContent = uiText('正在保存 AI 配置…');
-  const enteredKey = aiKey.dataset.masked === 'true' ? '' : aiKey.value.trim();
+  const draft = readAiKeyDraft();
+  if (draft.clearRequested) cancelAiTestRun();
   const res = await window.api.saveAi({
     providerId: aiProvider?.value || 'deepseek',
     baseUrl: aiBaseUrl?.value.trim() || '',
-    apiKey: enteredKey
+    apiKey: draft.value,
+    preserveExistingApiKey: draft.preserveExistingApiKey,
+    clearApiKey: draft.clearRequested
   });
   aiSave.disabled = false;
   if (!res.ok) {

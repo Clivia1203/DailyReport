@@ -162,6 +162,22 @@ test('切换 AI 平台时会取消旧连接测试，避免旧请求阻塞新测�
   assert.match(appSource, /aiProvider\?\.addEventListener\('change',[\s\S]*cancelAiTestRun\(\)/);
 });
 
+test('空 API Key 不再回退旧凭据，保存空值会清除安全存储', () => {
+  const testStart = mainSource.indexOf("ipcMain.handle('ai:test'");
+  const testEnd = mainSource.indexOf("ipcMain.handle('ai:save'", testStart);
+  const testHandler = mainSource.slice(testStart, testEnd === -1 ? mainSource.length : testEnd);
+  const saveStart = mainSource.indexOf("ipcMain.handle('ai:save'");
+  const saveEnd = mainSource.indexOf("ipcMain.handle('ai:clear'", saveStart);
+  const saveHandler = mainSource.slice(saveStart, saveEnd === -1 ? mainSource.length : saveEnd);
+
+  assert.match(testHandler, /const useStoredApiKey = input\.useStoredApiKey !== false/);
+  assert.match(testHandler, /const key = suppliedKey \|\| \(useStoredApiKey \? apiKeyFromStorage\(\) : ''\)/);
+  assert.match(saveHandler, /preserveExistingApiKey/);
+  assert.match(saveHandler, /const clearRequested = input\.clearApiKey === true/);
+  assert.match(saveHandler, /if \(clearRequested\)[\s\S]*clearAiStoredCredential\(\)/);
+  assert.match(mainSource, /function clearAiStoredCredential\(\)/);
+});
+
 test('快速记录条按唤起代次隔离退出事件，避免托盘重呼出后被旧回调隐藏', () => {
   const hideStart = mainSource.indexOf("ipcMain.on('quick:hide'");
   const hideEnd = mainSource.indexOf("ipcMain.on('window:minimize'", hideStart);

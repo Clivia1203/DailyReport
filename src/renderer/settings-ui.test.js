@@ -139,6 +139,17 @@ test('AI 服务将连接测试与配置保存拆成两个明确动作', () => {
   assert.match(preloadSource, /cancelAiTest:\s*\(\)\s*=>\s*ipcRenderer\.send\('ai:test:cancel'\)/);
 });
 
+test('清空 API Key 后不回填旧掩码，并把清除意图传给主进程', () => {
+  assert.match(appSource, /function readAiKeyDraft\(\)[\s\S]*clearRequested[\s\S]*useStoredApiKey/);
+  assert.match(appSource, /aiKey\.dataset\.saved === 'true'/);
+  assert.match(appSource, /clearApiKey:\s*draft\.clearRequested/);
+  assert.match(appSource, /useStoredApiKey:\s*draft\.useStoredApiKey/);
+  assert.doesNotMatch(
+    appSource,
+    /if \(!aiKey\.value\.trim\(\) && state\.settings\?\.ai\?\.configured\) setMaskedAiKey\(state\.settings\.ai\)/
+  );
+});
+
 test('软件启动时自动检查已保存的 AI 配置，且同一会话不会重复检查', () => {
   assert.match(appSource, /let aiStartupCheckPromise\s*=\s*null/);
   assert.match(appSource, /function autoTestAiOnStartup\(\)/);

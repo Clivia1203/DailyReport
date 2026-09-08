@@ -728,6 +728,16 @@ function encryptApiKey(value) {
   return safeStorage.encryptString(value).toString('base64');
 }
 
+function clearAiStoredCredential() {
+  settings.ai.encryptedApiKey = '';
+  settings.ai.model = '';
+  settings.ai.closureModel = '';
+  settings.ai.models = [];
+  settings.ai.lastTestAt = 0;
+  settings.ai.lastTestOk = false;
+  settings.ai.lastError = '';
+}
+
 function aiPublicState(models = settings.ai.models) {
   const provider = getProvider(settings.ai.providerId);
   return {
@@ -1707,6 +1717,9 @@ ipcMain.on('ai:test:cancel', event => {
 
 ipcMain.handle('ai:test', async (event, payload = {}) => {
   const input = typeof payload === 'string' ? { apiKey: payload } : (payload || {});
+  const hasApiKeyField = Object.prototype.hasOwnProperty.call(input, 'apiKey');
+  const useStoredApiKey = input.useStoredApiKey !== false
+    && (!hasApiKeyField || input.useStoredApiKey === true);
   try {
     const request = beginAiTestRequest(event.sender.id, input.requestId);
     try {
@@ -1723,7 +1736,7 @@ ipcMain.handle('ai:test', async (event, payload = {}) => {
         return { ok: false, error: '切换 AI 平台后请重新填写 API Key', ai: aiPublicState() };
       }
       applyAiConnection(connection);
-      const key = suppliedKey || apiKeyFromStorage();
+      const key = suppliedKey || (useStoredApiKey ? apiKeyFromStorage() : '');
       if (!key) return { ok: false, error: '请先填写 API Key', ai: aiPublicState() };
 
       const models = await fetchAvailableModels(key, connection, request.controller.signal);
@@ -1765,13 +1778,23 @@ ipcMain.handle('ai:save', (_e, payload = {}) => {
   const input = typeof payload === 'string' ? { apiKey: payload } : (payload || {});
   try {
     const connection = aiConnection(input);
+    const hasApiKeyField = Object.prototype.hasOwnProperty.call(input, 'apiKey');
     const suppliedKey = String(input.apiKey || '').trim();
+    const preserveExistingApiKey = input.preserveExistingApiKey === true
+      || (!hasApiKeyField && input.clearApiKey !== true);
+    const clearRequested = input.clearApiKey === true
+      || (hasApiKeyField && !suppliedKey && !preserveExistingApiKey);
     const connectionChanged = settings.ai.providerId !== connection.providerId
       || settings.ai.baseUrl !== connection.baseUrl;
-    if (connectionChanged && !suppliedKey) {
+    if (connectionChanged && !suppliedKey && !clearRequested) {
       return { ok: false, error: '切换 AI 平台后请重新填写 API Key', ai: aiPublicState() };
     }
     applyAiConnection(connection);
+    if (clearRequested) {
+      clearAiStoredCredential();
+      saveSettings();
+      return { ok: true, ai: aiPublicState() };
+    }
     if (suppliedKey) settings.ai.encryptedApiKey = encryptApiKey(suppliedKey);
     if (!settings.ai.encryptedApiKey) return { ok: false, error: '请先填写 API Key', ai: aiPublicState() };
     saveSettings();
@@ -1782,13 +1805,7 @@ ipcMain.handle('ai:save', (_e, payload = {}) => {
 });
 
 ipcMain.handle('ai:clear', () => {
-  settings.ai.encryptedApiKey = '';
-  settings.ai.model = '';
-  settings.ai.closureModel = '';
-  settings.ai.models = [];
-  settings.ai.lastTestAt = 0;
-  settings.ai.lastTestOk = false;
-  settings.ai.lastError = '';
+  clearAiStoredCredential();
   saveSettings();
   return { ok: true, ai: aiPublicState() };
 });
