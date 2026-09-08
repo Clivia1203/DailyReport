@@ -2,6 +2,7 @@ const $ = s => document.querySelector(s);
 const thinkingState = window.DRThinkingState;
 const thinkingSnapshot = window.DRThinkingSnapshot;
 const customSelect = window.DRCustomSelect;
+const reportPeriodRules = window.DRReportPeriod;
 
 // 所有由应用生成的界面文案都从本地化层取值；日报原文、用户自定义提示词和 AI 正文不经过这里改写。
 function uiText(value) {
@@ -764,6 +765,31 @@ function currentReportPeriod() {
   };
 }
 
+function canViewReportPeriod(period) {
+  return reportPeriodRules.canNavigateToPeriod(period, state.entries, dateStr(Date.now()));
+}
+
+function isFutureEmptyReportPeriod(period) {
+  return reportPeriodRules.isFutureEmptyPeriod(period, state.entries, dateStr(Date.now()));
+}
+
+function shiftedReportPeriod(delta) {
+  if (state.report.type === 'custom' || !state.report.start) return null;
+  if (state.report.type === 'day') {
+    const next = shiftDateString(state.report.start, delta);
+    return { type: 'day', start: next, end: next };
+  }
+  if (state.report.type === 'week') {
+    const nextStart = shiftDateString(state.report.start, delta * 7);
+    return { type: 'week', start: nextStart, end: shiftDateString(nextStart, 6) };
+  }
+  const first = localDateFromString(state.report.start);
+  first.setMonth(first.getMonth() + delta, 1);
+  const start = dateStringFromDate(first);
+  const endDate = new Date(first.getFullYear(), first.getMonth() + 1, 0);
+  return { type: 'month', start, end: dateStringFromDate(endDate) };
+}
+
 function syncReportThinkingForPeriod() {
   const period = currentReportPeriod();
   let cached = reportThinkingCache.read(period);
@@ -818,12 +844,16 @@ function syncReportControls() {
   const job = currentReportJob();
   const busy = reportJobIsActive(job);
   const editing = state.report.editing;
+  const nextPeriod = shiftedReportPeriod(1);
+  const nextPeriodBlocked = !!nextPeriod && !canViewReportPeriod(nextPeriod);
   // 编辑态锁住整个报告周期，避免页面切到新周期而编辑框仍保留旧草稿。
   reportType.disabled = editing;
   reportStart.disabled = editing;
   reportEnd.disabled = editing;
   reportPrev.disabled = editing || state.report.type === 'custom';
-  reportNext.disabled = editing || state.report.type === 'custom';
+  reportNext.disabled = editing || state.report.type === 'custom' || nextPeriodBlocked;
+  reportNext.title = uiText(nextPeriodBlocked ? '未来空周期没有日报记录，无法查看。' : '下一周期');
+  reportNext.setAttribute('aria-label', reportNext.title);
   reportGenerate.disabled = busy;
   syncCustomSelect(reportType);
   reportGenerate.textContent = uiText(busy
@@ -844,6 +874,13 @@ function readReportPeriod() {
   } catch {
     return null;
   }
+}
+
+function normalizeSavedReportPeriod(saved) {
+  if (!saved || !isFutureEmptyReportPeriod(saved)) return saved;
+  const fallbackType = ['day', 'month'].includes(saved.type) ? saved.type : 'week';
+  const fallback = periodBounds(fallbackType);
+  return { type: fallbackType, start: fallback.start, end: fallback.end };
 }
 
 function rememberReportPeriod() {
@@ -1452,7 +1489,7 @@ async function openReportView() {
     return;
   }
   showView('report');
-  const savedPeriod = readReportPeriod();
+  const savedPeriod = normalizeSavedReportPeriod(readReportPeriod());
   if (savedPeriod) setReportPeriod(savedPeriod.type, savedPeriod.start, savedPeriod.end);
   else if (!state.report.start) setReportPeriod('week');
   state.report.data = null;
@@ -1502,19 +1539,9 @@ function generateReport(force = false) {
 
 function shiftReportPeriod(delta) {
   if (state.report.editing || state.report.type === 'custom') return;
-  if (state.report.type === 'day') {
-    const next = shiftDateString(state.report.start, delta);
-    setReportPeriod('day', next, next);
-  } else if (state.report.type === 'week') {
-    const nextStart = shiftDateString(state.report.start, delta * 7);
-    setReportPeriod('week', nextStart, shiftDateString(nextStart, 6));
-  } else {
-    const first = localDateFromString(state.report.start);
-    first.setMonth(first.getMonth() + delta, 1);
-    const start = dateStringFromDate(first);
-    const endDate = new Date(first.getFullYear(), first.getMonth() + 1, 0);
-    setReportPeriod('month', start, dateStringFromDate(endDate));
-  }
+  const nextPeriod = shiftedReportPeriod(delta);
+  if (!nextPeriod || !canViewReportPeriod(nextPeriod)) return;
+  setReportPeriod(nextPeriod.type, nextPeriod.start, nextPeriod.end);
   reloadReportContent();
 }
 
@@ -1526,19 +1553,31 @@ reportType.addEventListener('change', () => {
 });
 reportStart.addEventListener('change', () => {
   if (state.report.editing || reportType.value !== 'custom') return;
+  const previousPeriod = currentReportPeriod();
   state.report.start = reportStart.value;
   if (state.report.start > state.report.end) reportEnd.value = reportStart.value;
   state.report.end = reportEnd.value;
   state.report.periodLabel = reportPeriodLabel();
+  if (isFutureEmptyReportPeriod(currentReportPeriod())) {
+    setReportPeriod('custom', previousPeriod.start, previousPeriod.end);
+    toast(uiText('未来空周期没有日报记录，无法查看。'));
+    return;
+  }
   rememberReportPeriod();
   reloadReportContent();
 });
 reportEnd.addEventListener('change', () => {
   if (state.report.editing || reportType.value !== 'custom') return;
+  const previousPeriod = currentReportPeriod();
   if (reportEnd.value < reportStart.value) reportStart.value = reportEnd.value;
   state.report.start = reportStart.value;
   state.report.end = reportEnd.value;
   state.report.periodLabel = reportPeriodLabel();
+  if (isFutureEmptyReportPeriod(currentReportPeriod())) {
+    setReportPeriod('custom', previousPeriod.start, previousPeriod.end);
+    toast(uiText('未来空周期没有日报记录，无法查看。'));
+    return;
+  }
   rememberReportPeriod();
   reloadReportContent();
 });
@@ -4194,6 +4233,7 @@ async function refresh({ autoReason = 'source-change', schedule = true } = {}) {
     loadWorkbenchClosure({ autoReason, schedule });
   }
   renderExportPreview();
+  if (state.report.start) syncReportControls();
   if (typeof updateListThumb === 'function') updateListThumb();
 }
 

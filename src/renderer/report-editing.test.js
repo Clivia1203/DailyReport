@@ -85,7 +85,10 @@ test('报告编辑态锁定周期切换，避免编辑内容与页面周期割�
   assert.match(appSource, /reportStart\.disabled = editing;/);
   assert.match(appSource, /reportEnd\.disabled = editing;/);
   assert.match(appSource, /reportPrev\.disabled = editing \|\| state\.report\.type === 'custom';/);
-  assert.match(appSource, /reportNext\.disabled = editing \|\| state\.report\.type === 'custom';/);
+  assert.match(appSource, /const nextPeriod = shiftedReportPeriod\(1\);/);
+  assert.match(appSource, /reportNext\.disabled = editing \|\| state\.report\.type === 'custom' \|\| nextPeriodBlocked;/);
+  assert.match(appSource, /if \(!nextPeriod \|\| !canViewReportPeriod\(nextPeriod\)\) return;/);
+  assert.match(appSource, /function normalizeSavedReportPeriod\(saved\)/);
   assert.match(appSource, /function shiftReportPeriod\(delta\) \{\s*if \(state\.report\.editing \|\| state\.report\.type === 'custom'\) return;/);
   assert.match(appSource, /reportType\.addEventListener\('change', \(\) => \{\s*if \(state\.report\.editing\) return;/);
   assert.match(appSource, /reportStart\.addEventListener\('change', \(\) => \{\s*if \(state\.report\.editing \|\|/);
