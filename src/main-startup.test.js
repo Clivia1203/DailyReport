@@ -75,7 +75,7 @@ test('术语识别使用流式响应，模型生成期间持续回传 AI 输出'
 test('并发周期报告的进度事件携带任务 ID，避免切周后串到当前页面', () => {
   assert.match(mainSource, /const jobId = String\(payload\.jobId \|\| ''\)\.trim\(\)/);
   assert.match(mainSource, /send\('report:progress', \{ \.\.\.progress, jobId \}\)/);
-  assert.match(mainSource, /send\('report:progress', \{ phase: 'error', error: settings\.ai\.lastError, jobId \}\)/);
+  assert.match(mainSource, /send\('report:progress', \{ phase: 'error', error: message, jobId \}\)/);
 });
 
 test('报告流正常结束但缺少 finish_reason 时按完成处理，续写不重复开启思考', () => {
@@ -146,6 +146,9 @@ test('AI 连接测试不落盘，配置由独立保存动作持久化', () => {
   assert.notEqual(testStart, -1, 'AI 测试处理器不存在');
   assert.doesNotMatch(testHandler, /saveSettings\(\)/);
   assert.doesNotMatch(testHandler, /encryptApiKey\(/);
+  assert.match(testHandler, /const draftAi = \{/);
+  assert.match(testHandler, /applyAiConnectionTo\(draftAi, connection\)/);
+  assert.doesNotMatch(testHandler, /settings\.ai\.[A-Za-z]+\s*=/);
   assert.match(mainSource, /ipcMain\.handle\('ai:save'[\s\S]*saveSettings\(\)/);
 });
 
@@ -157,7 +160,7 @@ test('切换 AI 平台时会取消旧连接测试，避免旧请求阻塞新测�
   assert.match(mainSource, /const aiTestRequests = new Map\(\)/);
   assert.match(mainSource, /previous\?\.controller\.abort\(\)/);
   assert.match(mainSource, /ipcMain\.on\('ai:test:cancel'/);
-  assert.match(testHandler, /fetchAvailableModels\(key, connection, request\.controller\.signal\)/);
+  assert.match(testHandler, /fetchAvailableModels\(testKey, connection, request\.controller\.signal\)/);
   assert.match(testHandler, /request\.controller\.signal\.aborted/);
   assert.match(appSource, /const requestId = aiTestController\.start\(\)/);
   assert.match(appSource, /if \(!aiTestController\.isCurrent\(requestId\)\) return/);
@@ -173,7 +176,7 @@ test('空 API Key 不再回退旧凭据，保存空值会清除安全存储', ()
   const saveHandler = mainSource.slice(saveStart, saveEnd === -1 ? mainSource.length : saveEnd);
 
   assert.match(testHandler, /const useStoredApiKey = input\.useStoredApiKey !== false/);
-  assert.match(testHandler, /const key = suppliedKey \|\| \(useStoredApiKey \? apiKeyFromStorage\(\) : ''\)/);
+  assert.match(testHandler, /testKey = suppliedKey \|\| \(useStoredApiKey \? apiKeyFromStorage\(\) : ''\)/);
   assert.match(saveHandler, /preserveExistingApiKey/);
   assert.match(saveHandler, /const clearRequested = input\.clearApiKey === true/);
   assert.match(saveHandler, /if \(clearRequested\)[\s\S]*clearAiStoredCredential\(\)/);

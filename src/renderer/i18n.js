@@ -644,6 +644,8 @@
 
   let currentLocale = localeApi.DEFAULT_LOCALE;
   const loadedLocales = new Set();
+  const translationCache = new Map();
+  const TRANSLATION_CACHE_LIMIT = 2048;
   let localeLoadSerial = 0;
   try {
     currentLocale = localeApi.normalizeLocale(localStorage.getItem('locale:cache')) || currentLocale;
@@ -673,6 +675,8 @@
     }
     dictionaries[locale] = { ...dictionaries[locale], ...bundle };
     loadedLocales.add(locale);
+    // 外置语言包可能覆盖内置回退文案，不能让首次渲染的旧译文继续留在缓存中。
+    translationCache.clear();
     return dictionaries[locale];
   }
 
@@ -748,6 +752,10 @@
     if (match) return localized(`Workload · last ${match[1]} weeks`, `作業量 · 過去${match[1]}週間`);
     match = /^趋势 · 近 (\d+) 天$/.exec(source);
     if (match) return localized(`Trend · last ${match[1]} days`, `傾向 · 過去${match[1]}日`);
+    match = /^(\d+) 条$/.exec(source);
+    if (match) return localized(`${match[1]} entries`, `${match[1]}件`);
+    match = /^(\d+) 项$/.exec(source);
+    if (match) return localized(`${match[1]} items`, `${match[1]}項目`);
     match = /^(\d+) 月$/.exec(source);
     if (match) return locale === 'en-US' ? `Month ${match[1]}` : `${match[1]}月`;
     match = /^(\d+) 年$/.exec(source);
@@ -870,6 +878,13 @@
       : `「${match[1]}」に一致する用語がありません。上で追加できます。`;
     match = /^AI 已连接 · (.+)$/.exec(source);
     if (match) return locale === 'en-US' ? `AI connected · ${match[1]}` : `AI 接続済み · ${match[1]}`;
+    match = /^当前模型已更新为 (.+?)，(.+)$/.exec(source);
+    if (match) {
+      const detail = localizePattern(match[2]);
+      return locale === 'en-US'
+        ? `Current model updated to ${match[1]}; ${detail === match[2] ? match[2] : detail}`
+        : `現在のモデルを${match[1]}に更新しました。${detail}`;
+    }
     if (source === 'AI 已配置') return locale === 'en-US' ? 'AI configured' : 'AI 設定済み';
     if (source === 'AI 连接失败') return locale === 'en-US' ? 'AI connection failed' : 'AI 接続失敗';
     if (source === '未配置 AI') return locale === 'en-US' ? 'AI not configured' : 'AI 未設定';
@@ -937,7 +952,18 @@
     const leading = source.match(/^\s*/)?.[0] || '';
     const trailing = source.match(/\s*$/)?.[0] || '';
     const core = source.slice(leading.length, source.length - trailing.length || source.length);
-    const translatedCore = currentLocale === localeApi.DEFAULT_LOCALE ? core : localizePattern(core);
+    const cacheKey = `${currentLocale}\u0000${core}`;
+    let translatedCore = translationCache.get(cacheKey);
+    if (translatedCore === undefined) {
+      translatedCore = currentLocale === localeApi.DEFAULT_LOCALE ? core : localizePattern(core);
+      // 长文本可能来自动态内容；不缓存它们，避免本地化层成为隐性文本缓存。
+      if (core.length <= 240) {
+        translationCache.set(cacheKey, translatedCore);
+        while (translationCache.size > TRANSLATION_CACHE_LIMIT) {
+          translationCache.delete(translationCache.keys().next().value);
+        }
+      }
+    }
     const translated = leading + translatedCore + trailing;
     rememberRenderedSource(translated, source);
     return translated;

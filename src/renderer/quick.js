@@ -5,6 +5,8 @@ const dt = document.getElementById('quick-dt');
 const QUICK_WINDOW_BASE_HEIGHT = 176;
 const QUICK_INPUT_MAX_HEIGHT = 160;
 let quickInputBaseHeight = 0;
+let lastQuickWindowHeight = QUICK_WINDOW_BASE_HEIGHT;
+let quickClockTimer = null;
 
 function syncQuickInputLayout() {
   if (!input?.style) return;
@@ -18,7 +20,11 @@ function syncQuickInputLayout() {
   input.style.overflowY = naturalHeight > QUICK_INPUT_MAX_HEIGHT ? 'auto' : 'hidden';
 
   const targetWindowHeight = QUICK_WINDOW_BASE_HEIGHT + Math.max(0, nextHeight - quickInputBaseHeight);
-  window.api.resizeQuick?.(targetWindowHeight);
+  // 高度没有变化时不要重复走 IPC 和原生窗口动画；连续输入时主进程会复用同一段动画。
+  if (targetWindowHeight !== lastQuickWindowHeight) {
+    lastQuickWindowHeight = targetWindowHeight;
+    window.api.resizeQuick?.(targetWindowHeight);
+  }
 }
 
 const uiText = value => window.DRI18n?.t ? window.DRI18n.t(String(value ?? '')) : String(value ?? '');
@@ -170,6 +176,24 @@ window.api.onQuickReset(generation => {
   }
 });
 
+function scheduleQuickClock() {
+  if (quickClockTimer !== null) {
+    if (typeof clearInterval === 'function') clearInterval(quickClockTimer);
+    quickClockTimer = null;
+  }
+  if (document.hidden) return;
+  renderNow();
+  quickClockTimer = setInterval(() => {
+    if (document.hidden) {
+      if (typeof clearInterval === 'function') clearInterval(quickClockTimer);
+      quickClockTimer = null;
+      return;
+    }
+    renderNow();
+  }, 15000);
+}
+
+document.addEventListener?.('visibilitychange', scheduleQuickClock);
 renderNow();
 syncQuickInputLayout();
-setInterval(renderNow, 15000);
+scheduleQuickClock();

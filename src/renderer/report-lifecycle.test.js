@@ -50,6 +50,26 @@ test('不同报告周期分别保存 AI 工作过程，空周期不会继承其�
   assert.equal(cache.read(weekWithRecords), thinking);
 });
 
+test('思考过程缓存按最近使用顺序限制数量', () => {
+  const cache = createReportThinkingCache({ maxEntries: 2 });
+  const first = { type: 'week', start: '2026-08-03', end: '2026-08-09' };
+  const second = { type: 'week', start: '2026-08-10', end: '2026-08-16' };
+  const third = { type: 'week', start: '2026-08-17', end: '2026-08-23' };
+  const fourth = { type: 'week', start: '2026-08-24', end: '2026-08-30' };
+
+  cache.write(first, { content: '1' });
+  cache.write(second, { content: '2' });
+  cache.write(third, { content: '3' });
+  assert.equal(cache.read(first), null);
+  assert.deepEqual(cache.read(second), { content: '2' });
+
+  // 读取 second 会提升其新鲜度，fourth 到来时淘汰 third。
+  cache.write(fourth, { content: '4' });
+  assert.equal(cache.read(third), null);
+  assert.deepEqual(cache.read(second), { content: '2' });
+  assert.deepEqual(cache.read(fourth), { content: '4' });
+});
+
 test('生成中的工作台采用原位更新，避免重置展开按钮和转圈动画', () => {
   const { liveRenderStrategy } = require('./report-lifecycle');
   assert.equal(liveRenderStrategy({

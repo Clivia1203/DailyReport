@@ -1816,7 +1816,8 @@ body.textarea-resizing * { cursor: nwse-resize !important; user-select: none !im
 .modal-backdrop {
   position: fixed; inset: 0;
   background: var(--overlay);
-  backdrop-filter: blur(4px);
+  /* 全窗口模糊会触发整页软件光栅化，输入时容易出现卡顿和短暂色块；
+     使用纯色半透明遮罩保持层级即可。 */
   display: flex; align-items: center; justify-content: center;
   z-index: 80;
 }
@@ -1825,7 +1826,7 @@ body.textarea-resizing * { cursor: nwse-resize !important; user-select: none !im
 .modal {
   width: min(560px, calc(100vw - 48px));
   padding: 16px 18px;
-  box-shadow: var(--shadow-float); /* 悬浮元素，允许投影（ADR-0002） */
+  box-shadow: var(--shadow); /* 悬浮元素保留轻量投影，避免大范围光栅化 */
 }
 
 .modal-head {
@@ -2211,6 +2212,7 @@ body.textarea-resizing * { cursor: nwse-resize !important; user-select: none !im
 .report-content p { margin:8px 0; }
 .report-content ul, .report-content ol { margin:7px 0 12px 22px; }
 .report-content li { margin:4px 0; }
+.report-content code { padding:1px 4px; border:1px solid var(--border); border-radius:4px; background:var(--surface-2); font:12px Consolas, "Courier New", monospace; }
 .report-content hr { border:0; border-top:1px solid var(--border); margin:18px 0; }
 .report-empty { min-height:260px; display:grid; place-items:center; color:var(--text-3); text-align:center; }
 .report-plain { white-space:pre-wrap; font:13px/1.75 Consolas, "Courier New", monospace; color:var(--text); }

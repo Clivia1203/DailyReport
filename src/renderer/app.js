@@ -53,6 +53,10 @@ function createTerminologyThinking(visible = false) {
 
 const state = {
   entries: [],
+  needsVisibleRefresh: false,
+  aiStartupDeferred: false,
+  refreshRequestId: 0,
+  activityRenderKey: '',
   filter: { year: 'all', month: 'all', text: '' },
   rangeFocus: { type: 'all' }, // 范围聚焦（ADR-0003）：与年/月下拉互斥，搜索叠加
   savedFilters: [],
@@ -358,16 +362,72 @@ composerTs.addEventListener('input', () => {
 
 $('#btn-now').addEventListener('click', () => { tsTouched = false; syncComposerTime(); });
 
+function isRendererInteractive() {
+  const visible = !document.hidden && document.visibilityState !== 'hidden';
+  const focused = typeof document.hasFocus !== 'function' || document.hasFocus();
+  return visible && focused;
+}
+
 // 周期/焦点恢复时的公共校准：录入时间跟随 + 统计数字（跨零点翻卡）
 function recalibrate() {
+  if (!isRendererInteractive()) return;
   syncComposerTime();
   renderTodayPanel();
   renderStats();
 }
-setInterval(recalibrate, 30000);
-// 窗口从托盘恢复/重新获得焦点时立即校准（隐藏状态下定时器会被节流）
-document.addEventListener('visibilitychange', () => { if (!document.hidden) recalibrate(); });
-window.addEventListener('focus', recalibrate);
+
+function createVisibilityBoundTicker(task, delay) {
+  let timer = null;
+  const stop = () => {
+    if (timer !== null) {
+      clearTimeout(timer);
+      timer = null;
+    }
+  };
+  const schedule = () => {
+    stop();
+    if (!isRendererInteractive()) return;
+    timer = setTimeout(() => {
+      timer = null;
+      if (!isRendererInteractive()) return;
+      task();
+      schedule();
+    }, delay);
+  };
+  return { start: schedule, resume: schedule, stop };
+}
+
+const recalibrateTicker = createVisibilityBoundTicker(recalibrate, 30000);
+recalibrateTicker.start();
+
+function resumeRendererWork(reason = 'visible') {
+  if (!isRendererInteractive()) return;
+  resumeBackgroundUiTimers();
+  recalibrateTicker.resume();
+  recalibrate();
+  if (state.needsVisibleRefresh) {
+    refreshLocalizedViews();
+    refresh({ autoReason: reason, schedule: true });
+  }
+  if (state.settings?.ai?.configured) {
+    loadWorkbenchClosure({ autoReason: reason, schedule: true });
+    autoTestAiOnStartup().finally(() => resumeVisibleClosureAutomation(reason));
+  }
+}
+
+// 窗口从托盘恢复/重新获得焦点时立即校准；隐藏或失焦期间不运行周期计时器。
+document.addEventListener('visibilitychange', () => {
+  if (isRendererInteractive()) resumeRendererWork('visible');
+  else {
+    recalibrateTicker.stop();
+    pauseBackgroundUiTimers();
+  }
+});
+window.addEventListener('blur', () => {
+  recalibrateTicker.stop();
+  pauseBackgroundUiTimers();
+});
+window.addEventListener('focus', () => resumeRendererWork('focus'));
 
 function syncTextareaResizerVisibility(textarea) {
   const shell = textarea?.parentElement?.classList.contains('textarea-resize-shell')
@@ -485,14 +545,16 @@ async function saveComposer() {
   if (!text) { composerText.focus(); return; }
   const ts = composerTs.value ? new Date(composerTs.value).getTime() : Date.now();
   const res = await window.api.add(text, ts);
-  if (res.ok) {
-    composerText.value = '';
-    tsTouched = false;
-    syncComposerTime();
-    setComposerOpen(false);   // 保存后收起（宽屏下 CSS 强制常驻，不受影响）
-    toast(uiText('已记录 ✓'));
-    refresh();
+  if (!res?.ok) {
+    toast(uiText(res?.error || '保存失败'));
+    return;
   }
+  composerText.value = '';
+  tsTouched = false;
+  syncComposerTime();
+  setComposerOpen(false);   // 保存后收起（宽屏下 CSS 强制常驻，不受影响）
+  toast(uiText('已记录 ✓'));
+  refresh();
 }
 
 /* ---------- 导出模态 ---------- */
@@ -1166,7 +1228,29 @@ function restoreReportEditScroll(position) {
   });
 }
 
-// 仅渲染标题、列表和段落，AI 返回内容一律使用 textContent，避免把远程内容当 HTML 执行。
+function appendInlineMarkdown(parent, value) {
+  const text = String(value || '');
+  const tokenPattern = /(\*\*[^*\n]+\*\*|__[^_\n]+__|`[^`\n]+`)/g;
+  let cursor = 0;
+  for (const match of text.matchAll(tokenPattern)) {
+    const index = match.index || 0;
+    if (index > cursor) parent.appendChild(document.createTextNode(text.slice(cursor, index)));
+    const token = match[0];
+    if (token.startsWith('`')) {
+      const code = document.createElement('code');
+      code.textContent = token.slice(1, -1);
+      parent.appendChild(code);
+    } else {
+      const strong = document.createElement('strong');
+      strong.textContent = token.slice(2, -2);
+      parent.appendChild(strong);
+    }
+    cursor = index + token.length;
+  }
+  if (cursor < text.length) parent.appendChild(document.createTextNode(text.slice(cursor)));
+}
+
+// 仅渲染标题、列表和段落，AI 返回内容一律通过 textContent/文本节点写入，避免把远程内容当 HTML 执行。
 function renderMarkdown(target, markdown) {
   target.innerHTML = '';
   let list = null;
@@ -1177,7 +1261,7 @@ function renderMarkdown(target, markdown) {
     if (heading) {
       list = null;
       const el = document.createElement(`h${Math.min(6, heading[1].length)}`);
-      el.textContent = heading[2];
+      appendInlineMarkdown(el, heading[2]);
       target.appendChild(el);
       continue;
     }
@@ -1185,14 +1269,22 @@ function renderMarkdown(target, markdown) {
     if (bullet) {
       if (!list || list.tagName !== 'UL') { list = document.createElement('ul'); target.appendChild(list); }
       const li = document.createElement('li');
-      li.textContent = bullet[1];
+      appendInlineMarkdown(li, bullet[1]);
+      list.appendChild(li);
+      continue;
+    }
+    const ordered = /^\d+[.)]\s+(.+)$/.exec(line);
+    if (ordered) {
+      if (!list || list.tagName !== 'OL') { list = document.createElement('ol'); target.appendChild(list); }
+      const li = document.createElement('li');
+      appendInlineMarkdown(li, ordered[1]);
       list.appendChild(li);
       continue;
     }
     if (/^---+$/.test(line)) { list = null; target.appendChild(document.createElement('hr')); continue; }
     list = null;
     const p = document.createElement('p');
-    p.textContent = line;
+    appendInlineMarkdown(p, line);
     target.appendChild(p);
   }
 }
@@ -1232,6 +1324,22 @@ function renderReportSources() {
 }
 
 let reportThinkingTimer = null;
+
+function pauseBackgroundUiTimers() {
+  clearInterval(reportThinkingTimer);
+  reportThinkingTimer = null;
+  clearInterval(closureThinkingTimer);
+  closureThinkingTimer = null;
+  clearInterval(terminologyThinkingTimer);
+  terminologyThinkingTimer = null;
+}
+
+function resumeBackgroundUiTimers() {
+  if (!isRendererInteractive()) return;
+  syncReportThinkingTimer();
+  syncClosureThinkingTimer();
+  syncTerminologyThinkingTimer();
+}
 
 function renderReportThinking() {
   const thinking = state.report.thinking || thinkingState.createThinkingState();
@@ -1278,7 +1386,7 @@ function saveReportThinking(period, thinking) {
   reportThinkingCache.write(period, thinking);
   if (sameReportPeriod(period, currentReportPeriod())) {
     state.report.thinking = thinking;
-    renderReportThinking();
+    if (isRendererInteractive() && !viewReport.hidden) renderReportThinking();
   }
   return thinking;
 }
@@ -1367,9 +1475,9 @@ function hideReportThinking() {
 }
 
 function syncReportThinkingTimer() {
-  if (reportGenerationManager.hasActiveJobs()) {
-    if (!reportThinkingTimer) reportThinkingTimer = setInterval(() => {
-      if (!viewReport.hidden) renderReportThinking();
+  if (reportGenerationManager.hasActiveJobs() && isRendererInteractive()) {
+    if (reportThinkingTimer === null) reportThinkingTimer = setInterval(() => {
+      if (isRendererInteractive() && !viewReport.hidden) renderReportThinking();
     }, 1000);
     return;
   }
@@ -1584,8 +1692,13 @@ function syncAiEntry() {
 function autoTestAiOnStartup() {
   if (aiStartupCheckPromise) return aiStartupCheckPromise;
   if (aiStartupCheckCompleted || !state.settings?.ai?.configured) return Promise.resolve(null);
+  if (!isRendererInteractive()) {
+    state.aiStartupDeferred = true;
+    return Promise.resolve(null);
+  }
 
   const requestId = aiTestController.start();
+  state.aiStartupDeferred = false;
   aiConnectionChecking = true;
   syncAiSettingsUI(state.settings.ai);
   syncAiEntry();
@@ -2011,7 +2124,17 @@ function syncFilterControls(filteredCount = filteredEntries().length) {
     : `${state.entries.length} 条记录`);
 }
 
+let filterSearchTimer = null;
+
+function cancelFilterSearch() {
+  if (filterSearchTimer !== null) {
+    clearTimeout(filterSearchTimer);
+    filterSearchTimer = null;
+  }
+}
+
 function resetFilters() {
+  cancelFilterSearch();
   state.filter = { year: 'all', month: 'all', text: '' };
   state.rangeFocus = { type: 'all' };
   fYear.value = 'all';
@@ -2024,6 +2147,7 @@ function resetFilters() {
 }
 
 function applyFilterSnapshot(filter) {
+  cancelFilterSearch();
   const snapshot = window.DRFilterPresets.normalizeFilterSnapshot(filter);
   state.filter = { year: snapshot.year, month: snapshot.month, text: snapshot.text };
   state.rangeFocus = snapshot.rangeFocus;
@@ -2077,7 +2201,11 @@ function isFiltering() {
 
 fText.addEventListener('input', () => {
   state.filter.text = fText.value.trim();
-  renderList();
+  cancelFilterSearch();
+  filterSearchTimer = setTimeout(() => {
+    filterSearchTimer = null;
+    renderList();
+  }, 150);
 });
 
 fSaved.addEventListener('change', () => {
@@ -2158,6 +2286,19 @@ const DR = window.DRStats;
 const weeklyWorkbench = $('#recent-summary-panel');
 let updateWorkbenchThumb = () => false;
 let closureThinkingTimer = null;
+
+function syncClosureThinkingTimer() {
+  if (state.workbench.closure.generating && isRendererInteractive()) {
+    if (closureThinkingTimer === null) {
+      closureThinkingTimer = setInterval(() => {
+        if (isClosureWorkbenchVisible()) renderWeeklyWorkbench();
+      }, 1000);
+    }
+    return;
+  }
+  clearInterval(closureThinkingTimer);
+  closureThinkingTimer = null;
+}
 
 // 事件委托绑定在稳定的父节点上，卡片刷新时不会丢失展开/收起操作。
 weeklyWorkbench.addEventListener('click', event => {
@@ -2524,6 +2665,7 @@ async function loadWorkbenchClosure({
   autoReason = 'source-change',
   schedule = true
 } = {}) {
+  if (!isRendererInteractive()) return null;
   const requestId = ++workbenchClosureRequestId;
   const closure = state.workbench.closure;
   if (closure.generating) return;
@@ -2597,7 +2739,8 @@ async function generateWorkbenchClosure(force = false, { automatic = false } = {
   closure.thinking = createClosureThinking(true);
   closure.thinking.progressNote = closure.progressNote;
   clearInterval(closureThinkingTimer);
-  closureThinkingTimer = setInterval(() => renderWeeklyWorkbench(), 1000);
+  closureThinkingTimer = null;
+  syncClosureThinkingTimer();
   renderWeeklyWorkbench();
   let completed = false;
   try {
@@ -2622,9 +2765,8 @@ async function generateWorkbenchClosure(force = false, { automatic = false } = {
     closure.thinking.progressNote = closure.error;
     if (!automatic) toast(uiText(closure.error));
   } finally {
-    clearInterval(closureThinkingTimer);
-    closureThinkingTimer = null;
     closure.generating = false;
+    syncClosureThinkingTimer();
     closureAutoRefresh.endAttempt();
     renderWeeklyWorkbench();
     if (completed) {
@@ -2786,7 +2928,7 @@ window.api.onClosureProgress(progress => {
     text: progress.phase === 'thinking' ? progress.text : ''
   });
   closure.thinking.progressNote = closure.progressNote;
-  renderWeeklyWorkbench();
+  if (isClosureWorkbenchVisible()) renderWeeklyWorkbench();
 });
 
 syncWeeklyWorkbenchViewport();
@@ -2982,7 +3124,14 @@ function renderHistogramPanel(days) {
   return panel;
 }
 
-function renderActivity() {
+function renderActivity({ force = false } = {}) {
+  const entryKey = state.entries
+    .map(entry => `${entry.id || ''}:${entry.ts || 0}`)
+    .sort()
+    .join('|');
+  const renderKey = `${uiLocale()}|${dateStr(Date.now())}|${entryKey}`;
+  if (!force && state.activityRenderKey === renderKey) return;
+  state.activityRenderKey = renderKey;
   const weeks = DR.heatmapWeeks(state.entries, Date.now(), 26);
   const days = DR.dayCounts(state.entries, Date.now(), 14);
   const panels = document.createElement('div');
@@ -3143,7 +3292,11 @@ function startEdit(el, e) {
     const text = ta.value.trim();
     if (!text) { ta.focus(); return; }
     const ts = tsInput.value ? new Date(tsInput.value).getTime() : e.ts;
-    await window.api.update(e.id, { text, ts });
+    const res = await window.api.update(e.id, { text, ts });
+    if (!res?.ok) {
+      toast(uiText(res?.error || '保存失败'));
+      return;
+    }
     toast(uiText('已更新 ✓'));
     refresh();
   };
@@ -3160,7 +3313,11 @@ function startEdit(el, e) {
 }
 
 async function removeEntry(e) {
-  await window.api.remove(e.id);
+  const res = await window.api.remove(e.id);
+  if (!res?.ok) {
+    toast(uiText(res?.error || '删除失败'));
+    return;
+  }
   refresh();
   toast(uiText('已删除 1 条记录'), {
     label: '撤销',
@@ -3290,6 +3447,19 @@ let editingTerminologyId = '';
 let templateType = 'week';
 let terminologyDiscoveryRequest = null;
 let terminologyThinkingTimer = null;
+
+function syncTerminologyThinkingTimer() {
+  if (state.terminologyDiscovery.running && isRendererInteractive()) {
+    if (terminologyThinkingTimer === null) {
+      terminologyThinkingTimer = setInterval(() => {
+        if (isRendererInteractive()) renderTerminologyThinking();
+      }, 1000);
+    }
+    return;
+  }
+  clearInterval(terminologyThinkingTimer);
+  terminologyThinkingTimer = null;
+}
 let aiStartupCheckPromise = null;
 let aiStartupCheckCompleted = false;
 let aiStartupCheckEpoch = 0;
@@ -3434,6 +3604,12 @@ async function loadSettingsUI() {
   }
   refreshLocalizedViews();
   renderWeeklyWorkbench();
+  if (!isRendererInteractive()) {
+    // 静默启动只加载必要设置，不联网、不扫描历史闭环；恢复可见并获得焦点后统一补做。
+    state.needsVisibleRefresh = true;
+    state.aiStartupDeferred = !!s.ai?.configured;
+    return;
+  }
   loadWorkbenchClosure({ autoReason: 'startup', schedule: false });
   autoTestAiOnStartup().finally(() => {
     // 首次启动的连接检查结束后，只在近期闭环实际可见时启动后续 AI 任务。
@@ -3442,6 +3618,10 @@ async function loadSettingsUI() {
 }
 
 function refreshLocalizedViews() {
+  if (!isRendererInteractive()) {
+    state.needsVisibleRefresh = true;
+    return;
+  }
   const editingEntry = listEl?.querySelector('.entry.edit');
   renderTodayPanel();
   renderStats();
@@ -3707,7 +3887,6 @@ function renderTerminologyDiscoveryUI() {
   terminologyDiscover.textContent = uiText(discovery.initialized ? '重新识别并合并' : '识别全部日报');
 
   if (ui.running) {
-    terminologyDiscoveryStatus.textContent = uiText(terminologyDiscoveryStatus.textContent);
     terminologyDiscoveryStatus.textContent = ui.note || '正在读取全部日报；不会修改原始记录。';
     terminologyDiscoveryStatus.textContent = uiText(terminologyDiscoveryStatus.textContent);
     return;
@@ -3734,14 +3913,14 @@ async function discoverTerminology(force = false, { silent = false } = {}) {
   if (terminologyDiscoveryRequest) return terminologyDiscoveryRequest;
   if (!state.settings?.ai?.configured) return null;
 
-  clearInterval(terminologyThinkingTimer);
+  syncTerminologyThinkingTimer();
   state.terminologyDiscovery.thinking = createTerminologyThinking(true);
   state.terminologyDiscovery.running = true;
   state.terminologyDiscovery.error = '';
   state.terminologyDiscovery.note = force ? '正在重新读取全部日报…' : '正在读取全部日报…';
   state.terminologyDiscovery.thinking.progressNote = state.terminologyDiscovery.note;
   renderTerminologyDiscoveryUI();
-  terminologyThinkingTimer = setInterval(renderTerminologyThinking, 1000);
+  syncTerminologyThinkingTimer();
 
   const request = window.api.discoverTerminology({ force });
   terminologyDiscoveryRequest = request.then(res => {
@@ -3795,9 +3974,8 @@ async function discoverTerminology(force = false, { silent = false } = {}) {
     if (!silent) toast(uiText(state.terminologyDiscovery.error));
     return { ok: false, error: state.terminologyDiscovery.error };
   }).finally(() => {
-    clearInterval(terminologyThinkingTimer);
-    terminologyThinkingTimer = null;
     state.terminologyDiscovery.running = false;
+    syncTerminologyThinkingTimer();
     renderTerminologyDiscoveryUI();
     terminologyDiscoveryRequest = null;
   });
@@ -3851,7 +4029,7 @@ window.api.onTerminologyProgress(progress => {
   thinking.contentLength = thinking.content.length;
   thinking.progressNote = state.terminologyDiscovery.error || state.terminologyDiscovery.note;
   state.terminologyDiscovery.thinking = thinking;
-  renderTerminologyDiscoveryUI();
+  if (isRendererInteractive()) renderTerminologyDiscoveryUI();
 });
 
 function syncThemeSeg() {
@@ -4553,7 +4731,18 @@ document.querySelectorAll('textarea[data-resizable="true"]').forEach(installText
 customSelect?.enhanceAll(document);
 
 async function refresh({ autoReason = 'source-change', schedule = true } = {}) {
-  state.entries = await window.api.list();
+  if (!isRendererInteractive()) {
+    state.needsVisibleRefresh = true;
+    return;
+  }
+  const requestId = ++state.refreshRequestId;
+  const entries = await window.api.list();
+  if (requestId !== state.refreshRequestId || !isRendererInteractive()) {
+    state.needsVisibleRefresh = true;
+    return;
+  }
+  state.entries = Array.isArray(entries) ? entries : [];
+  state.needsVisibleRefresh = false;
   renderTodayPanel();
   renderStats();
   renderActivity();

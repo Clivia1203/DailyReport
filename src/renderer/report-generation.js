@@ -15,14 +15,28 @@
     return !!job && ACTIVE_STATUSES.has(job.status);
   }
 
-  function createReportGenerationManager({ maxConcurrent = 2, run, idFactory } = {}) {
+  function compactJobResult(result) {
+    if (!result || typeof result !== 'object' || Array.isArray(result)) return result;
+    const compact = { ...result };
+    if (typeof compact.content === 'string') delete compact.content;
+    if (typeof compact.thinking === 'string') delete compact.thinking;
+    if (compact.report && typeof compact.report === 'object' && !Array.isArray(compact.report)) {
+      const { content, thinking, ...report } = compact.report;
+      compact.report = report;
+    }
+    return compact;
+  }
+
+  function createReportGenerationManager({ maxConcurrent = 2, maxCompletedJobs = 8, run, idFactory } = {}) {
     if (typeof run !== 'function') {
       throw new TypeError('报告生成任务必须提供 run 函数');
     }
 
     const limit = Math.max(1, Math.floor(Number(maxConcurrent) || 1));
+    const completedLimit = Math.max(1, Math.floor(Number(maxCompletedJobs) || 1));
     const jobs = new Map();
     const periodJobs = new Map();
+    const completedOrder = [];
     const queue = [];
     const listeners = new Set();
     let activeCount = 0;
@@ -65,7 +79,8 @@
 
     function settle(job, status, result, error) {
       job.status = status;
-      job.result = result || null;
+      const completionResult = result || null;
+      job.result = compactJobResult(completionResult);
       job.error = error || null;
       job.finishedAt = Date.now();
 
@@ -73,10 +88,20 @@
       emit({
         type: status === 'succeeded' ? 'completed' : 'failed',
         job: snapshot,
-        result,
+        result: completionResult,
         error
       });
-      job.resolve({ job: snapshot, result, error });
+      job.resolve({ job: snapshot, result: completionResult, error });
+
+      completedOrder.push(job.id);
+      while (completedOrder.length > completedLimit) {
+        const oldId = completedOrder.shift();
+        const old = jobs.get(oldId);
+        if (!old || isReportJobActive(old)) continue;
+        jobs.delete(oldId);
+        const key = reportPeriodKey(old.period);
+        if (periodJobs.get(key) === oldId) periodJobs.delete(key);
+      }
     }
 
     function pump() {
@@ -168,6 +193,7 @@
       if (Array.from(jobs.values()).some(isReportJobActive)) return false;
       jobs.clear();
       periodJobs.clear();
+      completedOrder.length = 0;
       queue.length = 0;
       return true;
     }
@@ -192,7 +218,8 @@
       pendingCount() {
         return queue.filter(jobId => jobs.get(jobId)?.status === 'queued').length;
       },
-      maxConcurrent: limit
+      maxConcurrent: limit,
+      maxCompletedJobs: completedLimit
     };
   }
 

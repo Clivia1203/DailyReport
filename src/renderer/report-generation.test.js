@@ -102,3 +102,25 @@ test('进度事件绑定任务 ID 和周期，切周不会改变事件归属', a
   resolveRun({ ok: true });
   await task.completion;
 });
+
+test('已完成任务只保留有限元数据，不长期持有完整报告正文', async () => {
+  let nextId = 0;
+  const manager = createReportGenerationManager({
+    maxConcurrent: 1,
+    idFactory: () => `job-${++nextId}`,
+    run: ({ jobId }) => Promise.resolve({
+      ok: true,
+      report: { id: `report-${jobId}`, content: 'x'.repeat(10000) }
+    })
+  });
+  const tasks = Array.from({ length: 10 }, (_value, index) => manager.enqueue({
+    period: { type: 'week', start: `2026-09-${String(index + 1).padStart(2, '0')}`, end: `2026-09-${String(index + 7).padStart(2, '0')}` }
+  }));
+  await Promise.all(tasks.map(task => task.completion));
+
+  assert.equal(manager.get('job-1'), null);
+  const recent = manager.get('job-10');
+  assert.equal(recent.status, 'succeeded');
+  assert.equal(recent.result.report.content, undefined);
+  assert.equal(recent.result.report.id, 'report-job-10');
+});

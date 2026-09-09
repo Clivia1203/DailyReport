@@ -103,6 +103,24 @@ test('报告缓存状态、问候语和日期完整切换语言', async () => {
   );
 });
 
+test('动态数量和模型更新状态在中英日之间都能切换', async () => {
+  const i18n = loadI18n();
+  await i18n.setLocale('en-US');
+  assert.equal(i18n.t('3 条'), '3 entries');
+  assert.equal(i18n.t('2 项'), '2 items');
+  assert.equal(
+    i18n.t('当前模型已更新为 gpt-5，总结已生成，已保留全部原始记录。'),
+    'Current model updated to gpt-5; Summary generated; all original records are preserved.'
+  );
+  await i18n.setLocale('ja-JP');
+  assert.equal(i18n.t('3 条'), '3件');
+  assert.equal(i18n.t('2 项'), '2項目');
+  assert.equal(
+    i18n.t('当前模型已更新为 gpt-5，总结已生成，已保留全部原始记录。'),
+    '現在のモデルをgpt-5に更新しました。まとめを生成しました。元の記録はすべて保持されています。'
+  );
+});
+
 test('动态节点记录源文案后可以连续切换语言', async () => {
   const fake = createFakeDocument();
   const i18n = loadI18n(fake);

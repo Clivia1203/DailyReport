@@ -27,14 +27,27 @@
     return [type, start, end].map(value => String(value || '')).join('|');
   }
 
-  function createReportThinkingCache() {
+  function createReportThinkingCache({ maxEntries = 12 } = {}) {
     const snapshots = new Map();
+    const limit = Math.max(1, Math.floor(Number(maxEntries) || 1));
     return {
       read(period) {
-        return snapshots.get(reportThinkingKey(period)) || null;
+        const key = reportThinkingKey(period);
+        const value = snapshots.get(key) || null;
+        if (value) {
+          // 读取也算一次使用，避免正在反复查看的周期被淘汰。
+          snapshots.delete(key);
+          snapshots.set(key, value);
+        }
+        return value;
       },
       write(period, thinking) {
-        if (thinking) snapshots.set(reportThinkingKey(period), thinking);
+        if (thinking) {
+          const key = reportThinkingKey(period);
+          snapshots.delete(key);
+          snapshots.set(key, thinking);
+          while (snapshots.size > limit) snapshots.delete(snapshots.keys().next().value);
+        }
         return thinking;
       },
       clear() {

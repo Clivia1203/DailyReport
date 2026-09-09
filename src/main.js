@@ -101,6 +101,7 @@ const {
   filterResolvedClosureSuggestions
 } = require('./lib/closure-utils');
 const { createQuickBlurController } = require('./lib/quick-blur-controller');
+const { createBufferedJsonStore } = require('./lib/buffered-json-store');
 const {
   DEFAULT_PROVIDER_ID,
   getProvider,
@@ -505,27 +506,69 @@ function dataFile() {
   return path.join(app.getPath('userData'), 'data.json');
 }
 
-function loadDB() {
-  try {
-    const db = JSON.parse(fs.readFileSync(dataFile(), 'utf8'));
-    if (db && Array.isArray(db.entries)) {
-      return {
-        version: 2,
-        entries: db.entries,
-        reports: Array.isArray(db.reports) ? db.reports : [],
-        closureSummaries: Array.isArray(db.closureSummaries) ? db.closureSummaries : []
-      };
-    }
-  } catch { /* 首次运行或文件损坏，返回空库 */ }
+function normalizeDB(db) {
+  if (db && Array.isArray(db.entries)) {
+    return {
+      version: 2,
+      entries: db.entries,
+      reports: Array.isArray(db.reports) ? db.reports : [],
+      closureSummaries: Array.isArray(db.closureSummaries) ? db.closureSummaries : []
+    };
+  }
   return { version: 2, entries: [], reports: [], closureSummaries: [] };
 }
 
-function saveDB(db) {
+function readDBFromDisk() {
+  try {
+    return normalizeDB(JSON.parse(fs.readFileSync(dataFile(), 'utf8')));
+  } catch { /* 首次运行或文件损坏，返回空库 */ }
+  return normalizeDB(null);
+}
+
+function writeDBToDisk(db) {
   const file = dataFile();
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const tmp = file + '.tmp';
   fs.writeFileSync(tmp, JSON.stringify(db, null, 2), 'utf8');
   fs.renameSync(tmp, file);
+}
+
+function dbFileSignature() {
+  try {
+    const stat = fs.statSync(dataFile());
+    return `${stat.mtimeMs}:${stat.size}`;
+  } catch {
+    return 'missing';
+  }
+}
+
+let loadedDb = null;
+let dbRevision = 0;
+const dbStore = createBufferedJsonStore({
+  read: readDBFromDisk,
+  write: writeDBToDisk,
+  signature: dbFileSignature,
+  delay: 350,
+  onError: error => console.error('[日报随手记] data.json 延迟写入失败，将在下次保存或退出时重试', error)
+});
+
+function loadDB() {
+  const db = dbStore.load();
+  if (db !== loadedDb) {
+    loadedDb = db;
+    dbRevision += 1;
+  }
+  return db;
+}
+
+function saveDB(db, options = {}) {
+  loadedDb = db;
+  dbRevision += 1;
+  return dbStore.save(db, options);
+}
+
+function flushDB() {
+  return dbStore.flush();
 }
 
 // 多个周期并发生成时，报告完成时间可能不同；串行合并写入，避免后完成的任务覆盖先完成的报告。
@@ -535,7 +578,7 @@ function appendReportRecord(report) {
   const write = () => {
     const db = loadDB();
     db.reports.push(report);
-    saveDB(db);
+    saveDB(db, { immediate: true });
   };
   const next = reportPersistenceChain.then(write, write);
   reportPersistenceChain = next.catch(() => {});
@@ -570,7 +613,7 @@ function reportForClient(report) {
   return { ...report, content: readReportContent(report) };
 }
 
-function persistReportContent(report) {
+function persistReportContent(report, { uniqueFile = false } = {}) {
   if (!report?.id) return;
   const content = String(report.content || '');
   if (content.length <= REPORT_INLINE_CONTENT_LIMIT) {
@@ -584,7 +627,11 @@ function persistReportContent(report) {
 
   const dir = reportContentDir();
   fs.mkdirSync(dir, { recursive: true });
-  const fileName = reportContentFileName(report.id);
+  // 恢复备份时使用新文件名，避免恢复过程覆盖现有报告正文；即使后续设置写入失败，
+  // 回滚后的旧报告仍然指向原文件。普通编辑继续使用稳定文件名，便于复用与读取。
+  const fileName = uniqueFile
+    ? reportContentFileName(`${report.id}-${crypto.randomUUID()}`)
+    : reportContentFileName(report.id);
   const file = path.join(dir, fileName);
   const tmp = file + '.tmp';
   fs.writeFileSync(tmp, content, 'utf8');
@@ -687,8 +734,6 @@ function normalizeRestoredSettings(snapshot) {
 
 /* ---------------- 时间与导出 ---------------- */
 
-const WEEKDAYS = ['日', '一', '二', '三', '四', '五', '六'];
-
 function localDateStr(ts) {
   const d = new Date(ts);
   const p = n => String(n).padStart(2, '0');
@@ -699,10 +744,6 @@ function localTimeStr(ts) {
   const d = new Date(ts);
   const p = n => String(n).padStart(2, '0');
   return `${p(d.getHours())}:${p(d.getMinutes())}`;
-}
-
-function weekdayOf(dateStr) {
-  return WEEKDAYS[new Date(dateStr + 'T00:00:00').getDay()];
 }
 
 function localizedWeekday(dateStr, locale = settings.locale) {
@@ -741,11 +782,43 @@ function apiKeyFromStorage() {
   } catch { return ''; }
 }
 
+function maskApiKeyValue(key) {
+  const value = String(key || '');
+  if (!value) return '';
+  if (value.length <= 8) return '••••••••';
+  return `${value.slice(0, 3)}${'•'.repeat(Math.min(16, Math.max(8, value.length - 7)))}${value.slice(-4)}`;
+}
+
 function maskedApiKey() {
   const key = apiKeyFromStorage();
-  if (!key) return '';
-  if (key.length <= 8) return '••••••••';
-  return `${key.slice(0, 3)}${'•'.repeat(Math.min(16, Math.max(8, key.length - 7)))}${key.slice(-4)}`;
+  return maskApiKeyValue(key);
+}
+
+function aiPublicState(models = settings.ai.models, source = settings.ai, options = {}) {
+  const target = source && typeof source === 'object' ? source : settings.ai;
+  const provider = getProvider(target.providerId);
+  const configured = options.configured === undefined
+    ? !!target.encryptedApiKey
+    : !!options.configured;
+  const masked = options.maskedApiKey === undefined
+    ? (target === settings.ai ? maskedApiKey() : '')
+    : String(options.maskedApiKey || '');
+  return {
+    configured,
+    providerId: provider.id,
+    providerName: provider.label,
+    maskedApiKey: masked,
+    baseUrl: target.baseUrl,
+    model: target.model,
+    closureModel: target.closureModel,
+    models: Array.isArray(models) ? models : [],
+    reasoningEffort: normalizeReasoningEffort(target.reasoningEffort),
+    closureReasoningEffort: normalizeReasoningEffort(target.closureReasoningEffort),
+    supportsReasoningControl: provider.supportsReasoningControl,
+    lastTestAt: target.lastTestAt,
+    lastTestOk: target.lastTestOk,
+    lastError: target.lastError
+  };
 }
 
 function encryptApiKey(value) {
@@ -765,26 +838,6 @@ function clearAiStoredCredential() {
   settings.ai.lastError = '';
 }
 
-function aiPublicState(models = settings.ai.models) {
-  const provider = getProvider(settings.ai.providerId);
-  return {
-    configured: !!settings.ai.encryptedApiKey,
-    providerId: provider.id,
-    providerName: provider.label,
-    maskedApiKey: maskedApiKey(),
-    baseUrl: settings.ai.baseUrl,
-    model: settings.ai.model,
-    closureModel: settings.ai.closureModel,
-    models: Array.isArray(models) ? models : [],
-    reasoningEffort: normalizeReasoningEffort(settings.ai.reasoningEffort),
-    closureReasoningEffort: normalizeReasoningEffort(settings.ai.closureReasoningEffort),
-    supportsReasoningControl: provider.supportsReasoningControl,
-    lastTestAt: settings.ai.lastTestAt,
-    lastTestOk: settings.ai.lastTestOk,
-    lastError: settings.ai.lastError
-  };
-}
-
 function aiConnection(overrides = {}) {
   const providerId = normalizeProviderId(overrides.providerId ?? settings.ai.providerId);
   const baseUrl = normalizeBaseUrl(overrides.baseUrl ?? settings.ai.baseUrl, providerId);
@@ -792,20 +845,24 @@ function aiConnection(overrides = {}) {
   return { providerId, baseUrl };
 }
 
-function applyAiConnection(connection) {
-  const changed = settings.ai.providerId !== connection.providerId
-    || settings.ai.baseUrl !== connection.baseUrl;
-  settings.ai.providerId = connection.providerId;
-  settings.ai.baseUrl = connection.baseUrl;
+function applyAiConnectionTo(target, connection) {
+  const changed = target.providerId !== connection.providerId
+    || target.baseUrl !== connection.baseUrl;
+  target.providerId = connection.providerId;
+  target.baseUrl = connection.baseUrl;
   if (changed) {
-    settings.ai.model = '';
-    settings.ai.closureModel = '';
-    settings.ai.models = [];
-    settings.ai.lastTestAt = 0;
-    settings.ai.lastTestOk = false;
-    settings.ai.lastError = '';
+    target.model = '';
+    target.closureModel = '';
+    target.models = [];
+    target.lastTestAt = 0;
+    target.lastTestOk = false;
+    target.lastError = '';
   }
   return changed;
+}
+
+function applyAiConnection(connection) {
+  return applyAiConnectionTo(settings.ai, connection);
 }
 
 async function aiRequest(endpoint, apiKey, init = {}, connection = null, externalSignal = null) {
@@ -1132,8 +1189,19 @@ function reportTerminologyHash() {
   return settings.terminology?.length ? hashText(JSON.stringify(settings.terminology)) : '';
 }
 
+const closureContextCache = new Map();
+
 function closureContext(start, end, periodType = 'week') {
   const db = loadDB();
+  const terminologyHash = closureTerminologyHash();
+  const promptHash = closurePromptHash();
+  const contextCacheKey = [dbRevision, periodType, start, end, terminologyHash, promptHash].join('|');
+  const cached = closureContextCache.get(contextCacheKey);
+  if (cached) {
+    closureContextCache.delete(contextCacheKey);
+    closureContextCache.set(contextCacheKey, cached);
+    return cached;
+  }
   const recentEntries = db.entries.filter(entry => {
     const day = localDateStr(entry.ts);
     return day >= start && day <= end;
@@ -1147,9 +1215,7 @@ function closureContext(start, end, periodType = 'week') {
     settings.terminology,
     settings.terminologyExclusions
   );
-  const terminologyHash = closureTerminologyHash();
-  const promptHash = closurePromptHash();
-  return {
+  const context = {
     periodType,
     start,
     end,
@@ -1167,6 +1233,11 @@ function closureContext(start, end, periodType = 'week') {
       promptHash
     })
   };
+  closureContextCache.set(contextCacheKey, context);
+  while (closureContextCache.size > 4) {
+    closureContextCache.delete(closureContextCache.keys().next().value);
+  }
+  return context;
 }
 
 function closureMaxOutputTokens(model) {
@@ -1638,7 +1709,8 @@ ipcMain.handle('data:restore', async () => {
   const checked = validateBackupPayload(payload);
   if (!checked.ok) return checked;
 
-  const previousDb = loadDB();
+  // 保留独立副本；恢复过程中会原地补充报告正文文件引用，不能让回滚对象跟着变化。
+  const previousDb = JSON.parse(JSON.stringify(loadDB()));
   const previousSettings = JSON.parse(JSON.stringify(settings));
   let safetyBackupPath = '';
   try {
@@ -1647,8 +1719,11 @@ ipcMain.handle('data:restore', async () => {
     const restoredSettings = normalizeRestoredSettings(payload.settings);
     const previousHotkey = settings.hotkey;
 
-    for (const report of restoredDb.reports) persistReportContent(report);
-    saveDB(restoredDb);
+    // 先以完整内联正文提交一次数据库，再把大正文写入唯一的新文件。
+    // 这样恢复中途失败时，旧数据库及其外置正文仍保持可回滚；不会出现同 ID 文件被覆盖的问题。
+    saveDB(restoredDb, { immediate: true });
+    for (const report of restoredDb.reports) persistReportContent(report, { uniqueFile: true });
+    saveDB(restoredDb, { immediate: true });
     settings = restoredSettings;
     if (previousHotkey !== settings.hotkey) {
       try { if (previousHotkey) globalShortcut.unregister(previousHotkey); } catch { /* 忽略旧快捷键清理失败 */ }
@@ -1667,7 +1742,7 @@ ipcMain.handle('data:restore', async () => {
     return { ok: true, summary: checked.summary, safetyBackupPath };
   } catch (error) {
     try {
-      saveDB(previousDb);
+      saveDB(previousDb, { immediate: true });
       settings = previousSettings;
       saveSettings();
       applyLoginItem();
@@ -1747,6 +1822,12 @@ ipcMain.handle('ai:test', async (event, payload = {}) => {
   const hasApiKeyField = Object.prototype.hasOwnProperty.call(input, 'apiKey');
   const useStoredApiKey = input.useStoredApiKey !== false
     && (!hasApiKeyField || input.useStoredApiKey === true);
+  // 连接测试只操作本次请求的草稿；只有 ai:save 才能改变 settings.ai 并落盘。
+  const draftAi = {
+    ...settings.ai,
+    models: Array.isArray(settings.ai.models) ? [...settings.ai.models] : []
+  };
+  let testKey = '';
   try {
     const request = beginAiTestRequest(event.sender.id, input.requestId);
     try {
@@ -1762,37 +1843,70 @@ ipcMain.handle('ai:test', async (event, payload = {}) => {
       if (connectionChanged && !suppliedKey) {
         return { ok: false, error: '切换 AI 平台后请重新填写 API Key', ai: aiPublicState() };
       }
-      applyAiConnection(connection);
-      const key = suppliedKey || (useStoredApiKey ? apiKeyFromStorage() : '');
-      if (!key) return { ok: false, error: '请先填写 API Key', ai: aiPublicState() };
+      applyAiConnectionTo(draftAi, connection);
+      testKey = suppliedKey || (useStoredApiKey ? apiKeyFromStorage() : '');
+      if (!testKey) {
+        return {
+          ok: false,
+          error: '请先填写 API Key',
+          ai: aiPublicState(draftAi.models, draftAi, { configured: false })
+        };
+      }
 
-      const models = await fetchAvailableModels(key, connection, request.controller.signal);
-      if (request.controller.signal.aborted) return { ok: false, canceled: true, ai: aiPublicState() };
-      const selected = chooseModel(models, settings.ai.model);
-      const closureSelected = chooseClosureModel(models, settings.ai.closureModel);
-      const modelChanged = selected !== settings.ai.model;
-      const closureModelChanged = closureSelected !== settings.ai.closureModel;
-      settings.ai.models = models;
-      settings.ai.model = selected;
-      settings.ai.closureModel = closureSelected;
-      settings.ai.lastTestAt = Date.now();
-      settings.ai.lastTestOk = true;
-      settings.ai.lastError = '';
-      // 测试只更新当前会话中的草稿和模型目录；API Key 由独立的“保存配置”动作落盘。
+      const models = await fetchAvailableModels(testKey, connection, request.controller.signal);
+      const modelBeforeTest = draftAi.model;
+      const closureModelBeforeTest = draftAi.closureModel;
+      if (request.controller.signal.aborted) {
+        return {
+          ok: false,
+          canceled: true,
+          ai: aiPublicState(draftAi.models, draftAi, {
+            configured: !!testKey,
+            maskedApiKey: maskApiKeyValue(testKey)
+          })
+        };
+      }
+      const selected = chooseModel(models, modelBeforeTest);
+      const closureSelected = chooseClosureModel(models, closureModelBeforeTest);
+      const modelChanged = selected !== modelBeforeTest;
+      const closureModelChanged = closureSelected !== closureModelBeforeTest;
+      draftAi.models = models;
+      draftAi.model = selected;
+      draftAi.closureModel = closureSelected;
+      draftAi.lastTestAt = Date.now();
+      draftAi.lastTestOk = true;
+      draftAi.lastError = '';
       return {
         ok: true,
         modelChanged,
         closureModelChanged,
-        ai: { ...aiPublicState(models), configured: true }
+        ai: aiPublicState(models, draftAi, {
+          configured: true,
+          maskedApiKey: maskApiKeyValue(testKey)
+        })
       };
     } catch (error) {
       if (request.controller.signal.aborted || error?.code === 'AI_TEST_CANCELED') {
-        return { ok: false, canceled: true, ai: aiPublicState() };
+        return {
+          ok: false,
+          canceled: true,
+          ai: aiPublicState(draftAi.models, draftAi, {
+            configured: !!testKey,
+            maskedApiKey: maskApiKeyValue(testKey)
+          })
+        };
       }
-      settings.ai.lastTestAt = Date.now();
-      settings.ai.lastTestOk = false;
-      settings.ai.lastError = error?.message || '连接失败';
-      return { ok: false, error: settings.ai.lastError, ai: aiPublicState() };
+      draftAi.lastTestAt = Date.now();
+      draftAi.lastTestOk = false;
+      draftAi.lastError = error?.message || '连接失败';
+      return {
+        ok: false,
+        error: draftAi.lastError,
+        ai: aiPublicState(draftAi.models, draftAi, {
+          configured: !!testKey,
+          maskedApiKey: maskApiKeyValue(testKey)
+        })
+      };
     } finally {
       finishAiTestRequest(event.sender.id, request);
     }
@@ -2173,13 +2287,12 @@ ipcMain.handle('closure:generate', async (event, payload = {}) => {
       modelChanged: previousModel !== model
     };
   } catch (error) {
-    settings.ai.lastTestOk = false;
-    settings.ai.lastError = error?.message || '近期闭环生成失败';
-    saveSettings();
+    // 生成过程失败不等于连接失效；连接状态只由 ai:test 和模型/平台变更维护。
+    const message = error?.message || '近期闭环生成失败';
     if (event.sender && !event.sender.isDestroyed()) {
-      event.sender.send('closure:progress', { scope: 'closure', phase: 'error', error: settings.ai.lastError });
+      event.sender.send('closure:progress', { scope: 'closure', phase: 'error', error: message });
     }
-    return { ok: false, error: settings.ai.lastError };
+    return { ok: false, error: message };
   }
 });
 
@@ -2400,13 +2513,12 @@ ipcMain.handle('report:generate', async (event, payload = {}) => {
     notify({ phase: 'saved', ...progressDetails });
     return { ok: true, cached: false, report: reportForClient(report), models, modelChanged: previousModel !== model };
   } catch (error) {
-    settings.ai.lastTestOk = false;
-    settings.ai.lastError = error?.message || '生成总结失败';
-    saveSettings();
+    // 报告生成/解析/保存失败不应把已经可用的 AI 连接标成失败。
+    const message = error?.message || '生成总结失败';
     if (event.sender && !event.sender.isDestroyed()) {
-      event.sender.send('report:progress', { phase: 'error', error: settings.ai.lastError, jobId });
+      event.sender.send('report:progress', { phase: 'error', error: message, jobId });
     }
-    return { ok: false, error: settings.ai.lastError };
+    return { ok: false, error: message };
   }
 });
 
@@ -2435,7 +2547,7 @@ ipcMain.handle('report:save', (_e, { id, content } = {}) => {
   report.finishReason = 'edited';
   report.updatedAt = Date.now();
   persistReportContent(report);
-  saveDB(db);
+  saveDB(db, { immediate: true });
   return { ok: true, report: reportForClient(report) };
 });
 
@@ -2447,7 +2559,7 @@ ipcMain.handle('report:saveThinking', (_e, { id, thinking } = {}) => {
   const report = db.reports.find(x => x.id === id);
   if (!report) return { ok: false, error: '总结不存在或已被清理' };
   report.thinking = snapshot;
-  saveDB(db);
+  saveDB(db, { immediate: true });
   return { ok: true, thinking: snapshot };
 });
 
@@ -2893,7 +3005,8 @@ function createQuickWindow() {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
-      backgroundThrottling: false  // 隐藏时不节流渲染：保证退场动画播完、末帧恒为透明
+      // 快速记录条只在显示和退场动画期间工作；隐藏后允许 Chromium 节流，减少常驻耗电。
+      backgroundThrottling: true
     }
   });
   const windowRef = quickWindow;
@@ -2985,7 +3098,7 @@ function resizeQuickWindow(requestedHeight) {
     const progress = Math.min(1, (Date.now() - startedAt) / QUICK_RESIZE_DURATION);
     const eased = 1 - Math.pow(1 - progress, 3);
     applyQuickBounds(Math.round(segmentStart + (segmentTarget - segmentStart) * eased));
-    if (progress >= 1 && quickWindow.getBounds().height === quickResizeTarget) {
+    if (progress >= 1) {
       cancelQuickResize();
       applyQuickBounds(quickResizeTarget);
     }
@@ -3094,7 +3207,6 @@ app.whenReady().then(() => {
   });
 
   createMainWindow();
-  createQuickWindow();
   createTray();
   initHotkey();
   watchDisplayMetrics();
@@ -3112,4 +3224,16 @@ app.whenReady().then(() => {
 
 });
 
-app.on('will-quit', () => globalShortcut.unregisterAll());
+app.on('before-quit', () => {
+  quitting = true;
+  try { flushDB(); } catch (error) {
+    console.error('[日报随手记] 退出前写入 data.json 失败', error);
+  }
+});
+
+app.on('will-quit', () => {
+  try { flushDB(); } catch (error) {
+    console.error('[日报随手记] 退出时写入 data.json 失败', error);
+  }
+  globalShortcut.unregisterAll();
+});
