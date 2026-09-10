@@ -3,7 +3,8 @@ const {
   splitSources
 } = require('./report-utils');
 const {
-  normalizeTerminology
+  normalizeTerminology,
+  terminologyType
 } = require('./terminology');
 const {
   normalizeTerminologyRelation
@@ -47,18 +48,21 @@ function discoveryFormat(locale = 'zh-CN') {
       canonical_name: rules.formatCanonical,
       aliases: [rules.formatAlias1, rules.formatAlias2],
       scope: rules.formatScope,
-      note: rules.formatNote
+      note: rules.formatNote,
+      type: rules.formatType
     }],
     uncertain_matches: [{
       left: {
         canonical_name: rules.formatRelationLeft,
         aliases: [rules.formatAlias1],
-        scope: rules.formatScope
+        scope: rules.formatScope,
+        type: rules.formatType
       },
       right: {
         canonical_name: rules.formatRelationRight,
         aliases: [rules.formatAlias2],
-        scope: rules.formatScope
+        scope: rules.formatScope,
+        type: rules.formatType
       },
       reason: rules.formatRelationReason,
       confidence: rules.formatConfidence
@@ -88,7 +92,8 @@ function buildDiscoveryPrompt(sources, customPrompt, locale = 'zh-CN') {
     rules.constraint2,
     rules.constraint3,
     rules.constraint4,
-    rules.constraint5
+    rules.constraint5,
+    rules.constraint6
   ].join('\n');
 }
 
@@ -100,7 +105,8 @@ function formatTerminologyList(items, locale = 'zh-CN') {
     const aliases = term.aliases.length ? term.aliases.join('、') : rules.noAliases;
     const scope = term.scope ? `${rules.scopeLabel}${term.scope}` : '';
     const note = term.note ? `${rules.noteLabel}${term.note}` : '';
-    return `${index + 1}. ${rules.canonical}${term.canonicalName}${rules.aliases}${aliases}${scope}${note}`;
+    const type = terminologyType(term.type) === 'person' ? rules.personTypeLabel : '';
+    return `${index + 1}. ${rules.canonical}${term.canonicalName}${rules.aliases}${aliases}${scope}${note}${type}`;
   }).join('\n');
 }
 
@@ -196,6 +202,7 @@ function rawTerminologyItem(item) {
   return {
     id: item?.id,
     canonicalName: item?.canonicalName || item?.canonical_name || item?.name,
+    type: item?.type,
     aliases: Array.isArray(item?.aliases)
       ? item.aliases
       : String(item?.alias || item?.common_names || item?.commonNames || '')

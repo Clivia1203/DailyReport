@@ -3543,6 +3543,7 @@ const terminologySearch = $('#terminology-search');
 const terminologySearchClear = $('#terminology-search-clear');
 const terminologyEditorTitle = $('#terminology-editor-title');
 const termCanonical = $('#term-canonical');
+const termType = $('#term-type');
 const termScope = $('#term-scope');
 const termAliases = $('#term-aliases');
 const termNote = $('#term-note');
@@ -4566,6 +4567,7 @@ terminologyThinkingToggle?.addEventListener('click', () => {
 function resetTerminologyForm() {
   editingTerminologyId = '';
   termCanonical.value = '';
+  if (termType) { termType.value = 'matter'; syncCustomSelect(termType); }
   termScope.value = '';
   termAliases.value = '';
   termNote.value = '';
@@ -4664,6 +4666,12 @@ function renderTerminologyUI() {
     const name = document.createElement('div');
     name.className = 'terminology-name';
     name.textContent = term.canonicalName;
+    if (term.type === 'person') {
+      const badge = document.createElement('span');
+      badge.className = 'terminology-type-badge';
+      badge.textContent = uiText('人物');
+      name.appendChild(badge);
+    }
     const aliases = document.createElement('div');
     aliases.className = 'terminology-aliases';
     aliases.textContent = uiText(term.aliases?.length ? `常用说法：${term.aliases.join('、')}` : '尚未添加常用说法');
@@ -4683,6 +4691,7 @@ function renderTerminologyUI() {
     edit.addEventListener('click', () => {
       editingTerminologyId = term.id;
       termCanonical.value = term.canonicalName;
+      if (termType) { termType.value = term.type === 'person' ? 'person' : 'matter'; syncCustomSelect(termType); }
       termScope.value = term.scope || '';
       termAliases.value = (term.aliases || []).join('\n');
       termNote.value = term.note || '';
@@ -4741,6 +4750,7 @@ termSave.addEventListener('click', async () => {
   const draft = {
     id: editingTerminologyId || `term-${Date.now()}`,
     canonicalName,
+    type: termType?.value === 'person' ? 'person' : 'matter',
     aliases,
     scope: termScope.value.trim(),
     note: termNote.value.trim()

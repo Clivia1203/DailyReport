@@ -5,6 +5,13 @@ const MAX_ALIASES_PER_TERM = 30;
 const MAX_TERMINOLOGY_EXCLUSIONS = 200;
 const MAX_TEXT_LENGTH = 120;
 
+// 词条类型：person=人物，matter=事项（默认）。人物与事项之间不存在“是否同一事项”的问题。
+const TERM_TYPES = new Set(['person', 'matter']);
+
+function terminologyType(value) {
+  return value === 'person' ? 'person' : 'matter';
+}
+
 function text(value, max = MAX_TEXT_LENGTH) {
   return String(value || '')
     .normalize('NFKC')
@@ -64,6 +71,7 @@ function normalizeTerminology(items) {
     const aliases = uniqueStrings(item.aliases, canonicalName);
     const scope = text(item.scope, 120);
     const note = text(item.note, 240);
+    const type = terminologyType(item.type);
     const canonicalKey = terminologyKey(canonicalName);
     const existingIndex = sameCanonical.get(canonicalKey);
     if (existingIndex !== undefined) {
@@ -71,10 +79,12 @@ function normalizeTerminology(items) {
       existing.aliases = uniqueStrings([...existing.aliases, ...aliases], existing.canonicalName);
       existing.scope = mergeTextValues(existing.scope, scope, 120);
       existing.note = mergeTextValues(existing.note, note, 240);
+      // “人物”标记一旦出现就保留：新批次漏标类型时不能把人物降回事项。
+      existing.type = existing.type === 'person' || type === 'person' ? 'person' : 'matter';
       continue;
     }
     sameCanonical.set(canonicalKey, result.length);
-    result.push({ id, canonicalName, aliases, scope, note });
+    result.push({ id, canonicalName, aliases, scope, note, type });
   }
   return result;
 }
@@ -136,7 +146,8 @@ function upsertTerminology(items, draft = {}) {
     canonicalName,
     aliases: uniqueStrings(draft.aliases, canonicalName),
     scope,
-    note: text(draft.note, 240)
+    note: text(draft.note, 240),
+    type: terminologyType(draft.type)
   };
   const next = same
     ? current.map(item => item.id === same.id ? nextItem : item)
@@ -182,6 +193,8 @@ module.exports = {
   MAX_TERMINOLOGY,
   MAX_ALIASES_PER_TERM,
   MAX_TERMINOLOGY_EXCLUSIONS,
+  TERM_TYPES,
+  terminologyType,
   terminologyKey,
   terminologyExclusionKey,
   normalizeTerminology,

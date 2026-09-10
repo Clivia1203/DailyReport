@@ -547,5 +547,8 @@
   "已恢复到待确认列表": "Restored to the pending list",
   "恢复暂缓失败": "Failed to restore the deferred match",
   "已暂缓；相关日报变化后会再次提醒": "Deferred; you will be asked again once the related entries change",
-  "暂缓这条关系；相关日报变化后会再次提醒": "Defer this match; you will be asked again once the related entries change"
+  "暂缓这条关系；相关日报变化后会再次提醒": "Defer this match; you will be asked again once the related entries change",
+  "类型": "Type",
+  "事项": "Matter",
+  "人物": "Person"
 }

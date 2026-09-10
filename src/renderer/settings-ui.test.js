@@ -80,7 +80,7 @@ test('顶栏使用应用图标作为品牌标识', () => {
 });
 
 test('所有原生下拉框统一由应用内自定义菜单呈现', () => {
-  assert.equal((htmlSource.match(/<select\b/g) || []).length, 13);
+  assert.equal((htmlSource.match(/<select\b/g) || []).length, 14);
   assert.match(htmlSource, /custom-select\.js[\s\S]*app\.js/);
   assert.match(appSource, /customSelect\?\.enhanceAll\(document\)/);
   assert.match(appSource, /function syncCustomSelect\(select\)/);

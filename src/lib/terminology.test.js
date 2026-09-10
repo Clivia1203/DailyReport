@@ -23,7 +23,8 @@ test('术语规范会统一空白、别名并保留输出名称', () => {
     canonicalName: 'DP310-X2',
     aliases: ['双轴', '两轴'],
     scope: '模切设备',
-    note: ''
+    note: '',
+    type: 'matter'
   }]);
   assert.equal(terminologyKey(' DP310-X2 '), 'dp310x2');
 });
@@ -36,6 +37,25 @@ test('同一规范名称可以更新，新增别名不会重复创建术语', ()
   assert.equal(terms.length, 1);
   assert.deepEqual(terms[0].aliases, ['双轴', '两轴']);
   assert.equal(terms[0].note, '模切设备');
+});
+
+test('词条支持人物类型，且“人物”标记在合并和补录时不会丢失', () => {
+  const single = normalizeTerminology([
+    { id: 'p1', canonicalName: '陆永波', aliases: ['新人陆永波'], type: 'person' }
+  ]);
+  assert.equal(single[0].type, 'person');
+  const missing = normalizeTerminology([{ id: 'm1', canonicalName: '控制软件' }]);
+  assert.equal(missing[0].type, 'matter');
+  // 同名合并：一侧标了人物，另一侧没标类型，人物标记保留。
+  const merged = normalizeTerminology([
+    { id: 'p1', canonicalName: '陆永波', type: 'person' },
+    { id: 'p2', canonicalName: '陆永波', aliases: ['卢永波'] }
+  ]);
+  assert.equal(merged.length, 1);
+  assert.equal(merged[0].type, 'person');
+  assert.deepEqual(merged[0].aliases, ['卢永波']);
+  const edited = upsertTerminology(merged, { id: merged[0].id, canonicalName: '陆永波', type: 'matter', aliases: ['卢永波'] });
+  assert.equal(edited[0].type, 'matter');
 });
 
 test('重复规范名称会合并别名，避免输出存在两个同名术语', () => {

@@ -316,3 +316,49 @@ test('依据指纹：完全相同的原始记录集合得到相同指纹', () =>
   assert.equal(a, b);
   assert.notEqual(a, '');
 });
+
+test('人物和事项之间不生成待确认：共享叫法与 AI 提问两条路都堵住', () => {
+  // 用户实例：陆永波（人物）与“新人陆永波入组与上手培养”（事项）共用叫法“新人”。
+  const terms = [
+    { id: 'p1', canonicalName: '陆永波', aliases: ['新人陆永波', '新人'], type: 'person' },
+    { id: 'm1', canonicalName: '新人陆永波入组与上手培养', aliases: ['新人', '新人陆永波进组后'] }
+  ];
+  assert.equal(findTerminologyConflicts(terms).length, 0);
+  const rescan = reconcileTerminology({ existing: terms });
+  assert.equal(rescan.pending.length, 0);
+
+  // AI 仍然把人和事配成一条不确定关系时，本地闸门直接作废，不进待确认。
+  const aiPair = reconcileTerminology({
+    existing: terms,
+    uncertainRelations: [{
+      left: { canonicalName: '陆永波', type: 'person' },
+      right: { canonicalName: '新人陆永波入组与上手培养' },
+      reason: '包含同一人名'
+    }]
+  });
+  assert.equal(aiPair.pending.length, 0);
+
+  // 同类型之间（两个事项）的冲突照常提醒，不受影响。
+  const matters = [
+    { id: 'a', canonicalName: 'DP3C-X2', aliases: ['双轴'] },
+    { id: 'b', canonicalName: '另一个项目', aliases: ['双轴'] }
+  ];
+  assert.equal(findTerminologyConflicts(matters).length, 1);
+});
+
+test('人物词条与人物词条之间的叫法冲突仍会提醒', () => {
+  const people = [
+    { id: 'p1', canonicalName: '陆永波', aliases: ['新人'], type: 'person' },
+    { id: 'p2', canonicalName: '王工', aliases: ['新人'], type: 'person' }
+  ];
+  assert.equal(findTerminologyConflicts(people).length, 1);
+});
+
+test('合并两侧词条时人物标记保留', () => {
+  const merged = mergeTerminologyRelation(
+    [{ id: 'p1', canonicalName: '陆永波', aliases: ['新人陆永波'], type: 'person' }],
+    { left: { canonicalName: '陆永波' }, right: { canonicalName: '新人陆永波' } }
+  );
+  assert.equal(merged.ok, true);
+  assert.equal(merged.terminology[0].type, 'person');
+});

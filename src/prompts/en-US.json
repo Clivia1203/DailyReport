@@ -118,6 +118,9 @@
     "formatRelationRight": "Canonical name of the second possibly related group",
     "formatRelationReason": "Explain why the relationship is plausible but not confirmed",
     "formatConfidence": "low or medium",
-    "constraint5": "5. A single matter may have exactly one canonical name; put every other wording into its aliases. Never output two separate entries that may refer to the same matter—raise the pair in uncertain_matches and wait for the user's choice."
+    "constraint5": "5. A single matter may have exactly one canonical name; put every other wording into its aliases. Never output two separate entries that may refer to the same matter—raise the pair in uncertain_matches and wait for the user's choice.",
+    "formatType": "matter or person: fill person for people entries (names, members, customer contacts); everything else is matter",
+    "personTypeLabel": "; type: person",
+    "constraint6": "6. People and matters are different kinds of entries: a person entry and a matter entry are never “the same matter”, so never put such a pair in uncertain_matches and never add each other's aliases. A person's name and an activity involving that person (onboarding, visits, reviews) are always two kinds. uncertain_matches may only be proposed between entries of the same kind."
   }
 }

@@ -118,6 +118,9 @@
     "formatRelationRight": "可能相关的第二组规范名称",
     "formatRelationReason": "说明为什么有关系但当前证据不足以确认",
     "formatConfidence": "low 或 medium",
-    "constraint5": "5. 同一事项只允许输出一个规范名称，其它写法全部放进该名称的 aliases；可能同指一件事的两个候选禁止拆成两个词条，必须作为 uncertain_matches 提出等待用户选择。"
+    "constraint5": "5. 同一事项只允许输出一个规范名称，其它写法全部放进该名称的 aliases；可能同指一件事的两个候选禁止拆成两个词条，必须作为 uncertain_matches 提出等待用户选择。",
+    "formatType": "matter 或 person：人物词条（人名、成员、客户联系人）填 person，其它一律 matter",
+    "personTypeLabel": "；类型：人物",
+    "constraint6": "6. 人物和事项是两类词条：人名条目和事项条目之间不存在“是否同一事项”的问题，禁止放入 uncertain_matches，禁止互加别名；一个人的名字与包含这个人的事项（如培养、拜访、评审）永远算两类。uncertain_matches 只能在同类词条之间提出。"
   }
 }

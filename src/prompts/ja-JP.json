@@ -118,6 +118,9 @@
     "formatRelationRight": "関連する可能性がある第二の正式名称",
     "formatRelationReason": "関連する可能性はあるが確認できない理由",
     "formatConfidence": "low または medium",
-    "constraint5": "5. 同じ事柄には1つの正式名称だけを出力し、他の書き方はすべてその aliases に入れてください。同じ事柄を指す可能性がある2つの候補を独立した項目に分割せず、uncertain_matches として提出してユーザーの選択を待ってください。"
+    "constraint5": "5. 同じ事柄には1つの正式名称だけを出力し、他の書き方はすべてその aliases に入れてください。同じ事柄を指す可能性がある2つの候補を独立した項目に分割せず、uncertain_matches として提出してユーザーの選択を待ってください。",
+    "formatType": "matter または person：人物（人名、メンバー、顧客担当者）は person、それ以外はすべて matter",
+    "personTypeLabel": "；種別：人物",
+    "constraint6": "6. 人物と事柄は別の種類の項目です。人物項目と事柄項目は「同じ事柄」になり得ないため、uncertain_matches に入れたり互いの別名を追加したりしないでください。人名とその人物に関わる活動（育成、訪問、レビュー）は常に別種です。uncertain_matches は同種の項目間でのみ提案してください。"
   }
 }

@@ -2364,13 +2364,14 @@ body.textarea-resizing * { cursor: nwse-resize !important; user-select: none !im
 .terminology-prompt-title { padding-top:0; }
 .terminology-item { display:flex; align-items:flex-start; justify-content:space-between; gap:14px; padding:10px 12px; border-radius:10px; background:var(--input-bg); }
 .terminology-copy { min-width:0; }
-.terminology-name { color:var(--text); font-size:13px; font-weight:650; overflow-wrap:anywhere; }
+.terminology-name { display:flex; align-items:center; gap:6px; color:var(--text); font-size:13px; font-weight:650; overflow-wrap:anywhere; }
+.terminology-type-badge { flex:none; padding:1px 6px; border-radius:6px; background:var(--accent-soft, rgba(59,130,246,.12)); color:var(--accent); font-size:10px; font-weight:600; line-height:1.4; }
 .terminology-aliases, .terminology-note { margin-top:4px; color:var(--text-2); font-size:11px; line-height:1.5; overflow-wrap:anywhere; }
 .terminology-note { color:var(--text-3); }
 .terminology-item-actions { display:flex; flex:0 1 auto; max-width:100%; flex-wrap:wrap; gap:2px; }
 .danger-link { color:var(--danger); }
 .terminology-editor { margin-top:12px; padding-top:12px; border-top:1px solid var(--border); }
-.terminology-grid { display:grid; grid-template-columns:minmax(0,1.2fr) minmax(0,1fr); gap:10px; align-items:start; }
+.terminology-grid { display:grid; grid-template-columns:minmax(0,1.2fr) minmax(0,0.6fr) minmax(0,1fr); gap:10px; align-items:start; }
 .terminology-editor label { display:flex; flex-direction:column; color:var(--text-2); font-size:11px; line-height:1.5; }
 .terminology-editor input, .terminology-editor textarea { width:100%; margin-top:4px; }
 .terminology-editor input {

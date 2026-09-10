@@ -3,6 +3,7 @@
 const crypto = require('crypto');
 const {
   terminologyKey,
+  terminologyType,
   normalizeTerminology
 } = require('./terminology');
 const { sourceBundle } = require('./report-utils');
@@ -63,7 +64,9 @@ function termSnapshot(value) {
     aliases: cleanList(source.aliases || source.alias || source.common_names || source.commonNames),
     scope: clean(source.scope, 120),
     note: clean(source.note, 240),
-    ...(termId ? { termId } : {})
+    ...(termId ? { termId } : {}),
+    // 只在明确是人物时携带类型；缺省视为事项。
+    ...(terminologyType(source.type) === 'person' ? { type: 'person' } : {})
   };
 }
 
@@ -233,6 +236,7 @@ function enrichRelation(relation, availableTerms) {
     return {
       ...side,
       ...(termId ? { termId } : {}),
+      ...(terminologyType(existing.type) === 'person' ? { type: 'person' } : {}),
       canonicalName: existing.canonicalName,
       aliases: existing.aliases,
       scope: existing.scope,
@@ -242,6 +246,8 @@ function enrichRelation(relation, availableTerms) {
   const left = enrich(normalized.left);
   const right = enrich(normalized.right);
   if (left.termId && right.termId && left.termId === right.termId) return null;
+  // 人物和事项之间不存在“是否同一事项”的问题：这类关系直接作废，不提问、不落盘。
+  if (terminologyType(left.type) !== terminologyType(right.type)) return null;
   const key = terminologyRelationKey(left, right) || normalized.key;
   return { ...normalized, key, left, right };
 }
@@ -269,6 +275,8 @@ function findTerminologyConflicts(items) {
       for (let next = index + 1; next < matches.length; next += 1) {
         const left = matches[index];
         const right = matches[next];
+        // 人物和事项共用一个叫法是正常的（如“新人”既指人也出现在事项里），不算冲突。
+        if (terminologyType(left.term.type) !== terminologyType(right.term.type)) continue;
         const relationKey = terminologyRelationKey(left.term, right.term);
         if (!relationKey || seen.has(relationKey)) continue;
         seen.add(relationKey);
@@ -299,7 +307,10 @@ function mergeTerminologyRecords(target, source) {
       ...(Array.isArray(source.aliases) ? source.aliases : [])
     ],
     scope: mergeField(target.scope, source.scope, 120),
-    note: mergeField(target.note, source.note, 240)
+    note: mergeField(target.note, source.note, 240),
+    type: terminologyType(target.type) === 'person' || terminologyType(source.type) === 'person'
+      ? 'person'
+      : 'matter'
   };
   return merged;
 }
