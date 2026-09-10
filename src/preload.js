@@ -55,6 +55,7 @@ contextBridge.exposeInMainWorld('api', {
   setTerminology: terminology => ipcRenderer.invoke('settings:setTerminology', { terminology }),
   addTerminologyAlias: (canonicalName, alias, scope) => ipcRenderer.invoke('settings:addTerminologyAlias', { canonicalName, alias, scope }),
   addTerminologyExclusion: (canonicalName, alias) => ipcRenderer.invoke('settings:addTerminologyExclusion', { canonicalName, alias }),
+  resolveTerminologyRelation: (relation, decision) => ipcRenderer.invoke('settings:resolveTerminologyRelation', { relation, decision }),
   discoverTerminology: options => ipcRenderer.invoke('terminology:discover', options),
   getCachedClosure: params => ipcRenderer.invoke('closure:getCached', params),
   generateRecentClosures: params => ipcRenderer.invoke('closure:generate', params),

@@ -9,6 +9,8 @@ const appSource = fs.readFileSync(path.join(__dirname, 'renderer', 'app.js'), 'u
 const indexSource = fs.readFileSync(path.join(__dirname, 'renderer', 'index.html'), 'utf8');
 const i18nSource = fs.readFileSync(path.join(__dirname, 'renderer', 'i18n.js'), 'utf8');
 const aiStreamSource = fs.readFileSync(path.join(__dirname, 'lib', 'ai-stream.js'), 'utf8');
+const reportStorageSource = fs.readFileSync(path.join(__dirname, 'lib', 'report-storage.js'), 'utf8');
+const recoverableJsonSource = fs.readFileSync(path.join(__dirname, 'lib', 'recoverable-json-file.js'), 'utf8');
 const discovery = require('./lib/terminology-discovery');
 const promptCatalog = require('./lib/prompt-catalog');
 
@@ -71,6 +73,22 @@ test('术语识别使用流式响应，模型生成期间持续回传 AI 输出'
   assert.match(requestSource, /buildChatRequestBody\(settings\.ai\.providerId/);
   assert.match(fs.readFileSync(path.join(__dirname, 'lib', 'ai-providers.js'), 'utf8'), /stream:\s*options\.stream !== false/);
   assert.match(requestSource, /delta\.content[\s\S]*content \+= delta\.content/);
+});
+
+test('术语识别的不确定关系必须经过用户选择才会写入词典', () => {
+  const start = mainSource.indexOf("ipcMain.handle('terminology:discover'");
+  const end = mainSource.indexOf('function closureForClient', start);
+  const handler = mainSource.slice(start, end === -1 ? mainSource.length : end);
+  assert.notEqual(start, -1, '术语识别处理器不存在');
+  assert.match(handler, /reconcileTerminology\(/);
+  assert.match(handler, /uncertainRelations: result\.uncertainRelations/);
+  assert.doesNotMatch(handler, /settings\.terminology\s*=\s*mergeTerminologyResults/);
+  assert.match(mainSource, /ipcMain\.handle\('settings:resolveTerminologyRelation'/);
+  assert.match(preloadSource, /resolveTerminologyRelation:\s*\(relation, decision\)/);
+  assert.match(appSource, /appendTerminologyRelationSuggestions/);
+  assert.match(appSource, /resolveTerminologyRelation\(relation, 'merge'\)/);
+  assert.match(appSource, /resolveTerminologyRelation\(relation, 'separate'\)/);
+  assert.match(appSource, /dismissedRelations\.add\(key\)/);
 });
 
 test('并发周期报告的进度事件携带任务 ID，避免切周后串到当前页面', () => {
@@ -147,6 +165,27 @@ test('启动阶段预加载数据库，后台首轮恢复不会把数据库读�
   assert.match(readyHandler, /loadSettings\(\);[\s\S]*loadDB\(\);/);
   assert.match(mainSource, /let loadedDb = null/);
   assert.match(mainSource, /let entriesRevision = 0/);
+});
+
+test('旧版报告正文和 AI 思考过程会在启动时自动外置，读取接口保持兼容', () => {
+  assert.match(mainSource, /createReportStorage\(\{ directory: reportContentDir \}\)/);
+  assert.match(mainSource, /function migrateLegacyReportArtifacts\(db\)/);
+  assert.match(mainSource, /reportStorage\.migrateReports\(db\.reports\)/);
+  assert.match(mainSource, /reportStorage\.forClient\(report\)/);
+  assert.match(mainSource, /persistReportArtifacts\(report/);
+  assert.match(reportStorageSource, /contentFile/);
+  assert.match(reportStorageSource, /thinkingFile/);
+  assert.match(reportStorageSource, /回退旧版内嵌正文/);
+  assert.match(reportStorageSource, /回退旧版内嵌过程/);
+});
+
+test('data.json 写入前保留上一份可恢复备份，损坏时保留现场并尝试恢复', () => {
+  assert.match(mainSource, /createRecoverableJsonFile\(/);
+  assert.match(mainSource, /backupFile:/);
+  assert.match(mainSource, /type === 'recovered'/);
+  assert.match(mainSource, /type === 'unrecoverable'/);
+  assert.match(recoverableJsonSource, /\.corrupt-/);
+  assert.match(recoverableJsonSource, /restoreFromBackup/);
 });
 
 test('闭环历史来源按起始日期复用，并只在受影响的历史日期变更时失效', () => {

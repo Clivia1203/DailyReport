@@ -12,7 +12,7 @@ function clone(value) {
 }
 
 function safeReport(report) {
-  const { contentFile, ...rest } = report || {};
+  const { contentFile, thinkingFile, ...rest } = report || {};
   return { ...clone(rest), content: String(report?.content || '') };
 }
 

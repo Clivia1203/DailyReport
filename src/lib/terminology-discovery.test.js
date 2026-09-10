@@ -6,6 +6,7 @@ const {
   buildDiscoveryPrompt,
   buildConsolidationPrompt,
   parseTerminologyResponse,
+  parseTerminologyResponseDetailed,
   mergeTerminologyResults,
   normalizeDiscoveryState
 } = require('./terminology-discovery');
@@ -57,6 +58,25 @@ test('parseTerminologyResponse: 多段说明中的空示例不会遮挡最终词
   assert.equal(result[0].canonicalName, '双轴步进驱动器');
 });
 
+test('parseTerminologyResponseDetailed: 不确定关系单独返回，不混入已确认术语', () => {
+  const result = parseTerminologyResponseDetailed(JSON.stringify({
+    terms: [{ canonical_name: 'DP3C-X2', aliases: ['双轴'] }],
+    uncertain_matches: [{
+      left: { canonical_name: 'DP3C-X2', aliases: ['双轴'] },
+      right: { canonical_name: 'DP3C-X2量产前整改', aliases: ['双轴问题'] },
+      reason: '记录没有明确说明范围是否相同',
+      confidence: 'low'
+    }]
+  }));
+  assert.deepEqual(result.terms.map(item => item.canonicalName), ['DP3C-X2']);
+  assert.equal(result.uncertainRelations.length, 1);
+  assert.equal(result.uncertainRelations[0].right.canonicalName, 'DP3C-X2量产前整改');
+  assert.equal(parseTerminologyResponse(JSON.stringify({
+    terms: [],
+    uncertain_matches: result.uncertainRelations
+  })).length, 0);
+});
+
 test('mergeTerminologyResults: 同一规范名称的跨批次候选会合并别名且保留已有词典', () => {
   const result = mergeTerminologyResults([
     [{ canonicalName: 'DP3C-X2', aliases: ['双轴'] }],
@@ -77,6 +97,8 @@ test('buildConsolidationPrompt: 明确要求保留已有词典并处理细分不
   assert.match(prompt, /不得删除/);
   assert.match(prompt, /功率段/);
   assert.match(prompt, /DP3C-X2/);
+  assert.match(prompt, /uncertain_matches/);
+  assert.match(prompt, /用户选择|user to decide|ユーザー/);
 });
 
 test('buildConsolidationPrompt: 支持使用用户修改后的识别规则', () => {

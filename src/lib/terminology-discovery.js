@@ -5,6 +5,9 @@ const {
 const {
   normalizeTerminology
 } = require('./terminology');
+const {
+  normalizeTerminologyRelation
+} = require('./terminology-reconciliation');
 const { catalogFor } = require('./prompt-catalog');
 const DEFAULT_TERMINOLOGY_DISCOVERY_PROMPT = require('../prompts/zh-CN.json').terminologyDiscoveryPrompt;
 
@@ -45,6 +48,20 @@ function discoveryFormat(locale = 'zh-CN') {
       aliases: [rules.formatAlias1, rules.formatAlias2],
       scope: rules.formatScope,
       note: rules.formatNote
+    }],
+    uncertain_matches: [{
+      left: {
+        canonical_name: rules.formatRelationLeft,
+        aliases: [rules.formatAlias1],
+        scope: rules.formatScope
+      },
+      right: {
+        canonical_name: rules.formatRelationRight,
+        aliases: [rules.formatAlias2],
+        scope: rules.formatScope
+      },
+      reason: rules.formatRelationReason,
+      confidence: rules.formatConfidence
     }]
   }, null, 2);
 }
@@ -69,7 +86,8 @@ function buildDiscoveryPrompt(sources, customPrompt, locale = 'zh-CN') {
     rules.constraints,
     rules.constraint1,
     rules.constraint2,
-    rules.constraint3
+    rules.constraint3,
+    rules.constraint4
   ].join('\n');
 }
 
@@ -105,7 +123,8 @@ function buildConsolidationPrompt(candidates, existing = [], customPrompt, local
     rules.returnJson,
     discoveryFormat(locale),
     '',
-    rules.aliasesOnly
+    rules.aliasesOnly,
+    rules.uncertainMatches
   ].join('\n');
 }
 
@@ -171,33 +190,77 @@ function jsonCandidates(text) {
   return candidates;
 }
 
-function parseTerminologyResponse(value) {
+function rawTerminologyItem(item) {
+  return {
+    id: item?.id,
+    canonicalName: item?.canonicalName || item?.canonical_name || item?.name,
+    aliases: Array.isArray(item?.aliases)
+      ? item.aliases
+      : String(item?.alias || item?.common_names || item?.commonNames || '')
+        .split(/[\n,，、;；]+/)
+        .map(alias => alias.trim())
+        .filter(Boolean),
+    scope: item?.scope,
+    note: item?.note
+  };
+}
+
+function rawRelationSide(value) {
+  return value && typeof value === 'object' ? value : {};
+}
+
+function rawUncertainRelation(item) {
+  const source = item && typeof item === 'object' ? item : {};
+  const left = source.left || {
+    canonicalName: source.leftCanonicalName || source.left_canonical_name || source.existingName || source.existing_name,
+    aliases: source.leftAliases || source.left_aliases || source.existingAliases || source.existing_aliases,
+    scope: source.leftScope || source.left_scope || source.existingScope || source.existing_scope
+  };
+  const right = source.right || {
+    canonicalName: source.rightCanonicalName || source.right_canonical_name || source.candidateName || source.candidate_name,
+    aliases: source.rightAliases || source.right_aliases || source.candidateAliases || source.candidate_aliases,
+    scope: source.rightScope || source.right_scope || source.candidateScope || source.candidate_scope
+  };
+  return normalizeTerminologyRelation({
+    left: rawRelationSide(left, 'left'),
+    right: rawRelationSide(right, 'right'),
+    reason: source.reason || source.explanation,
+    confidence: source.confidence,
+    refs: source.refs || source.references || source.sourceRefs,
+    source: 'ai'
+  });
+}
+
+function parseTerminologyResponseDetailed(value) {
   const text = stripJsonFence(value);
   if (!text) return null;
-  let emptyResult = null;
+  let bestResult = null;
+  let bestScore = -1;
   // 优先尝试后出现的完整片段：模型常会先输出一个空示例或中间草稿，最终词典通常在后面。
   for (const candidate of jsonCandidates(text).reverse()) {
     try {
       const parsed = JSON.parse(candidate);
       const items = Array.isArray(parsed) ? parsed : parsed?.terms;
       if (!Array.isArray(items)) continue;
-      const result = normalizeTerminology(items.map(item => ({
-        id: item?.id,
-        canonicalName: item?.canonicalName || item?.canonical_name || item?.name,
-        aliases: Array.isArray(item?.aliases)
-          ? item.aliases
-          : String(item?.alias || item?.common_names || item?.commonNames || '')
-            .split(/[\n,，、;；]+/)
-            .map(alias => alias.trim())
-            .filter(Boolean),
-        scope: item?.scope,
-        note: item?.note
-      })));
-      if (result.length) return result;
-      emptyResult = result;
+      const result = normalizeTerminology(items.map(rawTerminologyItem));
+      const uncertainRelations = (Array.isArray(parsed?.uncertain_matches)
+        ? parsed.uncertain_matches
+        : Array.isArray(parsed?.uncertainMatches) ? parsed.uncertainMatches : [])
+        .map(rawUncertainRelation)
+        .filter(Boolean);
+      const detailed = { terms: result, uncertainRelations };
+      const score = result.length + uncertainRelations.length;
+      if (score > bestScore) {
+        bestResult = detailed;
+        bestScore = score;
+      }
     } catch { /* 尝试下一个完整 JSON 片段 */ }
   }
-  return emptyResult;
+  return bestResult;
+}
+
+function parseTerminologyResponse(value) {
+  return parseTerminologyResponseDetailed(value)?.terms || null;
 }
 
 function mergeTerminologyResults(results) {
@@ -229,6 +292,7 @@ module.exports = {
   buildDiscoveryPrompt,
   buildConsolidationPrompt,
   parseTerminologyResponse,
+  parseTerminologyResponseDetailed,
   mergeTerminologyResults,
   normalizeDiscoveryState
 };

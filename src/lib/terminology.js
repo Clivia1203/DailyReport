@@ -33,11 +33,25 @@ function uniqueStrings(values, excluded = '') {
   return result;
 }
 
+function mergeTextValues(first, second, max) {
+  const result = [];
+  const seen = new Set();
+  for (const value of [first, second]
+    .flatMap(item => String(item || '').split(/[；;]+/))) {
+    const cleanValue = text(value, max);
+    const key = terminologyKey(cleanValue);
+    if (!cleanValue || !key || seen.has(key)) continue;
+    seen.add(key);
+    result.push(cleanValue);
+  }
+  return result.join('；').slice(0, max);
+}
+
 function normalizeTerminology(items) {
   if (!Array.isArray(items)) return [];
   const result = [];
   const seenIds = new Set();
-  const sameTerm = new Map();
+  const sameCanonical = new Map();
   for (let index = 0; index < items.length && result.length < MAX_TERMINOLOGY; index += 1) {
     const item = items[index];
     if (!item || typeof item !== 'object') continue;
@@ -50,15 +64,16 @@ function normalizeTerminology(items) {
     const aliases = uniqueStrings(item.aliases, canonicalName);
     const scope = text(item.scope, 120);
     const note = text(item.note, 240);
-    const semanticKey = `${terminologyKey(canonicalName)}|${terminologyKey(scope)}`;
-    const existingIndex = sameTerm.get(semanticKey);
+    const canonicalKey = terminologyKey(canonicalName);
+    const existingIndex = sameCanonical.get(canonicalKey);
     if (existingIndex !== undefined) {
       const existing = result[existingIndex];
       existing.aliases = uniqueStrings([...existing.aliases, ...aliases], existing.canonicalName);
-      existing.note = existing.note || note;
+      existing.scope = mergeTextValues(existing.scope, scope, 120);
+      existing.note = mergeTextValues(existing.note, note, 240);
       continue;
     }
-    sameTerm.set(semanticKey, result.length);
+    sameCanonical.set(canonicalKey, result.length);
     result.push({ id, canonicalName, aliases, scope, note });
   }
   return result;
@@ -115,10 +130,7 @@ function upsertTerminology(items, draft = {}) {
   const canonicalName = text(draft.canonicalName || draft.name);
   if (!canonicalName) return current;
   const scope = text(draft.scope, 120);
-  const same = current.find(item => (
-    terminologyKey(item.canonicalName) === terminologyKey(canonicalName)
-    && item.scope === scope
-  ));
+  const same = current.find(item => terminologyKey(item.canonicalName) === terminologyKey(canonicalName));
   const nextItem = {
     id: text(draft.id, 80) || same?.id || `term-${Date.now()}`,
     canonicalName,
@@ -137,9 +149,7 @@ function addTerminologyAlias(items, canonicalName, alias, scope = '') {
   const canonicalKey = terminologyKey(canonicalName);
   const aliasText = text(alias);
   if (!canonicalKey || !aliasText) return current;
-  const target = current.find(item => (
-    terminologyKey(item.canonicalName) === canonicalKey && item.scope === text(scope, 120)
-  ));
+  const target = current.find(item => terminologyKey(item.canonicalName) === canonicalKey);
   if (!target) {
     return upsertTerminology(current, {
       canonicalName: text(canonicalName),

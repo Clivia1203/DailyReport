@@ -104,6 +104,8 @@ const state = {
     running: false,
     note: '',
     error: '',
+    pendingRelations: [],
+    dismissedRelations: new Set(),
     thinking: createTerminologyThinking()
   },
   workbench: {
@@ -2583,6 +2585,79 @@ function appendClosureSuggestions(parent, data, compact = true, withHeading = tr
   parent.appendChild(section);
 }
 
+function terminologyRelationKey(relation) {
+  if (relation?.key) return relation.key;
+  const names = [relation?.left?.canonicalName, relation?.right?.canonicalName]
+    .filter(Boolean)
+    .map(value => String(value).normalize('NFKC').toLocaleLowerCase().replace(/[\s\-_.·•/\\，。、“”‘’「」【】()（）:：;；]+/g, ''))
+    .sort();
+  return names.length === 2 && names[0] !== names[1] ? names.join('|') : '';
+}
+
+function appendTerminologyRelationSuggestions(parent, relations) {
+  const list = Array.isArray(relations) ? relations : [];
+  if (!list.length) return;
+  const section = wbNode('div', 'terminology-relation-suggestions');
+  section.appendChild(wbNode('div', 'wb-closure-section-title', uiText('术语关系待确认')));
+  section.appendChild(wbNode('div', 'wb-closure-suggestion-note', uiText('系统发现可能相关的术语，但没有足够证据替你合并；请明确选择。')));
+  for (const relation of list.slice(0, 20)) {
+    const box = wbNode('div', 'wb-closure-suggestion');
+    const copy = wbNode('div', 'wb-closure-suggestion-copy');
+    const left = relation.left || {};
+    const right = relation.right || {};
+    copy.appendChild(wbNode('div', 'wb-closure-suggestion-title', `${left.canonicalName} · ${right.canonicalName}`));
+    copy.appendChild(wbNode('div', 'wb-closure-suggestion-reason', uiText('待确认：这两个术语是否是同一事项？')));
+    const forms = [
+      ...(Array.isArray(left.aliases) ? left.aliases : []),
+      ...(Array.isArray(right.aliases) ? right.aliases : [])
+    ];
+    if (forms.length) copy.appendChild(wbNode('div', 'wb-closure-suggestion-reason', `${uiText('候选叫法：')}${forms.join('、')}`));
+    if (relation.reason) copy.appendChild(wbNode('div', 'wb-closure-suggestion-reason', relation.reason));
+    const actions = wbNode('div', 'wb-closure-suggestion-actions');
+    const yes = wbNode('button', 'link-btn', uiText('是'));
+    yes.type = 'button';
+    yes.addEventListener('click', () => resolveTerminologyRelation(relation, 'merge'));
+    const no = wbNode('button', 'link-btn', uiText('不是'));
+    no.type = 'button';
+    no.addEventListener('click', () => resolveTerminologyRelation(relation, 'separate'));
+    const later = wbNode('button', 'link-btn', uiText('不处理'));
+    later.type = 'button';
+    later.addEventListener('click', () => {
+      const key = terminologyRelationKey(relation);
+      if (key) state.terminologyDiscovery.dismissedRelations.add(key);
+      renderTerminologyUI();
+    });
+    actions.append(yes, no, later);
+    box.append(copy, actions);
+    section.appendChild(box);
+  }
+  parent.appendChild(section);
+}
+
+function resolveTerminologyRelation(relation, decision) {
+  return (async () => {
+    const res = await window.api.resolveTerminologyRelation(relation, decision);
+    if (!res?.ok) {
+      toast(uiText(res?.error || '术语关系处理失败'));
+      return;
+    }
+    if (state.settings) {
+      state.settings.terminology = res.terminology || [];
+      state.settings.terminologyPending = res.terminologyPending || [];
+      state.settings.terminologyRelations = res.terminologyRelations || [];
+      if (state.settings.terminologyDiscovery) state.settings.terminologyDiscovery.termCount = state.settings.terminology.length;
+    }
+    state.terminologyDiscovery.pendingRelations = res.terminologyPending || [];
+    const key = terminologyRelationKey(relation);
+    if (key) state.terminologyDiscovery.dismissedRelations.delete(key);
+    state.workbench.closure.cacheStatus = 'terminology-changed';
+    renderTerminologyUI();
+    renderTerminologyDiscoveryUI();
+    await loadWorkbenchClosure({ autoReason: 'configuration-change' });
+    toast(uiText(decision === 'merge' ? '术语关系已合并' : '已记住这两个术语不是同一事项'));
+  })();
+}
+
 function renderWorkbenchClosureCard() {
   const info = closureWorkbenchInfo();
   const card = wbNode('section', 'wb-card wb-closure-card');
@@ -2861,6 +2936,9 @@ function confirmClosureSuggestion(suggestion) {
     if (state.settings) {
       state.settings.terminology = res.terminology || [];
       state.settings.terminologyExclusions = res.terminologyExclusions || state.settings.terminologyExclusions || [];
+      state.settings.terminologyPending = res.terminologyPending || state.settings.terminologyPending || [];
+      state.settings.terminologyRelations = res.terminologyRelations || state.settings.terminologyRelations || [];
+      state.terminologyDiscovery.pendingRelations = state.settings.terminologyPending;
       if (state.settings.terminologyDiscovery) state.settings.terminologyDiscovery.termCount = state.settings.terminology.length;
     }
     removeClosureSuggestion(suggestion);
@@ -3509,6 +3587,7 @@ const DEFAULT_TERMINOLOGY_DISCOVERY_PROMPT = [
   '只有在结合完整记录、产品上下文和任务动作后能够合理判断为同一事项时才合并，不能只因为字面相似就合并。',
   '同一个产品可能存在不同功率段、版本或子任务；如果细分信息没有被稳定、明确地记录，使用产品族或更宏观的规范名称，不要猜测具体功率段。',
   '不要总结项目进度，不要补充日报之外的背景，不要把仅仅相关但不是同一事项的词语放进同一组。',
+  '任何可能是同一事项但证据不足的关系，必须放进 uncertain_matches，不能把它当成确定术语或别名写入 terms。',
   '如果没有足够证据形成可靠对照，可以返回空数组。'
 ].join('\n');
 
@@ -3594,6 +3673,12 @@ async function loadSettingsUI() {
   state.terminologyDiscovery.thinking = thinkingState.preserveThinking(state.terminologyDiscovery.thinking);
   state.settings = s;
   syncWeeklyWorkbenchViewport();
+  state.terminologyDiscovery.pendingRelations = Array.isArray(s.terminologyPending)
+    ? s.terminologyPending
+    : [];
+  if (!(state.terminologyDiscovery.dismissedRelations instanceof Set)) {
+    state.terminologyDiscovery.dismissedRelations = new Set();
+  }
   state.savedFilters = Array.isArray(s.savedFilters) ? s.savedFilters : [];
   renderSavedFilterOptions();
   hkDisplay.textContent = s.hotkey || uiText('未设置');
@@ -3958,8 +4043,15 @@ async function discoverTerminology(force = false, { silent = false } = {}) {
     if (state.settings) {
       if (res.ai) state.settings.ai = res.ai;
       state.settings.terminology = Array.isArray(res.terminology) ? res.terminology : [];
+      state.settings.terminologyPending = Array.isArray(res.terminologyPending)
+        ? res.terminologyPending
+        : state.settings.terminologyPending || [];
+      state.settings.terminologyRelations = Array.isArray(res.terminologyRelations)
+        ? res.terminologyRelations
+        : state.settings.terminologyRelations || [];
       state.settings.terminologyDiscovery = res.discovery || state.settings.terminologyDiscovery;
     }
+    state.terminologyDiscovery.pendingRelations = state.settings?.terminologyPending || [];
     state.terminologyDiscovery.error = '';
     state.terminologyDiscovery.note = res.skipped
       ? '词典已经初始化，继续使用已保存的对照关系。'
@@ -4480,13 +4572,22 @@ function renderTerminologyPending() {
   const dismissed = state.workbench?.closure?.dismissedSuggestions || new Set();
   const suggestions = (Array.isArray(data?.needs_confirmation) ? data.needs_confirmation : [])
     .filter(item => !dismissed.has(closureSuggestionKey(item)));
+  const relationDismissed = state.terminologyDiscovery?.dismissedRelations || new Set();
+  const relations = (Array.isArray(state.terminologyDiscovery?.pendingRelations)
+    ? state.terminologyDiscovery.pendingRelations
+    : [])
+    .filter(item => !relationDismissed.has(terminologyRelationKey(item)));
 
-  terminologyPending.hidden = !suggestions.length;
+  terminologyPending.hidden = !suggestions.length && !relations.length;
   terminologyPendingList.innerHTML = '';
-  if (terminologyPendingCount) terminologyPendingCount.textContent = suggestions.length ? uiText(`${suggestions.length} 项`) : '';
+  if (terminologyPendingCount) {
+    const count = suggestions.length + relations.length;
+    terminologyPendingCount.textContent = count ? uiText(`${count} 项`) : '';
+  }
   if (suggestions.length) {
     appendClosureSuggestions(terminologyPendingList, { needs_confirmation: suggestions }, false, false);
   }
+  if (relations.length) appendTerminologyRelationSuggestions(terminologyPendingList, relations);
 }
 
 function renderTerminologyUI() {
@@ -4567,6 +4668,9 @@ function renderTerminologyUI() {
       const res = await window.api.setTerminology(allTerms.filter(item => item.id !== term.id));
       if (!res.ok) { termMsg.textContent = uiText(res.error || '术语删除失败'); return; }
       state.settings.terminology = res.terminology;
+      state.settings.terminologyPending = res.terminologyPending || state.settings.terminologyPending || [];
+      state.settings.terminologyRelations = res.terminologyRelations || state.settings.terminologyRelations || [];
+      state.terminologyDiscovery.pendingRelations = state.settings.terminologyPending;
       if (state.settings.terminologyDiscovery) state.settings.terminologyDiscovery.termCount = state.settings.terminology.length;
       if (editingTerminologyId === term.id) resetTerminologyForm();
       renderTerminologyUI();
@@ -4610,6 +4714,9 @@ termSave.addEventListener('click', async () => {
   const res = await window.api.setTerminology(next);
   if (!res.ok) { termMsg.textContent = uiText(res.error || '术语保存失败'); return; }
   state.settings.terminology = res.terminology;
+  state.settings.terminologyPending = res.terminologyPending || state.settings.terminologyPending || [];
+  state.settings.terminologyRelations = res.terminologyRelations || state.settings.terminologyRelations || [];
+  state.terminologyDiscovery.pendingRelations = state.settings.terminologyPending;
   if (state.settings.terminologyDiscovery) state.settings.terminologyDiscovery.termCount = state.settings.terminology.length;
   resetTerminologyForm();
   renderTerminologyUI();

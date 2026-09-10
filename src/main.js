@@ -69,6 +69,12 @@ const {
   removeTerminologyExclusion
 } = require('./lib/terminology');
 const {
+  normalizeTerminologyPending,
+  normalizeTerminologyRelations,
+  reconcileTerminology,
+  applyTerminologyRelationDecision
+} = require('./lib/terminology-reconciliation');
+const {
   attachReportThinking,
   normalizeThinkingSnapshot
 } = require('./lib/thinking-snapshot');
@@ -81,7 +87,7 @@ const {
   splitDiscoverySources,
   buildDiscoveryPrompt,
   buildConsolidationPrompt,
-  parseTerminologyResponse,
+  parseTerminologyResponseDetailed,
   mergeTerminologyResults,
   normalizeDiscoveryState
 } = require('./lib/terminology-discovery');
@@ -102,6 +108,8 @@ const {
 } = require('./lib/closure-utils');
 const { createQuickBlurController } = require('./lib/quick-blur-controller');
 const { createBufferedJsonStore } = require('./lib/buffered-json-store');
+const { createRecoverableJsonFile } = require('./lib/recoverable-json-file');
+const { createReportStorage } = require('./lib/report-storage');
 const { createClosureHistoryCache } = require('./lib/closure-history-cache');
 const {
   DEFAULT_PROVIDER_ID,
@@ -261,6 +269,8 @@ const DEFAULT_SETTINGS = {
   terminologyDiscoveryPrompt: DEFAULT_TERMINOLOGY_DISCOVERY_PROMPT,
   terminology: [],
   terminologyExclusions: [],
+  terminologyPending: [],
+  terminologyRelations: [],
   terminologyDiscovery: {
     initialized: false,
     lastRunAt: 0,
@@ -282,6 +292,8 @@ let settings = {
   reportTemplates: { ...DEFAULT_SETTINGS.reportTemplates },
   terminology: [],
   terminologyExclusions: [],
+  terminologyPending: [],
+  terminologyRelations: [],
   terminologyDiscovery: { ...DEFAULT_SETTINGS.terminologyDiscovery }
 };
 
@@ -353,6 +365,8 @@ function settingsForClient(target = settings) {
     ...promptSettingsForClient(target),
     terminology: normalizeTerminology(target.terminology),
     terminologyExclusions: normalizeTerminologyExclusions(target.terminologyExclusions),
+    terminologyPending: normalizeTerminologyPending(target.terminologyPending, target.terminologyRelations),
+    terminologyRelations: normalizeTerminologyRelations(target.terminologyRelations),
     terminologyDiscovery: { ...normalizeDiscoveryState(target.terminologyDiscovery) },
     savedFilters: target.savedFilters.map(filter => ({ ...filter, rangeFocus: { ...filter.rangeFocus } }))
   };
@@ -395,9 +409,19 @@ function loadSettings() {
         if (typeof s.ai.lastError === 'string') settings.ai.lastError = s.ai.lastError;
         if (typeof s.ai.generationError === 'string') settings.ai.generationError = s.ai.generationError;
       }
+      const storedTerminology = Array.isArray(s.terminology) ? s.terminology : [];
       if (Array.isArray(s.terminology)) settings.terminology = normalizeTerminology(s.terminology);
       if (Array.isArray(s.terminologyExclusions)) {
         settings.terminologyExclusions = normalizeTerminologyExclusions(s.terminologyExclusions);
+      }
+      if (Array.isArray(s.terminologyRelations)) {
+        settings.terminologyRelations = normalizeTerminologyRelations(s.terminologyRelations);
+      }
+      if (Array.isArray(s.terminologyPending)) {
+        settings.terminologyPending = normalizeTerminologyPending(
+          s.terminologyPending,
+          settings.terminologyRelations
+        );
       }
       if (s.terminologyDiscovery && typeof s.terminologyDiscovery === 'object') {
         settings.terminologyDiscovery = normalizeDiscoveryState(s.terminologyDiscovery);
@@ -417,6 +441,19 @@ function loadSettings() {
         }
       }
       if (Array.isArray(s.savedFilters)) settings.savedFilters = normalizeSavedFilters(s.savedFilters);
+      const terminologyReconciled = reconcileTerminology({
+        existing: settings.terminology,
+        pending: settings.terminologyPending,
+        relations: settings.terminologyRelations
+      });
+      settings.terminology = terminologyReconciled.terminology;
+      settings.terminologyPending = terminologyReconciled.pending;
+      settings.terminologyRelations = terminologyReconciled.relations;
+      if (JSON.stringify(settings.terminology) !== JSON.stringify(storedTerminology)
+        || JSON.stringify(settings.terminologyPending) !== JSON.stringify(s.terminologyPending || [])
+        || JSON.stringify(settings.terminologyRelations) !== JSON.stringify(s.terminologyRelations || [])) {
+        shouldSave = true;
+      }
     }
   } catch { /* 首次运行，使用默认设置 */ }
 
@@ -529,19 +566,43 @@ function normalizeDB(db) {
   return { version: 2, entries: [], reports: [], closureSummaries: [] };
 }
 
+function onDataFileEvent(event) {
+  if (event.type === 'recovered') {
+    console.warn('[日报随手记] data.json 已损坏，已从上一份自动备份恢复', {
+      file: event.file,
+      backupFile: event.backupFile,
+      preservedFile: event.preservedFile || ''
+    });
+  } else if (event.type === 'unrecoverable') {
+    console.error('[日报随手记] data.json 与自动备份都无法读取，已保留损坏文件并使用空库', {
+      file: event.file,
+      backupFile: event.backupFile,
+      preservedFile: event.preservedFile || '',
+      error: event.error,
+      recoveryError: event.recoveryError
+    });
+  } else if (event.type === 'backup-failed') {
+    console.error('[日报随手记] data.json 自动备份失败，下一次写入仍会重试', event.error);
+  }
+}
+
+const dataFileAdapter = createRecoverableJsonFile({
+  file: dataFile,
+  backupFile: () => `${dataFile()}.bak`,
+  recoveryDirectory: () => backupDirectory(),
+  normalize: normalizeDB,
+  validate: value => !!value && typeof value === 'object' && !Array.isArray(value)
+    && Array.isArray(value.entries),
+  empty: () => normalizeDB(null),
+  onEvent: onDataFileEvent
+});
+
 function readDBFromDisk() {
-  try {
-    return normalizeDB(JSON.parse(fs.readFileSync(dataFile(), 'utf8')));
-  } catch { /* 首次运行或文件损坏，返回空库 */ }
-  return normalizeDB(null);
+  return dataFileAdapter.read();
 }
 
 function writeDBToDisk(db) {
-  const file = dataFile();
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  const tmp = file + '.tmp';
-  fs.writeFileSync(tmp, JSON.stringify(db, null, 2), 'utf8');
-  fs.renameSync(tmp, file);
+  return dataFileAdapter.write(db);
 }
 
 function dbFileSignature() {
@@ -555,6 +616,7 @@ function dbFileSignature() {
 
 let loadedDb = null;
 let entriesRevision = 0;
+let reportStorageMigrationAttempted = null;
 const closureHistoryCache = createClosureHistoryCache({ maxEntries: 8 });
 
 function markEntriesChanged(changedDates) {
@@ -577,7 +639,7 @@ function loadDB() {
     // 首次加载和外部编辑后的重新加载都可能改变历史来源，清理旧的历史缓存。
     markEntriesChanged();
   }
-  return db;
+  return migrateLegacyReportArtifacts(db);
 }
 
 function saveDB(db, options = {}) {
@@ -587,6 +649,38 @@ function saveDB(db, options = {}) {
 
 function flushDB() {
   return dbStore.flush();
+}
+
+function migrateLegacyReportArtifacts(db) {
+  if (db === reportStorageMigrationAttempted) return db;
+  const legacyReports = db.reports.filter(report => (
+    report && typeof report === 'object' && (
+      Object.prototype.hasOwnProperty.call(report, 'content')
+      || Object.prototype.hasOwnProperty.call(report, 'thinking')
+    )
+  ));
+  if (!legacyReports.length) {
+    reportStorageMigrationAttempted = db;
+    return db;
+  }
+
+  reportStorageMigrationAttempted = db;
+  try {
+    const migrated = reportStorage.migrateReports(db.reports);
+    const next = { ...db, reports: migrated.reports };
+    saveDB(next, { immediate: true });
+    reportStorageMigrationAttempted = next;
+    console.info('[日报随手记] 已自动迁移报告附件', {
+      reports: migrated.migratedReports,
+      content: migrated.migratedContent,
+      thinking: migrated.migratedThinking
+    });
+    return next;
+  } catch (error) {
+    // 迁移失败时不改写当前内存对象；旧版内嵌内容仍可继续读取，下一次启动会重试。
+    console.error('[日报随手记] 报告附件自动迁移失败，将保留旧格式并下次重试', error);
+    return db;
+  }
 }
 
 // 多个周期并发生成时，报告完成时间可能不同；串行合并写入，避免后完成的任务覆盖先完成的报告。
@@ -607,66 +701,18 @@ function reportContentDir() {
   return path.join(app.getPath('userData'), 'reports');
 }
 
-function reportContentFileName(id) {
-  return `${String(id || '').replace(/[^a-zA-Z0-9_-]/g, '_')}.md`;
-}
-
-function reportContentPath(report) {
-  if (!report?.id) return '';
-  const fileName = report.contentFile || reportContentFileName(report.id);
-  return path.join(reportContentDir(), fileName);
-}
+const reportStorage = createReportStorage({ directory: reportContentDir });
 
 function readReportContent(report) {
-  if (!report) return '';
-  if (report.contentFile) {
-    try { return fs.readFileSync(reportContentPath(report), 'utf8').replace(/^\ufeff/, ''); }
-    catch { return String(report.content || ''); }
-  }
-  return String(report.content || '');
+  return reportStorage.readContent(report);
 }
 
 function reportForClient(report) {
-  if (!report) return null;
-  return { ...report, content: readReportContent(report) };
+  return reportStorage.forClient(report);
 }
 
-function persistReportContent(report, { uniqueFile = false } = {}) {
-  if (!report?.id) return;
-  const content = String(report.content || '');
-  if (content.length <= REPORT_INLINE_CONTENT_LIMIT) {
-    if (report.contentFile) {
-      try { fs.unlinkSync(reportContentPath(report)); } catch { /* 文件已不存在 */ }
-      delete report.contentFile;
-    }
-    report.content = content;
-    return;
-  }
-
-  const dir = reportContentDir();
-  fs.mkdirSync(dir, { recursive: true });
-  // 恢复备份时使用新文件名，避免恢复过程覆盖现有报告正文；即使后续设置写入失败，
-  // 回滚后的旧报告仍然指向原文件。普通编辑继续使用稳定文件名，便于复用与读取。
-  const fileName = uniqueFile
-    ? reportContentFileName(`${report.id}-${crypto.randomUUID()}`)
-    : reportContentFileName(report.id);
-  const file = path.join(dir, fileName);
-  const tmp = file + '.tmp';
-  fs.writeFileSync(tmp, content, 'utf8');
-  try {
-    fs.renameSync(tmp, file);
-  } catch (error) {
-    if (!['EEXIST', 'EPERM'].includes(error?.code)) throw error;
-    try {
-      fs.unlinkSync(file);
-      fs.renameSync(tmp, file);
-    } catch (replaceError) {
-      try { fs.unlinkSync(tmp); } catch { /* 忽略临时文件清理失败 */ }
-      throw replaceError;
-    }
-  }
-  report.contentFile = fileName;
-  delete report.content;
+function persistReportArtifacts(report, options = {}) {
+  return reportStorage.persist(report, options);
 }
 
 function backupSnapshot() {
@@ -674,7 +720,7 @@ function backupSnapshot() {
   return createBackupPayload({
     settings,
     entries: db.entries,
-    reports: db.reports.map(report => ({ ...report, content: readReportContent(report) })),
+    reports: db.reports.map(report => reportStorage.forBackup(report)),
     closureSummaries: db.closureSummaries
   });
 }
@@ -743,6 +789,19 @@ function normalizeRestoredSettings(snapshot) {
     : DEFAULT_SETTINGS.terminologyDiscoveryPrompt;
   restored.terminology = normalizeTerminology(snapshot?.terminology);
   restored.terminologyExclusions = normalizeTerminologyExclusions(snapshot?.terminologyExclusions);
+  restored.terminologyRelations = normalizeTerminologyRelations(snapshot?.terminologyRelations);
+  restored.terminologyPending = normalizeTerminologyPending(
+    snapshot?.terminologyPending,
+    restored.terminologyRelations
+  );
+  const terminologyReconciled = reconcileTerminology({
+    existing: restored.terminology,
+    pending: restored.terminologyPending,
+    relations: restored.terminologyRelations
+  });
+  restored.terminology = terminologyReconciled.terminology;
+  restored.terminologyPending = terminologyReconciled.pending;
+  restored.terminologyRelations = terminologyReconciled.relations;
   restored.terminologyDiscovery = normalizeDiscoveryState({
     ...(snapshot?.terminologyDiscovery || restored.terminologyDiscovery),
     termCount: restored.terminology.length
@@ -783,9 +842,6 @@ const REPORT_LEGACY_MAX_OUTPUT_TOKENS = 8192;
 const REPORT_MAX_CONTINUATIONS = 2;
 const REPORT_SEGMENT_MAX_SOURCES = 40;
 const REPORT_SEGMENT_MAX_CHARS = 20000;
-// 普通报告仍内嵌在 data.json；真正较大的正文落到独立 Markdown 文件，
-// 避免每次保存一条记录都重写几 MB 的 JSON。
-const REPORT_INLINE_CONTENT_LIMIT = 128 * 1024;
 // 近期闭环是结构化 JSON，单次只需要返回结论、证据编号和少量待确认项。
 // 历史记录会按批次发送，避免把一个超长历史一次性塞进上下文。
 const CLOSURE_MAX_OUTPUT_TOKENS = 16384;
@@ -1042,8 +1098,8 @@ async function requestTerminologyDiscovery({ key, model, prompt, locale = settin
           });
         }
       }, null, { reasoningEffort: thinkingEnabled ? closureReasoningEffort() : 'low' });
-      const terms = parseTerminologyResponse(content);
-      if (!terms) {
+      const parsed = parseTerminologyResponseDetailed(content);
+      if (!parsed) {
         if (thinkingEnabled) {
           // 结构化词典不需要把思考文本返回给解析器；若思考预算挤占了最终 JSON，
           // 只对这次请求降级重试，不改变用户保存的思考强度设置。
@@ -1063,7 +1119,7 @@ async function requestTerminologyDiscovery({ key, model, prompt, locale = settin
         }
         throw new Error('AI 返回的术语词典无法解析，请重试');
       }
-      return terms;
+      return parsed;
     } catch (error) {
       if (error?.code === 'AI_STREAM_TIMEOUT' && error.hasActivity && !streamRecoveryAttempted) {
         streamRecoveryAttempted = true;
@@ -1092,6 +1148,7 @@ async function discoverTerminologyFromEntries({ key, model, entries, existing = 
   const sources = discoverySources(entries);
   const chunks = sources.length ? splitDiscoverySources(sources) : [];
   const candidates = [];
+  const uncertainRelations = [];
   notify({ scope: 'terminology', phase: 'started', model, totalBatches: chunks.length, recordCount: sources.length });
 
   for (let index = 0; index < chunks.length; index += 1) {
@@ -1103,14 +1160,15 @@ async function discoverTerminologyFromEntries({ key, model, entries, existing = 
       totalBatches: chunks.length,
       recordCount: chunks[index].length
     });
-    const terms = await requestTerminologyDiscovery({
+    const batchResult = await requestTerminologyDiscovery({
       key,
       model,
       locale,
       prompt: buildDiscoveryPrompt(chunks[index], customPrompt, locale),
       notify
     });
-    candidates.push(terms);
+    candidates.push(batchResult.terms);
+    uncertainRelations.push(...batchResult.uncertainRelations);
     notify({
       scope: 'terminology',
       phase: 'batch-done',
@@ -1133,7 +1191,8 @@ async function discoverTerminologyFromEntries({ key, model, entries, existing = 
         prompt: buildConsolidationPrompt(discovered, existing, customPrompt, locale),
         notify
       });
-      if (consolidated.length) discovered = consolidated;
+      if (consolidated.terms.length) discovered = consolidated.terms;
+      uncertainRelations.push(...consolidated.uncertainRelations);
     } catch {
       // 归并调用失败时保留已经逐批识别出的候选，不让一次辅助调用导致已有结果丢失。
       consolidationFallback = true;
@@ -1141,7 +1200,9 @@ async function discoverTerminologyFromEntries({ key, model, entries, existing = 
   }
 
   return {
+    discovered,
     terminology: mergeTerminologyResults([existing, discovered]),
+    uncertainRelations,
     recordCount: sources.length,
     batchCount: chunks.length,
     candidateCount: discovered.length,
@@ -1707,11 +1768,11 @@ ipcMain.handle('data:restore', async () => {
     const restoredSettings = normalizeRestoredSettings(payload.settings);
     const previousHotkey = settings.hotkey;
 
-    // 先以完整内联正文提交一次数据库，再把大正文写入唯一的新文件。
-    // 这样恢复中途失败时，旧数据库及其外置正文仍保持可回滚；不会出现同 ID 文件被覆盖的问题。
+    // 先以完整内联正文提交一次数据库，再把正文和思考过程写入唯一的新文件。
+    // 这样恢复中途失败时，旧数据库及其外置附件仍保持可回滚；不会出现同 ID 文件被覆盖的问题。
     saveDB(restoredDb, { immediate: true });
     markEntriesChanged();
-    for (const report of restoredDb.reports) persistReportContent(report, { uniqueFile: true });
+    for (const report of restoredDb.reports) persistReportArtifacts(report, { uniqueFile: true });
     saveDB(restoredDb, { immediate: true });
     settings = restoredSettings;
     if (previousHotkey !== settings.hotkey) {
@@ -1999,6 +2060,14 @@ function terminologyDiscoveryForClient() {
   return { ...normalizeDiscoveryState(settings.terminologyDiscovery) };
 }
 
+function terminologyPendingForClient() {
+  return normalizeTerminologyPending(settings.terminologyPending, settings.terminologyRelations);
+}
+
+function terminologyRelationsForClient() {
+  return normalizeTerminologyRelations(settings.terminologyRelations);
+}
+
 function sendTerminologyProgress(event, progress) {
   if (event.sender && !event.sender.isDestroyed()) {
     event.sender.send('terminology:progress', { scope: 'terminology', ...progress });
@@ -2018,6 +2087,8 @@ ipcMain.handle('terminology:discover', async (event, payload = {}) => {
       ok: true,
       skipped: true,
       terminology: normalizeTerminology(settings.terminology),
+      terminologyPending: terminologyPendingForClient(),
+      terminologyRelations: terminologyRelationsForClient(),
       discovery: terminologyDiscoveryForClient(),
       ai: aiPublicState()
     };
@@ -2052,6 +2123,8 @@ ipcMain.handle('terminology:discover', async (event, payload = {}) => {
         ok: true,
         skipped: false,
         terminology: normalizeTerminology(settings.terminology),
+        terminologyPending: terminologyPendingForClient(),
+        terminologyRelations: terminologyRelationsForClient(),
         discovery: terminologyDiscoveryForClient(),
         ai: aiPublicState(models)
       };
@@ -2066,8 +2139,18 @@ ipcMain.handle('terminology:discover', async (event, payload = {}) => {
       locale: settings.locale,
       notify
     });
-    // 识别期间允许用户继续编辑；最终合并当前设置，避免覆盖刚保存的手工词条。
-    settings.terminology = mergeTerminologyResults([settings.terminology, result.terminology]);
+    // 识别期间允许用户继续编辑；只自动合并规范名完全相同的项目，
+    // 其余关系进入待确认，不把模型的猜测直接写进词典。
+    const terminologyReconciled = reconcileTerminology({
+      existing: settings.terminology,
+      discovered: result.discovered || result.terminology,
+      uncertainRelations: result.uncertainRelations,
+      pending: settings.terminologyPending,
+      relations: settings.terminologyRelations
+    });
+    settings.terminology = terminologyReconciled.terminology;
+    settings.terminologyPending = terminologyReconciled.pending;
+    settings.terminologyRelations = terminologyReconciled.relations;
     settings.terminologyDiscovery = normalizeDiscoveryState({
       initialized: true,
       lastRunAt: Date.now(),
@@ -2083,18 +2166,22 @@ ipcMain.handle('terminology:discover', async (event, payload = {}) => {
       recordCount: result.recordCount,
       batchCount: result.batchCount,
       termCount: settings.terminology.length,
+      pendingCount: settings.terminologyPending.length,
       consolidationFallback: result.consolidationFallback
     });
     return {
       ok: true,
       skipped: false,
       terminology: normalizeTerminology(settings.terminology),
+      terminologyPending: terminologyPendingForClient(),
+      terminologyRelations: terminologyRelationsForClient(),
       discovery: terminologyDiscoveryForClient(),
       ai: aiPublicState(models),
       stats: {
         recordCount: result.recordCount,
         batchCount: result.batchCount,
         termCount: settings.terminology.length,
+        pendingCount: settings.terminologyPending.length,
         consolidationFallback: result.consolidationFallback
       }
     };
@@ -2518,7 +2605,7 @@ ipcMain.handle('report:generate', async (event, payload = {}) => {
       finishedAt: createdAt
     });
     notify({ phase: 'saving', ...progressDetails });
-    persistReportContent(report);
+    persistReportArtifacts(report);
     await appendReportRecord(report);
     if (settings.ai.generationError) {
       settings.ai.generationError = '';
@@ -2562,7 +2649,7 @@ ipcMain.handle('report:save', (_e, { id, content } = {}) => {
   report.complete = sourceAudit.every(item => item.cited && item.rawPreserved);
   report.finishReason = 'edited';
   report.updatedAt = Date.now();
-  persistReportContent(report);
+  persistReportArtifacts(report);
   saveDB(db, { immediate: true });
   return { ok: true, report: reportForClient(report) };
 });
@@ -2575,6 +2662,7 @@ ipcMain.handle('report:saveThinking', (_e, { id, thinking } = {}) => {
   const report = db.reports.find(x => x.id === id);
   if (!report) return { ok: false, error: '总结不存在或已被清理' };
   report.thinking = snapshot;
+  persistReportArtifacts(report);
   saveDB(db, { immediate: true });
   return { ok: true, thinking: snapshot };
 });
@@ -2763,13 +2851,25 @@ ipcMain.handle('settings:setTerminologyDiscoveryPrompt', (_e, { prompt } = {}) =
 });
 
 ipcMain.handle('settings:setTerminology', (_e, { terminology } = {}) => {
-  settings.terminology = normalizeTerminology(terminology);
+  const terminologyReconciled = reconcileTerminology({
+    existing: terminology,
+    pending: settings.terminologyPending,
+    relations: settings.terminologyRelations
+  });
+  settings.terminology = terminologyReconciled.terminology;
+  settings.terminologyPending = terminologyReconciled.pending;
+  settings.terminologyRelations = terminologyReconciled.relations;
   settings.terminologyDiscovery = normalizeDiscoveryState({
     ...settings.terminologyDiscovery,
     termCount: settings.terminology.length
   });
   saveSettings();
-  return { ok: true, terminology: normalizeTerminology(settings.terminology) };
+  return {
+    ok: true,
+    terminology: normalizeTerminology(settings.terminology),
+    terminologyPending: terminologyPendingForClient(),
+    terminologyRelations: terminologyRelationsForClient()
+  };
 });
 
 ipcMain.handle('settings:addTerminologyAlias', (_e, { canonicalName, alias, scope } = {}) => {
@@ -2783,6 +2883,14 @@ ipcMain.handle('settings:addTerminologyAlias', (_e, { canonicalName, alias, scop
       canonical,
       value
     );
+    const terminologyReconciled = reconcileTerminology({
+      existing: settings.terminology,
+      pending: settings.terminologyPending,
+      relations: settings.terminologyRelations
+    });
+    settings.terminology = terminologyReconciled.terminology;
+    settings.terminologyPending = terminologyReconciled.pending;
+    settings.terminologyRelations = terminologyReconciled.relations;
     settings.terminologyDiscovery = normalizeDiscoveryState({
       ...settings.terminologyDiscovery,
       termCount: settings.terminology.length
@@ -2791,7 +2899,9 @@ ipcMain.handle('settings:addTerminologyAlias', (_e, { canonicalName, alias, scop
     return {
       ok: true,
       terminology: normalizeTerminology(settings.terminology),
-      terminologyExclusions: normalizeTerminologyExclusions(settings.terminologyExclusions)
+      terminologyExclusions: normalizeTerminologyExclusions(settings.terminologyExclusions),
+      terminologyPending: terminologyPendingForClient(),
+      terminologyRelations: terminologyRelationsForClient()
     };
   } catch (error) {
     return { ok: false, error: error?.message || '术语别名保存失败' };
@@ -2811,6 +2921,35 @@ ipcMain.handle('settings:addTerminologyExclusion', (_e, { canonicalName, alias }
   return {
     ok: true,
     terminologyExclusions: normalizeTerminologyExclusions(settings.terminologyExclusions)
+  };
+});
+
+ipcMain.handle('settings:resolveTerminologyRelation', (_e, { relation, decision } = {}) => {
+  if (!['merge', 'separate'].includes(decision)) {
+    return { ok: false, error: '术语关系处理方式无效' };
+  }
+  const result = applyTerminologyRelationDecision({
+    terminology: settings.terminology,
+    pending: settings.terminologyPending,
+    relations: settings.terminologyRelations,
+    relation,
+    decision
+  });
+  if (!result.ok) return result;
+  settings.terminology = result.terminology;
+  settings.terminologyPending = result.pending;
+  settings.terminologyRelations = result.relations;
+  settings.terminologyDiscovery = normalizeDiscoveryState({
+    ...settings.terminologyDiscovery,
+    termCount: settings.terminology.length
+  });
+  saveSettings();
+  return {
+    ok: true,
+    decision,
+    terminology: normalizeTerminology(settings.terminology),
+    terminologyPending: terminologyPendingForClient(),
+    terminologyRelations: terminologyRelationsForClient()
   };
 });
 

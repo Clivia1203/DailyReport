@@ -36,7 +36,13 @@ test('备份包含记录、总结和设置，但不带出 API Key', () => {
       savedFilters: [{ id: 'f1', name: '客户问题', text: '客户' }]
     },
     entries: [{ id: 'e1', text: '完成接口联调', ts: 1000, createdAt: 1000 }],
-    reports: [{ id: 'r1', contentFile: 'r1.md', content: '# 工作总结\n正文' }],
+    reports: [{
+      id: 'r1',
+      contentFile: 'r1.md',
+      thinkingFile: 'r1.thinking.json',
+      content: '# 工作总结\n正文',
+      thinking: { phase: 'done', text: '思考过程' }
+    }],
     closureSummaries: [{ id: 'c1', start: '2026-09-01', end: '2026-09-07', completed_items: [] }],
     exportedAt: 1234
   });
@@ -47,6 +53,8 @@ test('备份包含记录、总结和设置，但不带出 API Key', () => {
   assert.equal(payload.data.entries.length, 1);
   assert.equal(payload.data.reports[0].content, '# 工作总结\n正文');
   assert.equal(payload.data.reports[0].contentFile, undefined);
+  assert.deepEqual(payload.data.reports[0].thinking, { phase: 'done', text: '思考过程' });
+  assert.equal(payload.data.reports[0].thinkingFile, undefined);
   assert.equal(payload.settings.ai.encryptedApiKey, '');
   assert.equal(JSON.stringify(payload).includes('secret-key'), false);
   assert.equal(payload.settings.savedFilters[0].name, '客户问题');
@@ -83,11 +91,17 @@ test('恢复设置时保留当前机器的 API Key，其他设置读取备份', 
   assert.equal(restored.reportTemplates.week, '备份模板');
 });
 
-test('恢复数据时规范化时间戳并移除旧的正文文件路径', () => {
+test('恢复数据时规范化时间戳并移除旧的正文和思考过程文件路径', () => {
   const restored = restoreDataSnapshot({
     version: 2,
     entries: [{ id: 'e1', text: '记录', ts: '1000', createdAt: '900' }],
-    reports: [{ id: 'r1', contentFile: 'old.md', content: '# 总结' }],
+    reports: [{
+      id: 'r1',
+      contentFile: 'old.md',
+      thinkingFile: 'old.thinking.json',
+      content: '# 总结',
+      thinking: { phase: 'done', text: '思考' }
+    }],
     closureSummaries: [{ id: 'c1', completed_items: [] }]
   });
 
@@ -95,5 +109,7 @@ test('恢复数据时规范化时间戳并移除旧的正文文件路径', () =>
   assert.equal(restored.entries[0].createdAt, 900);
   assert.equal(restored.reports[0].contentFile, undefined);
   assert.equal(restored.reports[0].content, '# 总结');
+  assert.equal(restored.reports[0].thinkingFile, undefined);
+  assert.deepEqual(restored.reports[0].thinking, { phase: 'done', text: '思考' });
   assert.equal(restored.closureSummaries[0].id, 'c1');
 });

@@ -6,7 +6,7 @@
     "custom": "Create a work summary according to the period and template specified by the user. You may adjust the wording and structure, but must preserve every fact, task detail, and timeline from the original entries."
   },
   "closurePrompt": "Organize work items from the current period that were recently completed or made stage-level progress. Prioritize matching problems, tests, or pending items mentioned in historical records with their resolution, completion, or verification results in the current period. Prefer the canonical names from the terminology rules; use a higher-level description when details are unclear. Keep the output concise and factual, and retain both historical and recent evidence.",
-  "terminologyDiscoveryPrompt": "Identify different names in the original daily entries that may refer to the same matter, and build a terminology mapping for later reports.\nA canonical name must be stable, concise, and supported by evidence in the entries; aliases must preserve the exact wording, abbreviations, colloquial names, misspellings, or newly coined terms actually used by the user.\nMerge names only when the complete records, product context, and task actions support that they refer to the same matter; do not merge based on surface similarity alone.\nA product may have different power ranges, versions, or subtasks. If the records do not clearly support a specific detail, use the product family or a higher-level canonical name instead of guessing.\nDo not summarize project progress, add background that is absent from the entries, or group merely related but different terms together.\nIf there is not enough evidence for a reliable mapping, return an empty array.",
+  "terminologyDiscoveryPrompt": "Identify different names in the original daily entries that may refer to the same matter, and build a terminology mapping for later reports.\nA canonical name must be stable, concise, and supported by evidence in the entries; aliases must preserve the exact wording, abbreviations, colloquial names, misspellings, or newly coined terms actually used by the user.\nMerge names only when the complete records, product context, and task actions support that they refer to the same matter; do not merge based on surface similarity alone.\nA product may have different power ranges, versions, or subtasks. If the records do not clearly support a specific detail, use the product family or a higher-level canonical name instead of guessing.\nDo not summarize project progress, add background that is absent from the entries, or group merely related but different terms together.\nAny relationship that may be the same matter but lacks enough evidence must go into uncertain_matches; never write it as a definite term or alias in terms.\nIf there is not enough evidence for a reliable confirmed mapping, terms may be an empty array, but suspected relationships must still be kept in uncertain_matches.",
   "reportSystemPrompt": "You are a rigorous work-summary assistant. Use only the user-provided original entries for synthesis and wording improvements; do not invent, expand, or remove facts. The summary must cover every source entry. If multiple entries concern the same matter, you may combine them, but preserve all task details, results, problems, and timeline. Output exactly one final body and do not include analysis, drafts, self-checks, or selection reasoning.",
   "reportContinuationPrompt": "The previous output reached the single-request limit or the stream was interrupted. Continue from the last complete point of the previous body. Do not repeat titles, sentences, or facts already output; prioritize citing source references not yet covered in this segment. Output only Markdown body text, without explanation.",
   "reportPromptRules": {
@@ -84,7 +84,7 @@
     "noHistory": "(No usable historical entries before the current period)"
   },
   "closureContinuationPrompt": "The previous JSON response did not finish. Continue from the last complete field and return one complete, valid JSON object only. Do not repeat the earlier object or add Markdown fences or explanations.",
-  "terminologySystemPrompt": "You are a terminology-merging assistant for daily work entries. Build mappings only from the provided entries; do not invent product, project, or power-range information. The final response must be valid JSON with no Markdown fences, explanations, or reasoning.",
+  "terminologySystemPrompt": "You are a terminology-merging assistant for daily work entries. Build mappings only from the provided entries; do not invent product, project, or power-range information. Write only definite relationships into terms; put uncertain relationships into uncertain_matches and never merge them silently. The final response must be valid JSON with no Markdown fences, explanations, or reasoning.",
   "terminologyRetryPrompt": "Output validation: the previous response could not be parsed. Generate the same result again as a complete JSON object that can be passed directly to JSON.parse. Do not output reasoning, Markdown fences, explanations, or comments.",
   "terminologyPromptRules": {
     "canonical": "Canonical name: ",
@@ -93,7 +93,7 @@
     "noteLabel": "; note: ",
     "noAliases": "none",
     "noExisting": "(No existing terminology)",
-    "uncertainMerge": "When candidates may refer to the same matter but the evidence is insufficient, keep a higher-level canonical name or do not merge them; do not output a new name unsupported by the candidates.",
+    "uncertainMerge": "When candidates may refer to the same matter but the evidence is insufficient, keep a higher-level canonical name or do not merge them; do not output a new name unsupported by the candidates. Put every uncertain relationship in uncertain_matches for the user to decide; do not write it directly into terms.",
     "task": "Task rules:",
     "records": "Entries in this batch (read every entry; each is factual evidence, and no candidate wording may be omitted):",
     "noRecords": "(No usable entries)",
@@ -102,15 +102,21 @@
     "constraint1": "1. aliases may contain only forms that actually appear in the input entries; do not invent aliases.",
     "constraint2": "2. Every term needs a canonical name; omit a term when no reliable alias or mapping exists.",
     "constraint3": "3. Do not split or assign a power range when the detail is unclear.",
+    "constraint4": "4. Terms that may be related but cannot be confirmed as the same matter must not be merged or given each other's aliases; put the pair in uncertain_matches and briefly explain the missing evidence.",
     "consolidate": "Merge the candidate terms from multiple batches into one final dictionary.",
     "mergeRules": "Merge rules:",
     "existing": "Existing user dictionary (must be preserved; new results may only add to it):",
     "candidates": "Candidates from this run:",
     "aliasesOnly": "aliases may come only from the existing dictionary or candidates; output no explanation.",
+    "uncertainMatches": "uncertain_matches contains only relationships that cannot be confirmed; they are not written automatically and await a user choice.",
     "formatCanonical": "A canonical name supported by evidence in the entries",
     "formatAlias1": "A form that actually appears in the entries",
     "formatAlias2": "Another form that actually appears in the entries",
     "formatScope": "Fill the scope only when explicitly supported; otherwise use an empty string",
-    "formatNote": "Explain when a detail should remain at a higher level"
+    "formatNote": "Explain when a detail should remain at a higher level",
+    "formatRelationLeft": "Canonical name of the first possibly related group",
+    "formatRelationRight": "Canonical name of the second possibly related group",
+    "formatRelationReason": "Explain why the relationship is plausible but not confirmed",
+    "formatConfidence": "low or medium"
   }
 }
