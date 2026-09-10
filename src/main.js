@@ -71,6 +71,11 @@ const {
 const {
   normalizeTerminologyPending,
   normalizeTerminologyRelations,
+  normalizeTerminologyRelation,
+  enrichRelation,
+  removeTerminologyRelationDecision,
+  terminologyRelationBasis,
+  recheckTerminologyDeferrals,
   reconcileTerminology,
   applyTerminologyRelationDecision
 } = require('./lib/terminology-reconciliation');
@@ -2068,6 +2073,20 @@ function terminologyRelationsForClient() {
   return normalizeTerminologyRelations(settings.terminologyRelations);
 }
 
+// 暂缓记录的依据指纹复核：相关日报没变的继续沉默，变了的原样回到待确认。
+function recheckTerminologyDeferralsIfNeeded() {
+  const result = recheckTerminologyDeferrals({
+    relations: settings.terminologyRelations,
+    pending: settings.terminologyPending,
+    terminology: settings.terminology,
+    entries: loadDB().entries
+  });
+  if (!result.changed) return;
+  settings.terminologyPending = result.pending;
+  settings.terminologyRelations = result.relations;
+  saveSettings();
+}
+
 function sendTerminologyProgress(event, progress) {
   if (event.sender && !event.sender.isDestroyed()) {
     event.sender.send('terminology:progress', { scope: 'terminology', ...progress });
@@ -2083,6 +2102,7 @@ ipcMain.handle('terminology:discover', async (event, payload = {}) => {
   const sourceHashValue = terminologyDiscoverySourceHash(entries);
   const previous = normalizeDiscoveryState(settings.terminologyDiscovery);
   if (!force && previous.initialized) {
+    recheckTerminologyDeferralsIfNeeded();
     return {
       ok: true,
       skipped: true,
@@ -2159,6 +2179,8 @@ ipcMain.handle('terminology:discover', async (event, payload = {}) => {
       recordCount: result.recordCount,
       termCount: settings.terminology.length
     });
+    // 重扫完成后立即复核暂缓依据：无关日报不惊扰，相关日报变化的原样回到待确认。
+    recheckTerminologyDeferralsIfNeeded();
     saveSettings();
     notify({
       phase: 'saved',
@@ -2925,15 +2947,26 @@ ipcMain.handle('settings:addTerminologyExclusion', (_e, { canonicalName, alias }
 });
 
 ipcMain.handle('settings:resolveTerminologyRelation', (_e, { relation, decision } = {}) => {
-  if (!['merge', 'separate'].includes(decision)) {
+  if (!['merge', 'separate', 'defer'].includes(decision)) {
     return { ok: false, error: '术语关系处理方式无效' };
   }
+  const normalized = normalizeTerminologyRelation(relation);
+  if (!normalized) return { ok: false, error: '术语关系无效' };
+  // 先把两侧吸附到词典条目并记录条目 id，让决定不随 AI 措辞漂移而失效。
+  const anchored = enrichRelation(normalized, settings.terminology) || normalized;
+  const deferExtras = decision === 'defer'
+    ? {
+      basisHash: terminologyRelationBasis(anchored, settings.terminology, loadDB().entries),
+      deferredAt: Date.now()
+    }
+    : {};
   const result = applyTerminologyRelationDecision({
     terminology: settings.terminology,
     pending: settings.terminologyPending,
     relations: settings.terminologyRelations,
-    relation,
-    decision
+    relation: anchored,
+    decision,
+    ...deferExtras
   });
   if (!result.ok) return result;
   settings.terminology = result.terminology;
@@ -2947,6 +2980,28 @@ ipcMain.handle('settings:resolveTerminologyRelation', (_e, { relation, decision 
   return {
     ok: true,
     decision,
+    terminology: normalizeTerminology(settings.terminology),
+    terminologyPending: terminologyPendingForClient(),
+    terminologyRelations: terminologyRelationsForClient()
+  };
+});
+
+ipcMain.handle('settings:restoreTerminologyRelation', (_e, { relation } = {}) => {
+  const normalized = normalizeTerminologyRelation(relation);
+  if (!normalized) return { ok: false, error: '术语关系无效' };
+  const previous = normalizeTerminologyRelations(settings.terminologyRelations);
+  const nextRelations = removeTerminologyRelationDecision(settings.terminologyRelations, normalized);
+  if (nextRelations.length === previous.length) {
+    return { ok: false, error: '没有找到对应的暂缓记录' };
+  }
+  settings.terminologyPending = normalizeTerminologyPending(
+    [...settings.terminologyPending, normalized],
+    nextRelations
+  );
+  settings.terminologyRelations = nextRelations;
+  saveSettings();
+  return {
+    ok: true,
     terminology: normalizeTerminology(settings.terminology),
     terminologyPending: terminologyPendingForClient(),
     terminologyRelations: terminologyRelationsForClient()
@@ -3358,6 +3413,8 @@ app.whenReady().then(() => {
   loadSettings();
   // 启动时建立内存快照；后续 IPC 直接复用同一份数据库，避免每次记录都重新解析文件。
   loadDB();
+  // 复核暂缓的待确认关系：上次运行后相关日报若有变化，现在就回到待确认。
+  recheckTerminologyDeferralsIfNeeded();
   // 跟随系统模式下，系统主题变化时通知所有窗口
   nativeTheme.on('updated', () => {
     if (settings.theme === 'auto') broadcastTheme();

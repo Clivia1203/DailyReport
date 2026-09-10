@@ -82,13 +82,20 @@ test('术语识别的不确定关系必须经过用户选择才会写入词典',
   assert.notEqual(start, -1, '术语识别处理器不存在');
   assert.match(handler, /reconcileTerminology\(/);
   assert.match(handler, /uncertainRelations: result\.uncertainRelations/);
+  assert.match(handler, /recheckTerminologyDeferralsIfNeeded\(\)/);
   assert.doesNotMatch(handler, /settings\.terminology\s*=\s*mergeTerminologyResults/);
   assert.match(mainSource, /ipcMain\.handle\('settings:resolveTerminologyRelation'/);
+  assert.match(mainSource, /\['merge', 'separate', 'defer'\]\.includes\(decision\)/);
+  assert.match(mainSource, /ipcMain\.handle\('settings:restoreTerminologyRelation'/);
   assert.match(preloadSource, /resolveTerminologyRelation:\s*\(relation, decision\)/);
+  assert.match(preloadSource, /restoreTerminologyRelation:\s*relation =>/);
   assert.match(appSource, /appendTerminologyRelationSuggestions/);
   assert.match(appSource, /resolveTerminologyRelation\(relation, 'merge'\)/);
   assert.match(appSource, /resolveTerminologyRelation\(relation, 'separate'\)/);
-  assert.match(appSource, /dismissedRelations\.add\(key\)/);
+  assert.match(appSource, /resolveTerminologyRelation\(relation, 'defer'\)/);
+  assert.match(appSource, /renderTerminologyDeferred/);
+  // “不处理”必须落盘为暂缓决定，不能退回只在当前界面隐藏。
+  assert.doesNotMatch(appSource, /dismissedRelations\.add\(key\)/);
 });
 
 test('并发周期报告的进度事件携带任务 ID，避免切周后串到当前页面', () => {

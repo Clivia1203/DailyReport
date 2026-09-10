@@ -117,6 +117,7 @@
     "formatRelationLeft": "可能相关的第一组规范名称",
     "formatRelationRight": "可能相关的第二组规范名称",
     "formatRelationReason": "说明为什么有关系但当前证据不足以确认",
-    "formatConfidence": "low 或 medium"
+    "formatConfidence": "low 或 medium",
+    "constraint5": "5. 同一事项只允许输出一个规范名称，其它写法全部放进该名称的 aliases；可能同指一件事的两个候选禁止拆成两个词条，必须作为 uncertain_matches 提出等待用户选择。"
   }
 }

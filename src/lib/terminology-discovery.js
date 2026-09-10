@@ -87,7 +87,8 @@ function buildDiscoveryPrompt(sources, customPrompt, locale = 'zh-CN') {
     rules.constraint1,
     rules.constraint2,
     rules.constraint3,
-    rules.constraint4
+    rules.constraint4,
+    rules.constraint5
   ].join('\n');
 }
 
@@ -124,7 +125,8 @@ function buildConsolidationPrompt(candidates, existing = [], customPrompt, local
     discoveryFormat(locale),
     '',
     rules.aliasesOnly,
-    rules.uncertainMatches
+    rules.uncertainMatches,
+    rules.constraint5
   ].join('\n');
 }
 

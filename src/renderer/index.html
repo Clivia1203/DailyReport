@@ -555,11 +555,21 @@
                 <div class="terminology-pending-head">
                   <div>
                     <div class="terminology-pending-title">待确认的叫法关联</div>
-                    <div class="set-sub">只有点击“是”才会合并；“不是”会记住分开；“不处理”只暂时隐藏，不会替你作出结论。</div>
+                    <div class="set-sub">只有点击“是”才会合并；“不是”会记住分开；“不处理”会暂缓，相关日报变化后才会再次提醒。</div>
                   </div>
                   <span class="terminology-pending-count" id="terminology-pending-count"></span>
                 </div>
                 <div id="terminology-pending-list"></div>
+              </section>
+              <section class="terminology-deferred" id="terminology-deferred" hidden>
+                <div class="terminology-pending-head">
+                  <div>
+                    <div class="terminology-pending-title">已暂缓的待确认关系</div>
+                    <div class="set-sub">相关日报变化后会自动回到待确认；也可以在这里手动恢复。</div>
+                  </div>
+                  <span class="terminology-pending-count" id="terminology-deferred-count"></span>
+                </div>
+                <div id="terminology-deferred-list"></div>
               </section>
               <div class="terminology-editor" id="terminology-editor">
                 <div class="terminology-editor-head">

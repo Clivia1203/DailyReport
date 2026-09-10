@@ -342,7 +342,6 @@
   "AI 只在无法确定时提示，不会自动写入术语。": "AI only asks when it is uncertain; it never writes terminology automatically.",
   "只有确定的重复项会自动整理，无法确定的关系会放在这里等待你选择。": "Only exact duplicate canonical names are cleaned up automatically; uncertain relationships wait here for your choice.",
   "快速记录不用选择项目或标签。首次连接 AI 后会阅读已有日报，识别可能指向同一事项的不同叫法并形成词典；只有确定的重复项会自动整理，无法确定的关系会放在这里等待你选择。": "Quick notes do not require projects or tags. After the first AI connection, existing daily notes are reviewed to identify different names for the same matter and build a terminology dictionary; only exact duplicate canonical names are cleaned up automatically, while uncertain relationships wait here for your choice.",
-  "只有点击“是”才会合并；“不是”会记住分开；“不处理”只暂时隐藏，不会替你作出结论。": "Only “Yes” merges them; “No” remembers them as separate; “Not now” only hides the prompt without deciding for you.",
   "术语关系待确认": "Terminology relationships to confirm",
   "系统发现可能相关的术语，但没有足够证据替你合并；请明确选择。": "These terminology groups may be related, but there is not enough evidence to merge them for you; choose explicitly.",
   "待确认：这两个术语是否是同一事项？": "Confirm whether these two terms refer to the same matter.",
@@ -540,5 +539,13 @@
   "闭环提示词不能为空": "The closure prompt cannot be empty",
   "闭环模型名称不能为空": "The closure model name cannot be empty",
   "0 组术语": "0 terminology groups",
-  "暂无保存筛选": "No saved filters"
+  "暂无保存筛选": "No saved filters",
+  "只有点击“是”才会合并；“不是”会记住分开；“不处理”会暂缓，相关日报变化后才会再次提醒。": "Only “Yes” merges them; “No” remembers them as separate; “Not now” defers the prompt until the related entries change.",
+  "已暂缓的待确认关系": "Deferred terminology matches",
+  "相关日报变化后会自动回到待确认；也可以在这里手动恢复。": "They return to pending automatically when the related entries change; you can also restore them here.",
+  "恢复待确认": "Restore to pending",
+  "已恢复到待确认列表": "Restored to the pending list",
+  "恢复暂缓失败": "Failed to restore the deferred match",
+  "已暂缓；相关日报变化后会再次提醒": "Deferred; you will be asked again once the related entries change",
+  "暂缓这条关系；相关日报变化后会再次提醒": "Defer this match; you will be asked again once the related entries change"
 }

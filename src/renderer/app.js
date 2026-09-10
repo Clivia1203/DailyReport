@@ -105,7 +105,6 @@ const state = {
     note: '',
     error: '',
     pendingRelations: [],
-    dismissedRelations: new Set(),
     thinking: createTerminologyThinking()
   },
   workbench: {
@@ -2585,15 +2584,6 @@ function appendClosureSuggestions(parent, data, compact = true, withHeading = tr
   parent.appendChild(section);
 }
 
-function terminologyRelationKey(relation) {
-  if (relation?.key) return relation.key;
-  const names = [relation?.left?.canonicalName, relation?.right?.canonicalName]
-    .filter(Boolean)
-    .map(value => String(value).normalize('NFKC').toLocaleLowerCase().replace(/[\s\-_.·•/\\，。、“”‘’「」【】()（）:：;；]+/g, ''))
-    .sort();
-  return names.length === 2 && names[0] !== names[1] ? names.join('|') : '';
-}
-
 function appendTerminologyRelationSuggestions(parent, relations) {
   const list = Array.isArray(relations) ? relations : [];
   if (!list.length) return;
@@ -2622,11 +2612,8 @@ function appendTerminologyRelationSuggestions(parent, relations) {
     no.addEventListener('click', () => resolveTerminologyRelation(relation, 'separate'));
     const later = wbNode('button', 'link-btn', uiText('不处理'));
     later.type = 'button';
-    later.addEventListener('click', () => {
-      const key = terminologyRelationKey(relation);
-      if (key) state.terminologyDiscovery.dismissedRelations.add(key);
-      renderTerminologyUI();
-    });
+    later.title = uiText('暂缓这条关系；相关日报变化后会再次提醒');
+    later.addEventListener('click', () => resolveTerminologyRelation(relation, 'defer'));
     actions.append(yes, no, later);
     box.append(copy, actions);
     section.appendChild(box);
@@ -2648,13 +2635,36 @@ function resolveTerminologyRelation(relation, decision) {
       if (state.settings.terminologyDiscovery) state.settings.terminologyDiscovery.termCount = state.settings.terminology.length;
     }
     state.terminologyDiscovery.pendingRelations = res.terminologyPending || [];
-    const key = terminologyRelationKey(relation);
-    if (key) state.terminologyDiscovery.dismissedRelations.delete(key);
     state.workbench.closure.cacheStatus = 'terminology-changed';
     renderTerminologyUI();
     renderTerminologyDiscoveryUI();
     await loadWorkbenchClosure({ autoReason: 'configuration-change' });
-    toast(uiText(decision === 'merge' ? '术语关系已合并' : '已记住这两个术语不是同一事项'));
+    const message = decision === 'merge'
+      ? '术语关系已合并'
+      : decision === 'defer'
+        ? '已暂缓；相关日报变化后会再次提醒'
+        : '已记住这两个术语不是同一事项';
+    toast(uiText(message));
+  })();
+}
+
+function restoreTerminologyRelation(record) {
+  return (async () => {
+    const res = await window.api.restoreTerminologyRelation(record);
+    if (!res?.ok) {
+      toast(uiText(res?.error || '恢复暂缓失败'));
+      return;
+    }
+    if (state.settings) {
+      state.settings.terminology = res.terminology || [];
+      state.settings.terminologyPending = res.terminologyPending || [];
+      state.settings.terminologyRelations = res.terminologyRelations || [];
+    }
+    state.terminologyDiscovery.pendingRelations = res.terminologyPending || [];
+    state.workbench.closure.cacheStatus = 'terminology-changed';
+    renderTerminologyUI();
+    renderTerminologyDiscoveryUI();
+    toast(uiText('已恢复到待确认列表'));
   })();
 }
 
@@ -3524,6 +3534,9 @@ const terminologyThinkingContent = $('#terminology-thinking-content');
 const terminologyPending = $('#terminology-pending');
 const terminologyPendingCount = $('#terminology-pending-count');
 const terminologyPendingList = $('#terminology-pending-list');
+const terminologyDeferred = $('#terminology-deferred');
+const terminologyDeferredCount = $('#terminology-deferred-count');
+const terminologyDeferredList = $('#terminology-deferred-list');
 const terminologyList = $('#terminology-list');
 const terminologyListCount = $('#terminology-list-count');
 const terminologySearch = $('#terminology-search');
@@ -3676,9 +3689,6 @@ async function loadSettingsUI() {
   state.terminologyDiscovery.pendingRelations = Array.isArray(s.terminologyPending)
     ? s.terminologyPending
     : [];
-  if (!(state.terminologyDiscovery.dismissedRelations instanceof Set)) {
-    state.terminologyDiscovery.dismissedRelations = new Set();
-  }
   state.savedFilters = Array.isArray(s.savedFilters) ? s.savedFilters : [];
   renderSavedFilterOptions();
   hkDisplay.textContent = s.hotkey || uiText('未设置');
@@ -4572,11 +4582,9 @@ function renderTerminologyPending() {
   const dismissed = state.workbench?.closure?.dismissedSuggestions || new Set();
   const suggestions = (Array.isArray(data?.needs_confirmation) ? data.needs_confirmation : [])
     .filter(item => !dismissed.has(closureSuggestionKey(item)));
-  const relationDismissed = state.terminologyDiscovery?.dismissedRelations || new Set();
-  const relations = (Array.isArray(state.terminologyDiscovery?.pendingRelations)
+  const relations = Array.isArray(state.terminologyDiscovery?.pendingRelations)
     ? state.terminologyDiscovery.pendingRelations
-    : [])
-    .filter(item => !relationDismissed.has(terminologyRelationKey(item)));
+    : [];
 
   terminologyPending.hidden = !suggestions.length && !relations.length;
   terminologyPendingList.innerHTML = '';
@@ -4590,8 +4598,38 @@ function renderTerminologyPending() {
   if (relations.length) appendTerminologyRelationSuggestions(terminologyPendingList, relations);
 }
 
+function renderTerminologyDeferred() {
+  if (!terminologyDeferred || !terminologyDeferredList) return;
+  const deferred = (Array.isArray(state.settings?.terminologyRelations) ? state.settings.terminologyRelations : [])
+    .filter(item => item?.decision === 'defer');
+  terminologyDeferred.hidden = !deferred.length;
+  terminologyDeferredList.innerHTML = '';
+  if (terminologyDeferredCount) {
+    terminologyDeferredCount.textContent = deferred.length ? uiText(`${deferred.length} 项`) : '';
+  }
+  for (const record of deferred) {
+    const box = wbNode('div', 'terminology-deferred-item');
+    const copy = wbNode('div', 'terminology-deferred-copy');
+    copy.appendChild(wbNode('div', 'terminology-deferred-title', `${record.leftCanonicalName} · ${record.rightCanonicalName}`));
+    const forms = [
+      ...(Array.isArray(record.leftAliases) ? record.leftAliases : []),
+      ...(Array.isArray(record.rightAliases) ? record.rightAliases : [])
+    ];
+    if (forms.length) copy.appendChild(wbNode('div', 'terminology-deferred-reason', `${uiText('候选叫法：')}${forms.join('、')}`));
+    if (record.reason) copy.appendChild(wbNode('div', 'terminology-deferred-reason', record.reason));
+    const actions = wbNode('div', 'terminology-deferred-actions');
+    const restore = wbNode('button', 'link-btn', uiText('恢复待确认'));
+    restore.type = 'button';
+    restore.addEventListener('click', () => restoreTerminologyRelation(record));
+    actions.appendChild(restore);
+    box.append(copy, actions);
+    terminologyDeferredList.appendChild(box);
+  }
+}
+
 function renderTerminologyUI() {
   renderTerminologyPending();
+  renderTerminologyDeferred();
   if (!terminologyList) return;
   terminologyList.innerHTML = '';
   const allTerms = Array.isArray(state.settings?.terminology) ? state.settings.terminology : [];

@@ -117,6 +117,7 @@
     "formatRelationLeft": "Canonical name of the first possibly related group",
     "formatRelationRight": "Canonical name of the second possibly related group",
     "formatRelationReason": "Explain why the relationship is plausible but not confirmed",
-    "formatConfidence": "low or medium"
+    "formatConfidence": "low or medium",
+    "constraint5": "5. A single matter may have exactly one canonical name; put every other wording into its aliases. Never output two separate entries that may refer to the same matter—raise the pair in uncertain_matches and wait for the user's choice."
   }
 }

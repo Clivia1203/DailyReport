@@ -117,6 +117,7 @@
     "formatRelationLeft": "関連する可能性がある第一の正式名称",
     "formatRelationRight": "関連する可能性がある第二の正式名称",
     "formatRelationReason": "関連する可能性はあるが確認できない理由",
-    "formatConfidence": "low または medium"
+    "formatConfidence": "low または medium",
+    "constraint5": "5. 同じ事柄には1つの正式名称だけを出力し、他の書き方はすべてその aliases に入れてください。同じ事柄を指す可能性がある2つの候補を独立した項目に分割せず、uncertain_matches として提出してユーザーの選択を待ってください。"
   }
 }
