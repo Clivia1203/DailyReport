@@ -138,6 +138,46 @@ test('周期报告保存 AI 思考快照，重启后可从已保存报告恢复'
   assert.match(appSource, /restoreReportThinkingFromReport\(res\.report\)/);
 });
 
+test('启动阶段预加载数据库，后台首轮恢复不会把数据库读取推迟到首次 IPC', () => {
+  const readyStart = mainSource.indexOf('app.whenReady().then');
+  const readyEnd = mainSource.indexOf('createMainWindow();', readyStart);
+  const readyHandler = mainSource.slice(readyStart, readyEnd === -1 ? mainSource.length : readyEnd);
+  assert.match(readyHandler, /loadSettings\(\);[\s\S]*loadDB\(\);/);
+  assert.match(mainSource, /let loadedDb = null/);
+  assert.match(mainSource, /let entriesRevision = 0/);
+});
+
+test('闭环历史来源按起始日期复用，并只在受影响的历史日期变更时失效', () => {
+  const cacheSource = fs.readFileSync(path.join(__dirname, 'lib', 'closure-history-cache.js'), 'utf8');
+  assert.match(mainSource, /createClosureHistoryCache\(\{ maxEntries: 8 \}\)/);
+  assert.match(mainSource, /closureHistoryCache\.get\(start, \(\) =>/);
+  assert.match(mainSource, /const contextCacheKey = \[entriesRevision,/);
+  assert.match(cacheSource, /if \(dates\.some\(date => date < start\)\) values\.delete\(start\)/);
+  assert.match(mainSource, /markEntriesChanged\(\[previousDate, localDateStr\(entry\.ts\)\]\)/);
+});
+
+test('AI 连接状态与生成状态分离，生成异常不会覆盖连接成功状态', () => {
+  assert.match(mainSource, /generationError: ''/);
+  assert.match(mainSource, /generationError: target\.generationError \|\| ''/);
+
+  for (const handlerName of ["ipcMain.handle('closure:generate'", "ipcMain.handle('report:generate'"]) {
+    const start = mainSource.indexOf(handlerName);
+    const end = mainSource.indexOf("ipcMain.handle('", start + handlerName.length);
+    const handler = mainSource.slice(start, end === -1 ? mainSource.length : end);
+    assert.notEqual(start, -1, `${handlerName} 处理器不存在`);
+    assert.match(handler, /settings\.ai\.generationError = message/);
+    const generationErrorIndex = handler.lastIndexOf('settings.ai.generationError = message');
+    const generationFailureBlock = handler.slice(Math.max(0, generationErrorIndex - 320), generationErrorIndex + 120);
+    assert.doesNotMatch(generationFailureBlock, /lastTestOk\s*=\s*false/);
+  }
+});
+
+test('默认软件渲染保持稳定，同时提供不写入配置的硬件渲染 A/B 开关', () => {
+  assert.match(mainSource, /const gpuEnabled = process\.argv\.includes\('--enable-gpu'\)/);
+  assert.match(mainSource, /DR_ENABLE_GPU/);
+  assert.match(mainSource, /if \(!gpuEnabled\) \{[\s\S]*appendSwitch\('disable-gpu'\)/);
+});
+
 test('AI 连接测试不落盘，配置由独立保存动作持久化', () => {
   const testStart = mainSource.indexOf("ipcMain.handle('ai:test'");
   const testEnd = mainSource.indexOf("ipcMain.handle('ai:save'", testStart);

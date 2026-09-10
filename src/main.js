@@ -102,6 +102,7 @@ const {
 } = require('./lib/closure-utils');
 const { createQuickBlurController } = require('./lib/quick-blur-controller');
 const { createBufferedJsonStore } = require('./lib/buffered-json-store');
+const { createClosureHistoryCache } = require('./lib/closure-history-cache');
 const {
   DEFAULT_PROVIDER_ID,
   getProvider,
@@ -120,13 +121,18 @@ const QUICK_SIZE = { width: 736, height: 176 };
 const QUICK_MAX_HEIGHT = 320;
 const QUICK_RESIZE_DURATION = 180;
 
-// 关闭 GPU 加速：透明小窗在部分机器上偶发 DWM 合成闪烁（弹出瞬间黑/白块）。
-// 本应用界面简单，软件渲染完全够用，以此换取透明窗口的显示稳定性。
-app.commandLine.appendSwitch('disable-gpu');
-// 某些 Windows 环境即使关闭硬件加速，Chromium 仍会尝试启动独立 GPU 子进程；
-// 该子进程缺少运行库时会在窗口创建前直接崩溃。放到主进程内运行，避免用户看到系统级错误框。
-app.commandLine.appendSwitch('in-process-gpu');
-app.disableHardwareAcceleration();
+// 默认继续使用软件渲染，避免透明小窗在部分机器上出现 DWM 合成闪烁。
+// 需要做硬件渲染 A/B 测试时，可使用 --enable-gpu 或 DR_ENABLE_GPU=1 启动；
+// 这样不会把实验性策略写入用户配置，也不会影响默认稳定模式。
+const gpuEnabled = process.argv.includes('--enable-gpu')
+  || ['1', 'true', 'on'].includes(String(process.env.DR_ENABLE_GPU || '').trim().toLowerCase());
+if (!gpuEnabled) {
+  app.commandLine.appendSwitch('disable-gpu');
+  // 某些 Windows 环境即使关闭硬件加速，Chromium 仍会尝试启动独立 GPU 子进程；
+  // 该子进程缺少运行库时会在窗口创建前直接崩溃。放到主进程内运行，避免用户看到系统级错误框。
+  app.commandLine.appendSwitch('in-process-gpu');
+  app.disableHardwareAcceleration();
+}
 
 const gotLock = app.requestSingleInstanceLock();
 if (!gotLock) {
@@ -243,7 +249,8 @@ const DEFAULT_SETTINGS = {
     encryptedApiKey: '',
     lastTestAt: 0,
     lastTestOk: false,
-    lastError: ''
+    lastError: '',
+    generationError: ''
   },
   promptSchemaVersion: PROMPT_SCHEMA_VERSION,
   promptOverrides: createPromptOverrides(),
@@ -383,6 +390,7 @@ function loadSettings() {
         if (Number.isFinite(s.ai.lastTestAt)) settings.ai.lastTestAt = s.ai.lastTestAt;
         if (typeof s.ai.lastTestOk === 'boolean') settings.ai.lastTestOk = s.ai.lastTestOk;
         if (typeof s.ai.lastError === 'string') settings.ai.lastError = s.ai.lastError;
+        if (typeof s.ai.generationError === 'string') settings.ai.generationError = s.ai.generationError;
       }
       if (Array.isArray(s.terminology)) settings.terminology = normalizeTerminology(s.terminology);
       if (Array.isArray(s.terminologyExclusions)) {
@@ -543,7 +551,14 @@ function dbFileSignature() {
 }
 
 let loadedDb = null;
-let dbRevision = 0;
+let entriesRevision = 0;
+const closureHistoryCache = createClosureHistoryCache({ maxEntries: 8 });
+
+function markEntriesChanged(changedDates) {
+  entriesRevision += 1;
+  closureHistoryCache.invalidate(changedDates);
+}
+
 const dbStore = createBufferedJsonStore({
   read: readDBFromDisk,
   write: writeDBToDisk,
@@ -556,14 +571,14 @@ function loadDB() {
   const db = dbStore.load();
   if (db !== loadedDb) {
     loadedDb = db;
-    dbRevision += 1;
+    // 首次加载和外部编辑后的重新加载都可能改变历史来源，清理旧的历史缓存。
+    markEntriesChanged();
   }
   return db;
 }
 
 function saveDB(db, options = {}) {
   loadedDb = db;
-  dbRevision += 1;
   return dbStore.save(db, options);
 }
 
@@ -817,7 +832,8 @@ function aiPublicState(models = settings.ai.models, source = settings.ai, option
     supportsReasoningControl: provider.supportsReasoningControl,
     lastTestAt: target.lastTestAt,
     lastTestOk: target.lastTestOk,
-    lastError: target.lastError
+    lastError: target.lastError,
+    generationError: target.generationError || ''
   };
 }
 
@@ -836,6 +852,7 @@ function clearAiStoredCredential() {
   settings.ai.lastTestAt = 0;
   settings.ai.lastTestOk = false;
   settings.ai.lastError = '';
+  settings.ai.generationError = '';
 }
 
 function aiConnection(overrides = {}) {
@@ -857,6 +874,7 @@ function applyAiConnectionTo(target, connection) {
     target.lastTestAt = 0;
     target.lastTestOk = false;
     target.lastError = '';
+    target.generationError = '';
   }
   return changed;
 }
@@ -1195,7 +1213,7 @@ function closureContext(start, end, periodType = 'week') {
   const db = loadDB();
   const terminologyHash = closureTerminologyHash();
   const promptHash = closurePromptHash();
-  const contextCacheKey = [dbRevision, periodType, start, end, terminologyHash, promptHash].join('|');
+  const contextCacheKey = [entriesRevision, periodType, start, end, terminologyHash, promptHash].join('|');
   const cached = closureContextCache.get(contextCacheKey);
   if (cached) {
     closureContextCache.delete(contextCacheKey);
@@ -1206,9 +1224,11 @@ function closureContext(start, end, periodType = 'week') {
     const day = localDateStr(entry.ts);
     return day >= start && day <= end;
   });
-  const historyEntries = db.entries.filter(entry => localDateStr(entry.ts) < start);
   const recentSources = closureSourceBundle(recentEntries, 'N');
-  const historicalSources = closureSourceBundle(historyEntries, 'H');
+  const historicalSources = closureHistoryCache.get(start, () => {
+    const historyEntries = db.entries.filter(entry => localDateStr(entry.ts) < start);
+    return closureSourceBundle(historyEntries, 'H');
+  });
   const inputHash = closureInputHash(
     recentSources,
     historicalSources,
@@ -1616,7 +1636,8 @@ function buildExport(entries, start, end, format, locale = settings.locale) {
 /* ---------------- IPC 接口 ---------------- */
 
 function notifyMainChanged() {
-  if (mainWindow && !mainWindow.isDestroyed()) {
+  // 主窗口隐藏到托盘时，恢复阶段会主动刷新；不要为每条快速记录发送无效 IPC。
+  if (mainWindow && !mainWindow.isDestroyed() && mainWindow.isVisible()) {
     mainWindow.webContents.send('entries:changed');
   }
 }
@@ -1634,6 +1655,7 @@ ipcMain.handle('entries:add', (_e, { text, ts }) => {
   const db = loadDB();
   db.entries.push(entry);
   saveDB(db);
+  markEntriesChanged([localDateStr(entry.ts)]);
   notifyMainChanged();
   return { ok: true, entry };
 });
@@ -1642,17 +1664,21 @@ ipcMain.handle('entries:update', (_e, { id, patch }) => {
   const db = loadDB();
   const entry = db.entries.find(x => x.id === id);
   if (!entry) return { ok: false };
+  const previousDate = localDateStr(entry.ts);
   if (patch.text !== undefined) entry.text = String(patch.text).trim();
   if (patch.ts !== undefined) entry.ts = Number(patch.ts) || entry.ts;
   saveDB(db);
+  markEntriesChanged([previousDate, localDateStr(entry.ts)]);
   notifyMainChanged();
   return { ok: true };
 });
 
 ipcMain.handle('entries:delete', (_e, { id }) => {
   const db = loadDB();
+  const removed = db.entries.find(x => x.id === id);
   db.entries = db.entries.filter(x => x.id !== id);
   saveDB(db);
+  if (removed) markEntriesChanged([localDateStr(removed.ts)]);
   notifyMainChanged();
   return { ok: true };
 });
@@ -1661,9 +1687,11 @@ ipcMain.handle('entries:deleteMany', (_e, { ids }) => {
   if (!Array.isArray(ids) || !ids.length) return { ok: false, removed: 0 };
   const db = loadDB();
   const set = new Set(ids);
+  const removed = db.entries.filter(x => set.has(x.id));
   const before = db.entries.length;
   db.entries = db.entries.filter(x => !set.has(x.id));
   saveDB(db);
+  if (removed.length) markEntriesChanged(removed.map(entry => localDateStr(entry.ts)));
   notifyMainChanged();
   return { ok: true, removed: before - db.entries.length };
 });
@@ -1722,6 +1750,7 @@ ipcMain.handle('data:restore', async () => {
     // 先以完整内联正文提交一次数据库，再把大正文写入唯一的新文件。
     // 这样恢复中途失败时，旧数据库及其外置正文仍保持可回滚；不会出现同 ID 文件被覆盖的问题。
     saveDB(restoredDb, { immediate: true });
+    markEntriesChanged();
     for (const report of restoredDb.reports) persistReportContent(report, { uniqueFile: true });
     saveDB(restoredDb, { immediate: true });
     settings = restoredSettings;
@@ -1743,6 +1772,7 @@ ipcMain.handle('data:restore', async () => {
   } catch (error) {
     try {
       saveDB(previousDb, { immediate: true });
+      markEntriesChanged();
       settings = previousSettings;
       saveSettings();
       applyLoginItem();
@@ -1876,6 +1906,7 @@ ipcMain.handle('ai:test', async (event, payload = {}) => {
       draftAi.lastTestAt = Date.now();
       draftAi.lastTestOk = true;
       draftAi.lastError = '';
+      draftAi.generationError = '';
       return {
         ok: true,
         modelChanged,
@@ -1899,6 +1930,7 @@ ipcMain.handle('ai:test', async (event, payload = {}) => {
       draftAi.lastTestAt = Date.now();
       draftAi.lastTestOk = false;
       draftAi.lastError = error?.message || '连接失败';
+      draftAi.generationError = '';
       return {
         ok: false,
         error: draftAi.lastError,
@@ -1938,6 +1970,7 @@ ipcMain.handle('ai:save', (_e, payload = {}) => {
     }
     if (suppliedKey) settings.ai.encryptedApiKey = encryptApiKey(suppliedKey);
     if (!settings.ai.encryptedApiKey) return { ok: false, error: '请先填写 API Key', ai: aiPublicState() };
+    settings.ai.generationError = '';
     saveSettings();
     return { ok: true, ai: aiPublicState() };
   } catch (error) {
@@ -1960,6 +1993,7 @@ ipcMain.handle('ai:setModel', (_e, { model } = {}) => {
   settings.ai.model = value;
   settings.ai.lastTestOk = false;
   settings.ai.lastError = '模型已更换，请重新测试连接';
+  settings.ai.generationError = '';
   saveSettings();
   return { ok: true, ai: aiPublicState() };
 });
@@ -1973,6 +2007,7 @@ ipcMain.handle('ai:setClosureModel', (_e, { model } = {}) => {
   settings.ai.closureModel = value;
   settings.ai.lastTestOk = false;
   settings.ai.lastError = '闭环模型已更换，请重新测试连接';
+  settings.ai.generationError = '';
   saveSettings();
   return { ok: true, ai: aiPublicState() };
 });
@@ -2183,6 +2218,7 @@ ipcMain.handle('closure:generate', async (event, payload = {}) => {
     settings.ai.lastTestAt = Date.now();
     settings.ai.lastTestOk = false;
     settings.ai.lastError = error?.message || '连接失败';
+    settings.ai.generationError = '';
     saveSettings();
     return { ok: false, error: settings.ai.lastError };
   }
@@ -2268,6 +2304,10 @@ ipcMain.handle('closure:generate', async (event, payload = {}) => {
     const db = loadDB();
     db.closureSummaries.push(summary);
     saveDB(db);
+    if (settings.ai.generationError) {
+      settings.ai.generationError = '';
+      saveSettings();
+    }
     notify({
       scope: 'closure',
       phase: 'saved',
@@ -2289,6 +2329,8 @@ ipcMain.handle('closure:generate', async (event, payload = {}) => {
   } catch (error) {
     // 生成过程失败不等于连接失效；连接状态只由 ai:test 和模型/平台变更维护。
     const message = error?.message || '近期闭环生成失败';
+    settings.ai.generationError = message;
+    saveSettings();
     if (event.sender && !event.sender.isDestroyed()) {
       event.sender.send('closure:progress', { scope: 'closure', phase: 'error', error: message });
     }
@@ -2370,6 +2412,7 @@ ipcMain.handle('report:generate', async (event, payload = {}) => {
   } catch (error) {
     settings.ai.lastTestOk = false;
     settings.ai.lastError = error?.message || '连接失败';
+    settings.ai.generationError = '';
     saveSettings();
     return { ok: false, error: settings.ai.lastError };
   }
@@ -2510,11 +2553,17 @@ ipcMain.handle('report:generate', async (event, payload = {}) => {
     notify({ phase: 'saving', ...progressDetails });
     persistReportContent(report);
     await appendReportRecord(report);
+    if (settings.ai.generationError) {
+      settings.ai.generationError = '';
+      saveSettings();
+    }
     notify({ phase: 'saved', ...progressDetails });
     return { ok: true, cached: false, report: reportForClient(report), models, modelChanged: previousModel !== model };
   } catch (error) {
     // 报告生成/解析/保存失败不应把已经可用的 AI 连接标成失败。
     const message = error?.message || '生成总结失败';
+    settings.ai.generationError = message;
+    saveSettings();
     if (event.sender && !event.sender.isDestroyed()) {
       event.sender.send('report:progress', { phase: 'error', error: message, jobId });
     }
@@ -3201,6 +3250,8 @@ app.whenReady().then(() => {
   app.setAppUserModelId('com.ddup5.dailyreport');
 
   loadSettings();
+  // 启动时建立内存快照；后续 IPC 直接复用同一份数据库，避免每次记录都重新解析文件。
+  loadDB();
   // 跟随系统模式下，系统主题变化时通知所有窗口
   nativeTheme.on('updated', () => {
     if (settings.theme === 'auto') broadcastTheme();
