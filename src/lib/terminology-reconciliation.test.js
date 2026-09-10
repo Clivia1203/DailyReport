@@ -1,5 +1,6 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
+const terminologyReconciliation = require('./terminology-reconciliation');
 const {
   terminologyRelationKey,
   normalizeTerminologyPending,
@@ -12,6 +13,23 @@ const {
   recheckTerminologyDeferrals,
   reconcileTerminology
 } = require('./terminology-reconciliation');
+
+// main.js 逐名解构导入；任何漏导出都会让 IPC 处理器在运行时抛错，这里静态兜底。
+test('主进程依赖的归并函数全部真实导出', () => {
+  for (const name of [
+    'normalizeTerminologyPending',
+    'normalizeTerminologyRelations',
+    'normalizeTerminologyRelation',
+    'enrichRelation',
+    'removeTerminologyRelationDecision',
+    'terminologyRelationBasis',
+    'recheckTerminologyDeferrals',
+    'reconcileTerminology',
+    'applyTerminologyRelationDecision'
+  ]) {
+    assert.equal(typeof terminologyReconciliation[name], 'function', `${name} 应为导出的函数`);
+  }
+});
 
 const entry = (id, text, ts = Date.parse('2026-09-01T09:00:00')) => ({ id, ts, text });
 

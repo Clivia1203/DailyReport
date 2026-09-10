@@ -553,6 +553,7 @@ module.exports = {
   normalizeTerminologyPending,
   normalizeTerminologyRelations,
   relationMatchesDecision,
+  enrichRelation,
   addTerminologyRelationDecision,
   removeTerminologyRelationDecision,
   findTerminologyConflicts,

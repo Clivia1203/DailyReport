@@ -2623,7 +2623,13 @@ function appendTerminologyRelationSuggestions(parent, relations) {
 
 function resolveTerminologyRelation(relation, decision) {
   return (async () => {
-    const res = await window.api.resolveTerminologyRelation(relation, decision);
+    let res;
+    try {
+      res = await window.api.resolveTerminologyRelation(relation, decision);
+    } catch (error) {
+      toast(uiText(error?.message || '术语关系处理失败'));
+      return;
+    }
     if (!res?.ok) {
       toast(uiText(res?.error || '术语关系处理失败'));
       return;
@@ -2650,7 +2656,13 @@ function resolveTerminologyRelation(relation, decision) {
 
 function restoreTerminologyRelation(record) {
   return (async () => {
-    const res = await window.api.restoreTerminologyRelation(record);
+    let res;
+    try {
+      res = await window.api.restoreTerminologyRelation(record);
+    } catch (error) {
+      toast(uiText(error?.message || '恢复暂缓失败'));
+      return;
+    }
     if (!res?.ok) {
       toast(uiText(res?.error || '恢复暂缓失败'));
       return;
