@@ -26,6 +26,14 @@ test('闭环界面只展示事件信息，不泄漏内部来源编号', () => {
   assert.match(appSource, /wb-closure-evidence-time/);
 });
 
+test('近期闭环事项统一使用深色左边框，不再用来源区分卡片样式', () => {
+  assert.match(appSource, /const row = wbNode\('article', 'wb-closure-item'\);/);
+  assert.doesNotMatch(appSource, /item\.kind === 'recent'/);
+  assert.match(cssSource, /\.wb-closure-item\s*\{[\s\S]*border-left:\s*3px solid var\(--border-strong\)/);
+  assert.doesNotMatch(cssSource, /\.wb-closure-item\.recent\s*\{/);
+  assert.match(cssSource, /\.closure-modal-content \.wb-closure-item\s*\{[\s\S]*border-left:\s*3px solid var\(--border-strong\)/);
+});
+
 test('近期闭环支持默认收起且不落盘的 AI 思考过程', () => {
   assert.match(appSource, /function createClosureThinking\(visible = false\)/);
   assert.match(appSource, /thinking:\s*createClosureThinking\(\)/);

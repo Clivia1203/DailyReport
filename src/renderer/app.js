@@ -2397,10 +2397,10 @@ function closureSuggestionKey(item) {
 function closureItems(data = state.workbench.closure.data) {
   if (!data) return [];
   const completed = Array.isArray(data.completed_items)
-    ? data.completed_items.map(item => ({ ...item, kind: 'closed' }))
+    ? data.completed_items
     : [];
   const direct = Array.isArray(data.recent_explicit_completions)
-    ? data.recent_explicit_completions.map(item => ({ ...item, kind: 'recent' }))
+    ? data.recent_explicit_completions
     : [];
   return [...completed, ...direct];
 }
@@ -2514,7 +2514,7 @@ function appendClosureEvidence(parent, evidence, label, limit = 2) {
 }
 
 function renderClosureItem(item, compact = true) {
-  const row = wbNode('article', `wb-closure-item${item.kind === 'recent' ? ' recent' : ''}`);
+  const row = wbNode('article', 'wb-closure-item');
   const head = wbNode('div', 'wb-closure-item-head');
   head.appendChild(wbNode('div', 'wb-closure-item-title', item.title));
   head.appendChild(wbNode('span', 'wb-confidence', uiText(item.confidence === 'high' ? '较确定' : '需谨慎')));
