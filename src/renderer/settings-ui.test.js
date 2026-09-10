@@ -144,6 +144,22 @@ test('AI 服务将连接测试与配置保存拆成两个明确动作', () => {
   assert.match(preloadSource, /cancelAiTest:\s*\(\)\s*=>\s*ipcRenderer\.send\('ai:test:cancel'\)/);
 });
 
+test('AI 设置可以关闭报告、闭环和术语识别的详细过程入口', () => {
+  const serviceStart = htmlSource.indexOf('<section class="card set-group ai-settings-panel" data-ai-panel="service"');
+  const serviceEnd = htmlSource.indexOf('<section class="card set-group ai-settings-panel" data-ai-panel="report"', serviceStart);
+  const service = htmlSource.slice(serviceStart, serviceEnd === -1 ? htmlSource.length : serviceEnd);
+
+  assert.match(service, /type="checkbox"[^>]*id="ai-show-thinking"/);
+  assert.match(service, /显示 AI 思考过程入口/);
+  assert.match(service, /关闭后隐藏报告、闭环和术语识别中的详细过程按钮；不影响 AI 生成。/);
+  assert.match(appSource, /function aiThinkingDetailsEnabled\(\)[\s\S]*showThinking !== false/);
+  assert.match(appSource, /reportThinkingToggle\.hidden = !showDetails/);
+  assert.match(appSource, /toggle\.hidden = !showDetails/);
+  assert.match(appSource, /terminologyThinkingToggle\.hidden = !showDetails/);
+  assert.match(appSource, /aiShowThinking\?\.addEventListener\('change'[\s\S]*setAiThinkingVisibility/);
+  assert.match(preloadSource, /setAiThinkingVisibility:\s*showThinking\s*=>\s*ipcRenderer\.invoke\('ai:setThinkingVisibility'/);
+});
+
 test('清空 API Key 后不回填旧掩码，并把清除意图传给主进程', () => {
   assert.match(appSource, /function readAiKeyDraft\(\)[\s\S]*clearRequested[\s\S]*useStoredApiKey/);
   assert.match(appSource, /aiKey\.dataset\.saved === 'true'/);

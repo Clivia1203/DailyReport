@@ -8,6 +8,7 @@ const preloadSource = fs.readFileSync(path.join(__dirname, 'preload.js'), 'utf8'
 const appSource = fs.readFileSync(path.join(__dirname, 'renderer', 'app.js'), 'utf8');
 const indexSource = fs.readFileSync(path.join(__dirname, 'renderer', 'index.html'), 'utf8');
 const i18nSource = fs.readFileSync(path.join(__dirname, 'renderer', 'i18n.js'), 'utf8');
+const aiStreamSource = fs.readFileSync(path.join(__dirname, 'lib', 'ai-stream.js'), 'utf8');
 const discovery = require('./lib/terminology-discovery');
 const promptCatalog = require('./lib/prompt-catalog');
 
@@ -79,7 +80,8 @@ test('并发周期报告的进度事件携带任务 ID，避免切周后串到�
 });
 
 test('报告流正常结束但缺少 finish_reason 时按完成处理，续写不重复开启思考', () => {
-  assert.match(mainSource, /return \{ finishReason: finishReason \|\| 'stop', usage \}/);
+  assert.match(mainSource, /const aiStreamRequest = createAiStream\(\)/);
+  assert.match(aiStreamSource, /return \{ finishReason: finishReason \|\| 'stop', usage \}/);
   assert.match(mainSource, /const thinkingEnabled = continuationCount === 0/);
 });
 
@@ -190,6 +192,15 @@ test('AI 连接测试不落盘，配置由独立保存动作持久化', () => {
   assert.match(testHandler, /applyAiConnectionTo\(draftAi, connection\)/);
   assert.doesNotMatch(testHandler, /settings\.ai\.[A-Za-z]+\s*=/);
   assert.match(mainSource, /ipcMain\.handle\('ai:save'[\s\S]*saveSettings\(\)/);
+});
+
+test('AI 详细过程入口默认显示，并可作为独立设置持久化', () => {
+  assert.match(mainSource, /showThinking:\s*true/);
+  assert.match(mainSource, /typeof s\.ai\.showThinking === 'boolean'/);
+  assert.match(mainSource, /restored\.ai\.showThinking = restored\.ai\.showThinking !== false/);
+  assert.match(mainSource, /showThinking:\s*target\.showThinking !== false/);
+  assert.match(mainSource, /ipcMain\.handle\('ai:setThinkingVisibility'[\s\S]*saveSettings\(\)[\s\S]*aiPublicState\(\)/);
+  assert.match(preloadSource, /setAiThinkingVisibility:\s*showThinking\s*=>\s*ipcRenderer\.invoke\('ai:setThinkingVisibility'/);
 });
 
 test('切换 AI 平台时会取消旧连接测试，避免旧请求阻塞新测试', () => {

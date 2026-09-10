@@ -2174,6 +2174,7 @@ body.textarea-resizing * { cursor: nwse-resize !important; user-select: none !im
   display:flex;
   flex-direction:column;
   overflow:hidden;
+  border-radius:14px;
 }
 .report-card-head {
   position:sticky; top:0; z-index:2;
@@ -2394,7 +2395,7 @@ body.textarea-resizing * { cursor: nwse-resize !important; user-select: none !im
   #view-report .report-layout {
     flex:none; min-height:auto; display:flex; flex-direction:column; gap:14px;
   }
-  #view-report .report-card { display:block; overflow:visible; }
+  #view-report .report-card { display:block; overflow:hidden; }
   #view-report .report-resizer { display:none; }
   #view-report .report-side { display:block; overflow:visible; padding:0; scrollbar-gutter:auto; }
   #view-report .report-side-content { min-height:0; }

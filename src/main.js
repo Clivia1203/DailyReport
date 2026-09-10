@@ -112,6 +112,7 @@ const {
   extractModelIds,
   buildChatRequestBody
 } = require('./lib/ai-providers');
+const { createAiStream } = require('./lib/ai-stream');
 
 const ASSETS = path.join(__dirname, 'assets');
 const DEFAULT_HOTKEY = 'Alt+Shift+D';
@@ -246,6 +247,7 @@ const DEFAULT_SETTINGS = {
     models: [],
     reasoningEffort: 'auto',
     closureReasoningEffort: 'auto',
+    showThinking: true,
     encryptedApiKey: '',
     lastTestAt: 0,
     lastTestOk: false,
@@ -386,6 +388,7 @@ function loadSettings() {
           const closureReasoningEffort = s.ai.closureReasoningEffort.trim().toLowerCase();
           if (REASONING_EFFORTS.includes(closureReasoningEffort)) settings.ai.closureReasoningEffort = closureReasoningEffort;
         }
+        if (typeof s.ai.showThinking === 'boolean') settings.ai.showThinking = s.ai.showThinking;
         if (typeof s.ai.encryptedApiKey === 'string') settings.ai.encryptedApiKey = s.ai.encryptedApiKey;
         if (Number.isFinite(s.ai.lastTestAt)) settings.ai.lastTestAt = s.ai.lastTestAt;
         if (typeof s.ai.lastTestOk === 'boolean') settings.ai.lastTestOk = s.ai.lastTestOk;
@@ -719,6 +722,7 @@ function normalizeRestoredSettings(snapshot) {
     : [];
   restored.ai.reasoningEffort = normalizeReasoningEffort(restored.ai.reasoningEffort);
   restored.ai.closureReasoningEffort = normalizeReasoningEffort(restored.ai.closureReasoningEffort);
+  restored.ai.showThinking = restored.ai.showThinking !== false;
   restored.ai.encryptedApiKey = settings.ai.encryptedApiKey || '';
   restored.promptSchemaVersion = PROMPT_SCHEMA_VERSION;
   restored.promptOverrides = migrateLegacyPromptOverrides(snapshot);
@@ -768,8 +772,9 @@ function localizedWeekday(dateStr, locale = settings.locale) {
 
 /* ---------------- AI 平台与周期总结 ---------------- */
 
-// v4-pro 的完整总结可能需要几十秒；保留足够的服务端推理时间，避免客户端 45 秒提前中断。
+// 连接测试和模型目录请求的最大等待时间；流式生成使用 ai-stream 的阶段化超时策略。
 const AI_TIMEOUT_MS = 150000;
+const aiStreamRequest = createAiStream();
 const REPORT_TYPES = new Set(['day', 'week', 'month', 'custom']);
 // 流式传输不会突破单次 completion 的输出上限；先给一次请求较大的预算，
 // 仍然由自动续写和长周期分段负责承接更大的报告。
@@ -829,6 +834,7 @@ function aiPublicState(models = settings.ai.models, source = settings.ai, option
     models: Array.isArray(models) ? models : [],
     reasoningEffort: normalizeReasoningEffort(target.reasoningEffort),
     closureReasoningEffort: normalizeReasoningEffort(target.closureReasoningEffort),
+    showThinking: target.showThinking !== false,
     supportsReasoningControl: provider.supportsReasoningControl,
     lastTestAt: target.lastTestAt,
     lastTestOk: target.lastTestOk,
@@ -924,82 +930,23 @@ async function aiRequest(endpoint, apiKey, init = {}, connection = null, externa
   }
 }
 
-async function aiStream(endpoint, apiKey, init = {}, onDelta = () => {}, connection = null) {
-  if (typeof fetch !== 'function') throw new Error('当前运行环境不支持网络请求');
-  const target = connection || aiConnection();
-  const base = target.baseUrl;
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), AI_TIMEOUT_MS);
-  try {
-    const response = await fetch(base + endpoint, {
-      ...init,
-      signal: controller.signal,
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${apiKey}`,
-        ...(init.headers || {})
-      }
-    });
-    if (!response.ok) {
-      const raw = await response.text();
-      let data = null;
-      try { data = raw ? JSON.parse(raw) : null; } catch { /* 非 JSON 错误交给统一提示 */ }
-      const message = data?.error?.message || data?.message || `请求失败（HTTP ${response.status}）`;
-      throw new Error(message);
-    }
-    if (!response.body?.getReader) throw new Error('服务未返回可读取的流式响应');
-
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = '';
-    let finishReason = '';
-    let usage = null;
-
-    const handleEvent = block => {
-      const dataLine = block.split(/\r?\n/).find(line => line.startsWith('data:'));
-      if (!dataLine) return false;
-      const payload = dataLine.slice(5).trim();
-      if (payload === '[DONE]') return true;
-      let data;
-      try { data = JSON.parse(payload); } catch { return false; }
-      const choice = data?.choices?.[0];
-      const delta = choice?.delta || {};
-      if (choice?.finish_reason) finishReason = choice.finish_reason;
-      if (data?.usage) usage = data.usage;
-      const textOf = value => {
-        if (typeof value === 'string') return value;
-        if (Array.isArray(value)) return value.map(item => typeof item === 'string' ? item : item?.text || '').join('');
-        return '';
-      };
-      const reasoning = textOf(delta.reasoning_content || delta.reasoning);
-      const content = textOf(delta.content);
-      if (reasoning || content) onDelta({ reasoning, content });
-      return false;
-    };
-
-    let done = false;
-    while (!done) {
-      const result = await reader.read();
-      buffer += decoder.decode(result.value || new Uint8Array(), { stream: !result.done });
-      const events = buffer.split(/\r?\n\r?\n/);
-      buffer = events.pop() || '';
-      for (const event of events) {
-        if (handleEvent(event)) { done = true; break; }
-      }
-      if (result.done) {
-        if (buffer.trim()) handleEvent(buffer);
-        done = true;
-      }
-    }
-    // 某些兼容接口会在流正常结束时省略 finish_reason；只要流已完整读完，
-    // 就按正常结束处理，避免把一个可用的报告误判成“部分结果”。
-    return { finishReason: finishReason || 'stop', usage };
-  } catch (error) {
-    if (error?.name === 'AbortError') throw new Error('请求超时，请检查网络或稍后重试');
-    throw error;
-  } finally {
-    clearTimeout(timer);
-  }
+async function aiStream(
+  endpoint,
+  apiKey,
+  init = {},
+  onDelta = () => {},
+  connection = null,
+  options = {}
+) {
+  return aiStreamRequest({
+    endpoint,
+    apiKey,
+    init,
+    onDelta,
+    connection: connection || aiConnection(),
+    reasoningEffort: options.reasoningEffort || 'auto',
+    timeoutPolicy: options.timeoutPolicy || {}
+  });
 }
 
 async function fetchAvailableModels(apiKey, connection = null, externalSignal = null) {
@@ -1055,6 +1002,7 @@ async function requestTerminologyDiscovery({ key, model, prompt, locale = settin
   let thinkingEnabled = true;
   let jsonModeEnabled = true;
   let repairAttempted = false;
+  let streamRecoveryAttempted = false;
   let requestPrompt = prompt;
   while (true) {
     try {
@@ -1093,7 +1041,7 @@ async function requestTerminologyDiscovery({ key, model, prompt, locale = settin
             contentLength: content.length
           });
         }
-      });
+      }, null, { reasoningEffort: thinkingEnabled ? closureReasoningEffort() : 'low' });
       const terms = parseTerminologyResponse(content);
       if (!terms) {
         if (thinkingEnabled) {
@@ -1117,6 +1065,16 @@ async function requestTerminologyDiscovery({ key, model, prompt, locale = settin
       }
       return terms;
     } catch (error) {
+      if (error?.code === 'AI_STREAM_TIMEOUT' && error.hasActivity && !streamRecoveryAttempted) {
+        streamRecoveryAttempted = true;
+        thinkingEnabled = false;
+        notify({
+          scope: 'terminology',
+          phase: 'fallback',
+          text: 'AI 已开始输出但连接超时，正在保留当前请求并重新获取结构化结果。'
+        });
+        continue;
+      }
       if (thinkingEnabled && canRetryWithoutThinking(error)) {
         thinkingEnabled = false;
         continue;
@@ -1394,11 +1352,12 @@ async function generateReportSegment({ key, model, prompt, segmentIndex, segment
             continuation: continuationCount
           });
         }
-      });
+      }, null, { reasoningEffort: thinkingEnabled ? reasoningEffort : 'low' });
       finishReason = streamResult.finishReason || '';
       usage = streamResult.usage || usage;
     } catch (error) {
-      if (receivedContent) {
+      const hasStreamActivity = receivedContent || error?.hasActivity === true;
+      if (hasStreamActivity) {
         if (continuationCount < REPORT_MAX_CONTINUATIONS) {
           continuationCount += 1;
           finishReason = 'length';
@@ -1532,11 +1491,12 @@ async function generateClosureSegment({ key, model, prompt, segmentIndex, segmen
             contentLength: content.length
           });
         }
-      });
+      }, null, { reasoningEffort: thinkingEnabled ? closureReasoningEffort() : 'low' });
       finishReason = streamResult.finishReason || '';
       usage = streamResult.usage || usage;
     } catch (error) {
-      if (receivedContent && continuationCount < CLOSURE_MAX_CONTINUATIONS) {
+      const hasStreamActivity = receivedContent || error?.hasActivity === true;
+      if (hasStreamActivity && continuationCount < CLOSURE_MAX_CONTINUATIONS) {
         continuationCount += 1;
         messages = continuationMessages();
         notify({
@@ -2024,6 +1984,13 @@ ipcMain.handle('ai:setClosureReasoningEffort', (_e, { reasoningEffort } = {}) =>
   const value = typeof reasoningEffort === 'string' ? reasoningEffort.trim().toLowerCase() : '';
   if (!REASONING_EFFORTS.includes(value)) return { ok: false, error: '闭环思考强度选项无效' };
   settings.ai.closureReasoningEffort = value;
+  saveSettings();
+  return { ok: true, ai: aiPublicState() };
+});
+
+ipcMain.handle('ai:setThinkingVisibility', (_e, { showThinking } = {}) => {
+  if (typeof showThinking !== 'boolean') return { ok: false, error: 'AI 思考过程显示选项无效' };
+  settings.ai.showThinking = showThinking;
   saveSettings();
   return { ok: true, ai: aiPublicState() };
 });

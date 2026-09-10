@@ -43,6 +43,7 @@ contextBridge.exposeInMainWorld('api', {
   setAiClosureModel: model => ipcRenderer.invoke('ai:setClosureModel', { model }),
   setAiReasoningEffort: reasoningEffort => ipcRenderer.invoke('ai:setReasoningEffort', { reasoningEffort }),
   setAiClosureReasoningEffort: reasoningEffort => ipcRenderer.invoke('ai:setClosureReasoningEffort', { reasoningEffort }),
+  setAiThinkingVisibility: showThinking => ipcRenderer.invoke('ai:setThinkingVisibility', { showThinking }),
   getCachedReport: params => ipcRenderer.invoke('report:getCached', params),
   generateReport: params => ipcRenderer.invoke('report:generate', params),
   saveReport: (id, content) => ipcRenderer.invoke('report:save', { id, content }),

@@ -25,6 +25,10 @@ function thinkingTextMatchesLocale(thinking) {
   return !thinking.locale ? locale === 'zh-CN' : thinking.locale === locale;
 }
 
+function aiThinkingDetailsEnabled() {
+  return state.settings?.ai?.showThinking !== false;
+}
+
 function syncCustomSelect(select) {
   customSelect?.sync(select);
 }
@@ -1343,8 +1347,12 @@ function resumeBackgroundUiTimers() {
 
 function renderReportThinking() {
   const thinking = state.report.thinking || thinkingState.createThinkingState();
+  const showDetails = aiThinkingDetailsEnabled();
+  if (!showDetails) thinking.open = false;
   reportThinking.hidden = !thinking.visible;
-  reportThinkingContent.hidden = !thinking.open;
+  reportThinkingToggle.hidden = !showDetails;
+  reportThinkingNote.hidden = !showDetails;
+  reportThinkingContent.hidden = !showDetails || !thinking.open;
   reportThinkingToggle.textContent = uiText(thinking.open ? '收起详细过程' : '查看详细过程');
   reportThinkingToggle.setAttribute('aria-expanded', String(thinking.open));
   if (reportThinkingNote) {
@@ -1962,6 +1970,7 @@ reportEditSave.addEventListener('click', async () => {
   restoreReportViewScroll(scrollPosition);
 });
 reportThinkingToggle.addEventListener('click', () => {
+  if (!aiThinkingDetailsEnabled()) return;
   state.report.thinking = thinkingState.toggleThinking(state.report.thinking);
   reportThinkingCache.write(currentReportPeriod(), state.report.thinking);
   persistReportThinkingForCurrentReport(state.report.thinking);
@@ -2304,6 +2313,7 @@ function syncClosureThinkingTimer() {
 weeklyWorkbench.addEventListener('click', event => {
   const toggle = event.target?.closest?.('.closure-thinking-toggle');
   if (!toggle || !weeklyWorkbench.contains(toggle)) return;
+  if (!aiThinkingDetailsEnabled()) return;
   const thinking = state.workbench.closure.thinking;
   if (!thinking?.visible) return;
   thinking.open = !thinking.open;
@@ -2453,12 +2463,16 @@ function syncClosureThinkingNode(box) {
   const content = box.querySelector('.report-thinking-content');
   if (!thinking?.visible || !toggle || !status || !note || !content) return false;
 
+  const showDetails = aiThinkingDetailsEnabled();
+  if (!showDetails) thinking.open = false;
+  toggle.hidden = !showDetails;
+  note.hidden = !showDetails;
   toggle.textContent = uiText(thinking.open ? '收起详细过程' : '查看详细过程');
   toggle.setAttribute('aria-expanded', String(thinking.open));
   status.textContent = closureThinkingStatus(thinking);
   note.textContent = uiText(thinking.progressNote
     || '实时状态代表实际生成进度；详细过程仅用于查看，不会写入总结或导出文件。');
-  content.hidden = !thinking.open;
+  content.hidden = !showDetails || !thinking.open;
 
   const blocks = [];
   if (thinking.progressNote) blocks.push(`${uiText('进度：')}${uiText(thinking.progressNote)}`);
@@ -3403,6 +3417,7 @@ const aiModel = $('#ai-model');
 const aiClosureModel = $('#ai-closure-model');
 const aiReasoningEffort = $('#ai-reasoning-effort');
 const aiClosureReasoningEffort = $('#ai-closure-reasoning-effort');
+const aiShowThinking = $('#ai-show-thinking');
 const aiStateBadge = $('#ai-state-badge');
 const aiModelSub = $('#ai-model-sub');
 const aiClosureModelSub = $('#ai-closure-model-sub');
@@ -3775,6 +3790,7 @@ function syncAiSettingsUI(ai = state.settings?.ai) {
   aiClosureReasoningSub.textContent = uiText(reasoningSupported
     ? closureReasoningNotes[closureReasoningEffort]
     : '当前平台不提供统一的思考强度参数，由模型自行控制。');
+  if (aiShowThinking) aiShowThinking.checked = ai?.showThinking !== false;
   syncAiModels(ai);
   if (aiTest) aiTest.disabled = aiConnectionChecking;
   aiMsg.textContent = '';
@@ -3838,8 +3854,12 @@ function syncTerminologyPromptUI() {
 function renderTerminologyThinking() {
   if (!terminologyThinking || !terminologyThinkingStatus || !terminologyThinkingToggle || !terminologyThinkingContent) return;
   const thinking = state.terminologyDiscovery.thinking || createTerminologyThinking();
+  const showDetails = aiThinkingDetailsEnabled();
+  if (!showDetails) thinking.open = false;
   terminologyThinking.hidden = !thinking.visible;
-  terminologyThinkingContent.hidden = !thinking.open;
+  terminologyThinkingToggle.hidden = !showDetails;
+  terminologyThinkingNote.hidden = !showDetails;
+  terminologyThinkingContent.hidden = !showDetails || !thinking.open;
   terminologyThinkingToggle.textContent = uiText(thinking.open ? '收起详细过程' : '查看详细过程');
   terminologyThinkingToggle.setAttribute('aria-expanded', String(thinking.open));
   terminologyThinkingNote.textContent = uiText(thinking.progressNote
@@ -4296,6 +4316,31 @@ aiClosureReasoningEffort.addEventListener('change', async () => {
   toast(uiText('闭环思考强度已保存，仅影响下一次近期闭环生成'));
 });
 
+aiShowThinking?.addEventListener('change', async () => {
+  if (!state.settings?.ai || !aiShowThinking) return;
+  const previous = state.settings.ai.showThinking !== false;
+  const next = aiShowThinking.checked;
+  aiShowThinking.disabled = true;
+  let res;
+  try {
+    res = await window.api.setAiThinkingVisibility(next);
+  } catch (error) {
+    res = { ok: false, error: error?.message || 'AI 思考过程显示设置保存失败' };
+  }
+  aiShowThinking.disabled = false;
+  if (!res?.ok) {
+    aiShowThinking.checked = previous;
+    aiMsg.textContent = uiText(res?.error || 'AI 思考过程显示设置保存失败');
+    return;
+  }
+  state.settings.ai = res.ai;
+  syncAiSettingsUI(res.ai);
+  renderReportThinking();
+  renderTerminologyThinking();
+  renderWeeklyWorkbench({ force: true });
+  toast(uiText(next ? '已开启 AI 思考过程入口' : '已隐藏 AI 思考过程入口'));
+});
+
 $('#ai-clear').addEventListener('click', async () => {
   if (!state.settings?.ai?.configured) return;
   const confirmed = await askConfirmation('清除 AI 配置后，AI 总结功能将隐藏。确定继续吗？', {
@@ -4409,6 +4454,7 @@ terminologyDiscover.addEventListener('click', () => {
 });
 
 terminologyThinkingToggle?.addEventListener('click', () => {
+  if (!aiThinkingDetailsEnabled()) return;
   const thinking = state.terminologyDiscovery.thinking;
   if (!thinking?.visible) return;
   state.terminologyDiscovery.thinking = thinkingState.toggleThinking(thinking);
