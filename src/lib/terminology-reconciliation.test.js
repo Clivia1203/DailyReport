@@ -429,8 +429,8 @@ test('相似度候选：包含关系与一位之差的型号对会被提名，�
 
 test('相似度候选进入待确认，已有决定会压住它', () => {
   const terms = [
-    { id: 'a', canonicalName: 'DP3S-705-MQ' },
-    { id: 'b', canonicalName: 'DP3S-705-MQ 模切行业定制机硬件问题处理' }
+    { id: 'a', canonicalName: 'DP3S-705-MQ', aliases: ['DP3S-705'] },
+    { id: 'b', canonicalName: 'DP3S-705-MQ 模切行业定制机硬件问题处理', aliases: ['模切定制机整改'] }
   ];
   const first = reconcileTerminology({ existing: terms });
   assert.equal(first.pending.length, 1);
@@ -448,4 +448,38 @@ test('相似度候选进入待确认，已有决定会压住它', () => {
     relations: decided.relations
   });
   assert.equal(rescan.pending.length, 0);
+});
+
+test('没有别名的新词条没有归一价值，不进入词典；存量无别名词条一并清理', () => {
+  const result = reconcileTerminology({
+    existing: [
+      { id: 'junk', canonicalName: '旧扫描留下的孤词' }
+    ],
+    discovered: [
+      { canonicalName: '孤词A' },
+      { canonicalName: '成组词B', aliases: ['成组词B写法2'] }
+    ]
+  });
+  assert.equal(result.terminology.length, 1);
+  assert.equal(result.terminology[0].canonicalName, '成组词B');
+  assert.deepEqual(result.terminology[0].aliases, ['成组词B写法2']);
+});
+
+test('“不是”决定不再把无别名的两侧写成词条', () => {
+  const relation = {
+    left: { canonicalName: '有别名的一侧', aliases: ['别名X'] },
+    right: { canonicalName: '没有别名的孤词' }
+  };
+  const separate = applyTerminologyRelationDecision({
+    terminology: [],
+    pending: [relation],
+    relations: [],
+    relation,
+    decision: 'separate'
+  });
+  assert.equal(separate.ok, true);
+  assert.equal(separate.terminology.length, 1);
+  assert.equal(separate.terminology[0].canonicalName, '有别名的一侧');
+  // 决定记录照常保存：问题不会重复问。
+  assert.equal(normalizeTerminologyRelations(separate.relations).length, 1);
 });

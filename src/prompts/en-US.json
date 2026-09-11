@@ -136,6 +136,7 @@
     "clusterTask": "Group the newly quoted wordings into dictionary entries: wordings that may refer to the same matter form one group with a single canonical name and its common forms; put pairs with insufficient evidence into uncertain_matches and wait for the user's choice.",
     "clusterMentions": "Newly quoted wordings (ref · type · wording):",
     "typePerson": "person",
-    "typeMatter": "matter"
+    "typeMatter": "matter",
+    "constraint7": "7. Do not output an entry for a wording that has no other form to merge with: a single wording has no normalization value; leave it in the mention list until a variant appears."
   }
 }

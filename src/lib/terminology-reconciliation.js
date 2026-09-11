@@ -361,10 +361,11 @@ function applyTerminologyRelationDecision({
     };
   }
   if (decision === 'separate') {
+    // 只有带别名的两侧才值得作为词条记住“这是两件不同的事”；无别名的孤词没有意义。
+    const sides = [normalized.left, normalized.right].filter(side => side.aliases.length > 0);
     const nextTerminology = normalizeTerminology([
       ...terminology,
-      normalized.left,
-      normalized.right
+      ...sides
     ]);
     const nextRelations = addTerminologyRelationDecision(relations, normalized, 'separate');
     return {
@@ -609,6 +610,8 @@ function reconcileTerminology({
     separatelyResolvedKeys.add(terminologyKey(item.right.canonicalName));
   }
   const safeDiscovered = discoveredTerms.filter(item => {
+    // 没有别名的新词条没有归一价值：只有一个写法时“归一”是无操作，纯噪音。
+    if (!item.aliases.length) return false;
     const key = terminologyKey(item.canonicalName);
     return !blockedKeys.has(key) || separatelyResolvedKeys.has(key) || current.some(term => terminologyKey(term.canonicalName) === key);
   });
@@ -620,6 +623,9 @@ function reconcileTerminology({
       item.right
     ]);
   }
+  // 存量清理：历史上机器加的无别名词条同样没有意义（手动添加强制要求别名），
+  // 在归并时一并清掉；它们参与过的决定与待确认不受影响（按名字照样能对上）。
+  nextTerminology = nextTerminology.filter(item => item.aliases.length > 0);
   const finalConflicts = findTerminologyConflicts(nextTerminology);
   const nextPending = normalizeTerminologyPending([
     ...unresolved,

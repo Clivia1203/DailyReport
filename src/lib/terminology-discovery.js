@@ -275,7 +275,8 @@ function buildClusteringPrompt(mentions, existing = [], customPrompt, locale = '
     rules.uncertainMatches,
     rules.constraint4,
     rules.constraint5,
-    rules.constraint6
+    rules.constraint6,
+    rules.constraint7
   ].join('\n');
 }
 

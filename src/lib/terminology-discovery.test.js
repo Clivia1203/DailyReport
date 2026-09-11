@@ -151,6 +151,7 @@ test('buildClusteringPrompt: 已有词典、新叫法清单和不确定关系规
   assert.match(prompt, /uncertain_matches/);
   assert.match(prompt, /同一事项只允许输出一个规范名称/);
   assert.match(prompt, /人物和事项是两类词条/);
+  assert.match(prompt, /只有一个叫法、没有其它写法可归并时，不要输出词条/);
 });
 
 test('buildClusteringPrompt: 支持使用用户修改后的识别规则', () => {
