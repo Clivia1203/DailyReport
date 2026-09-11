@@ -550,5 +550,11 @@
   "暂缓这条关系；相关日报变化后会再次提醒": "Defer this match; you will be asked again once the related entries change",
   "类型": "Type",
   "事项": "Matter",
-  "人物": "Person"
+  "人物": "Person",
+  "清空词典": "Clear dictionary",
+  "删除全部词条、待确认关系和已做的选择": "Delete all terms, pending matches, and saved choices",
+  "清空术语词典？全部词条、待确认关系、已做的选择和排除关系都会删除，下次识别会重新建立。": "Clear the terminology dictionary? All terms, pending matches, saved choices, and exclusions will be deleted; the next analysis rebuilds them.",
+  "清空": "Clear",
+  "词典清空失败": "Failed to clear the dictionary",
+  "词典已清空，下次识别会重新建立": "Dictionary cleared; the next analysis will rebuild it"
 }

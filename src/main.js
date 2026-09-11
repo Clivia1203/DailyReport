@@ -3025,6 +3025,25 @@ ipcMain.handle('settings:resolveTerminologyRelation', (_e, { relation, decision 
   };
 });
 
+ipcMain.handle('settings:clearTerminology', () => {
+  // 清空词典 = 术语系统从头再来：词条、待确认、已做的决定和排除关系一并清掉，
+  // 下次识别按未初始化状态全量重建。
+  settings.terminology = [];
+  settings.terminologyPending = [];
+  settings.terminologyRelations = [];
+  settings.terminologyExclusions = [];
+  settings.terminologyDiscovery = normalizeDiscoveryState({ initialized: false });
+  saveSettings();
+  return {
+    ok: true,
+    terminology: [],
+    terminologyPending: [],
+    terminologyRelations: [],
+    terminologyExclusions: [],
+    discovery: terminologyDiscoveryForClient()
+  };
+});
+
 ipcMain.handle('settings:restoreTerminologyRelation', (_e, { relation } = {}) => {
   const normalized = normalizeTerminologyRelation(relation);
   if (!normalized) return { ok: false, error: '术语关系无效' };

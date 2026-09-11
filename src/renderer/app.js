@@ -4755,6 +4755,40 @@ terminologySearchClear?.addEventListener('click', () => {
   terminologySearch.focus();
 });
 
+const terminologyClear = $('#terminology-clear');
+terminologyClear?.addEventListener('click', async () => {
+  const confirmed = await askConfirmation('清空术语词典？全部词条、待确认关系、已做的选择和排除关系都会删除，下次识别会重新建立。', {
+    danger: true,
+    confirmLabel: '清空'
+  });
+  if (!confirmed) return;
+  let res;
+  try {
+    res = await window.api.clearTerminology();
+  } catch (error) {
+    toast(uiText(error?.message || '词典清空失败'));
+    return;
+  }
+  if (!res?.ok) {
+    toast(uiText(res?.error || '词典清空失败'));
+    return;
+  }
+  if (state.settings) {
+    state.settings.terminology = res.terminology || [];
+    state.settings.terminologyPending = res.terminologyPending || [];
+    state.settings.terminologyRelations = res.terminologyRelations || [];
+    state.settings.terminologyExclusions = res.terminologyExclusions || [];
+    state.settings.terminologyDiscovery = res.discovery || state.settings.terminologyDiscovery;
+  }
+  state.terminologyDiscovery.pendingRelations = [];
+  resetTerminologyForm();
+  state.workbench.closure.cacheStatus = 'terminology-changed';
+  renderTerminologyUI();
+  renderTerminologyDiscoveryUI();
+  await loadWorkbenchClosure({ autoReason: 'configuration-change' });
+  toast(uiText('词典已清空，下次识别会重新建立'));
+});
+
 function parseTerminologyAliases(value) {
   return String(value || '').split(/[\n,，、;；]+/).map(item => item.trim()).filter(Boolean);
 }

@@ -2319,6 +2319,7 @@ body.textarea-resizing * { cursor: nwse-resize !important; user-select: none !im
 .terminology-editor-head { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; margin-bottom:10px; }
 .terminology-editor-title { color:var(--text-2); font-size:12px; font-weight:650; }
 .terminology-list-toolbar { display:flex; align-items:center; justify-content:space-between; gap:14px; margin-top:16px; padding-top:14px; border-top:1px solid var(--border); }
+.terminology-clear-wrap { flex:none; }
 .terminology-list-heading { min-width:0; }
 .terminology-list-title { color:var(--text-2); font-size:12px; font-weight:650; }
 .terminology-search-wrap { position:relative; flex:0 1 320px; min-width:220px; }
