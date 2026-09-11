@@ -467,6 +467,98 @@ function recheckTerminologyDeferrals({
   };
 }
 
+/* ---------- 相似度候选：本地发现“高度疑似同一事项”的词条对，只提名不合并 ---------- */
+
+function nameIsCodeLike(value) {
+  return /[a-z0-9]/i.test(String(value || ''));
+}
+
+function editDistanceAtMost1(a, b) {
+  if (a === b || Math.abs(a.length - b.length) > 1) return false;
+  let differences = 0;
+  let i = 0;
+  let j = 0;
+  while (i < a.length && j < b.length) {
+    if (a[i] === b[j]) {
+      i += 1;
+      j += 1;
+      continue;
+    }
+    differences += 1;
+    if (differences > 1) return false;
+    if (a.length === b.length) {
+      i += 1;
+      j += 1;
+    } else if (a.length > b.length) i += 1;
+    else j += 1;
+  }
+  return true;
+}
+
+function similarNamePair(leftTerm, rightTerm) {
+  const leftNames = [leftTerm.canonicalName, ...leftTerm.aliases];
+  const rightNames = [rightTerm.canonicalName, ...rightTerm.aliases];
+  let best = null;
+  for (const leftName of leftNames) {
+    for (const rightName of rightNames) {
+      const a = terminologyKey(leftName);
+      const b = terminologyKey(rightName);
+      if (!a || !b || a === b) continue;
+      const shortKey = a.length <= b.length ? a : b;
+      const longKey = a.length <= b.length ? b : a;
+      // 包含关系：短的一侧足够具体（≥3 字符，或含字母数字的型号类）才提名，避免“双轴”这类短词误伤。
+      if (longKey.includes(shortKey)
+        && (shortKey.length >= 3 || (nameIsCodeLike(shortKey) && shortKey.length >= 2))) {
+        const score = shortKey.length / longKey.length;
+        if (!best || score > best.score) {
+          best = {
+            kind: 'containment',
+            shortName: a.length <= b.length ? leftName : rightName,
+            longName: a.length <= b.length ? rightName : leftName,
+            score
+          };
+        }
+      }
+      // 编辑距离 1：仅限型号类叫法，中文近形词不碰。
+      if (nameIsCodeLike(a) && nameIsCodeLike(b) && a.length <= 20 && b.length <= 20
+        && editDistanceAtMost1(a, b) && (!best || best.kind !== 'containment')) {
+        best = { kind: 'edit1', shortName: leftName, longName: rightName, score: 0.5 };
+      }
+    }
+  }
+  return best;
+}
+
+function findTerminologySimilarities(terms, { limit = 20 } = {}) {
+  const items = normalizeTerminology(terms);
+  const result = [];
+  const seen = new Set();
+  for (let index = 0; index < items.length; index += 1) {
+    for (let next = index + 1; next < items.length; next += 1) {
+      const left = items[index];
+      const right = items[next];
+      // 人物和事项之间不存在“是否同一事项”的问题。
+      if (terminologyType(left.type) !== terminologyType(right.type)) continue;
+      const matched = similarNamePair(left, right);
+      if (!matched) continue;
+      const relationKey = terminologyRelationKey(left, right);
+      if (!relationKey || seen.has(relationKey)) continue;
+      seen.add(relationKey);
+      result.push({
+        left,
+        right,
+        reason: matched.kind === 'containment'
+          ? `“${matched.shortName}”是“${matched.longName}”的一部分，高度疑似同一事项的不同写法。`
+          : `“${matched.shortName}”与“${matched.longName}”仅一位字符之差，高度疑似同一型号或事项。`,
+        confidence: 'low',
+        source: 'similarity'
+      });
+      if (result.length >= limit) return result;
+    }
+  }
+  return result;
+}
+
 function reconcileTerminology({
   existing = [],
   discovered = [],
@@ -482,7 +574,8 @@ function reconcileTerminology({
   const rawRelations = [
     ...(Array.isArray(pending) ? pending : []),
     ...(Array.isArray(uncertainRelations) ? uncertainRelations : []),
-    ...potentialConflicts
+    ...potentialConflicts,
+    ...findTerminologySimilarities(available)
   ]
     .map(item => enrichRelation(item, available))
     .filter(Boolean);
@@ -557,6 +650,7 @@ module.exports = {
   addTerminologyRelationDecision,
   removeTerminologyRelationDecision,
   findTerminologyConflicts,
+  findTerminologySimilarities,
   mergeTerminologyRelation,
   applyTerminologyRelationDecision,
   terminologyRelationBasis,

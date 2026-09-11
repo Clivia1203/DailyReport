@@ -7,6 +7,7 @@ const {
   normalizeTerminologyRelations,
   relationMatchesDecision,
   findTerminologyConflicts,
+  findTerminologySimilarities,
   mergeTerminologyRelation,
   applyTerminologyRelationDecision,
   terminologyRelationBasis,
@@ -379,4 +380,72 @@ test('合并两侧词条时人物标记保留', () => {
   );
   assert.equal(merged.ok, true);
   assert.equal(merged.terminology[0].type, 'person');
+});
+
+test('相似度候选：包含关系与一位之差的型号对会被提名，短泛词和跨类型不提名', () => {
+  const terms = [
+    { id: 'a', canonicalName: 'DP3S-705-MQ' },
+    { id: 'b', canonicalName: 'DP3S-705-MQ 模切行业定制机硬件问题处理' },
+    { id: 'c', canonicalName: 'DP3C-X3' },
+    { id: 'd', canonicalName: 'DP3C-X2' }
+  ];
+  const candidates = findTerminologySimilarities(terms);
+  assert.equal(candidates.length, 2);
+  const keys = candidates.map(item => item.key).sort();
+  const containment = candidates.find(item => item.reason.includes('一部分'));
+  assert.ok(containment);
+  assert.equal(containment.left.canonicalName, 'DP3S-705-MQ');
+  const editOne = candidates.find(item => item.reason.includes('一位字符之差'));
+  assert.ok(editOne);
+  assert.deepEqual(keys, [editOne.key, containment.key].sort());
+
+  // 两个字的中文短词不做包含提名（交给精确撞名检测）；跨类型不提名。
+  const shortWords = findTerminologySimilarities([
+    { id: 'a', canonicalName: '双轴驱动器', aliases: [] },
+    { id: 'b', canonicalName: '双轴驱动器量产整改', aliases: [] }
+  ]);
+  // “双轴驱动器”7 字符 ≥3，是具体名称：应提名。
+  assert.equal(shortWords.length, 1);
+
+  const shortOnly = findTerminologySimilarities([
+    { id: 'a', canonicalName: '双轴项目', aliases: [] },
+    { id: 'b', canonicalName: '双轴项目整改', aliases: [] }
+  ]);
+  assert.equal(shortOnly.length, 1);
+
+  const crossType = findTerminologySimilarities([
+    { id: 'a', canonicalName: '陆永波', type: 'person' },
+    { id: 'b', canonicalName: '陆永波入组与上手培养' }
+  ]);
+  assert.equal(crossType.length, 0);
+
+  // 完全同名不属于相似度提名（那由撞名检测负责）。
+  const exact = findTerminologySimilarities([
+    { id: 'a', canonicalName: 'DP3C-X2', aliases: [] },
+    { id: 'b', canonicalName: 'DP3C-X2', aliases: [] }
+  ]);
+  assert.equal(exact.length, 0);
+});
+
+test('相似度候选进入待确认，已有决定会压住它', () => {
+  const terms = [
+    { id: 'a', canonicalName: 'DP3S-705-MQ' },
+    { id: 'b', canonicalName: 'DP3S-705-MQ 模切行业定制机硬件问题处理' }
+  ];
+  const first = reconcileTerminology({ existing: terms });
+  assert.equal(first.pending.length, 1);
+  assert.equal(first.pending[0].source, 'similarity');
+
+  const decided = applyTerminologyRelationDecision({
+    terminology: [],
+    pending: first.pending,
+    relations: [],
+    relation: first.pending[0],
+    decision: 'separate'
+  });
+  const rescan = reconcileTerminology({
+    existing: terms,
+    relations: decided.relations
+  });
+  assert.equal(rescan.pending.length, 0);
 });
