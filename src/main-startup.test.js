@@ -84,6 +84,12 @@ test('术语识别的不确定关系必须经过用户选择才会写入词典',
   assert.match(handler, /uncertainRelations: result\.uncertainRelations/);
   assert.match(handler, /recheckTerminologyDeferralsIfNeeded\(\)/);
   assert.doesNotMatch(handler, /settings\.terminology\s*=\s*mergeTerminologyResults/);
+  // 升级后首次识别自动升级为全量重扫：成功一次记账，失败保留待重扫。
+  assert.match(mainSource, /const TERMINOLOGY_RESCAN_VERSION = \d+;/);
+  assert.match(handler, /payload\.force \|\| terminologyRescanDue\(\)/);
+  assert.match(handler, /settings\.terminologyRescanVersion = TERMINOLOGY_RESCAN_VERSION/);
+  assert.match(mainSource, /Number\.isFinite\(Number\(s\.terminologyRescanVersion\)\)/);
+  assert.match(mainSource, /Number\.isFinite\(Number\(snapshot\?\.terminologyRescanVersion\)\)/);
   assert.match(mainSource, /ipcMain\.handle\('settings:resolveTerminologyRelation'/);
   assert.match(mainSource, /\['merge', 'separate', 'defer'\]\.includes\(decision\)/);
   assert.match(mainSource, /ipcMain\.handle\('settings:restoreTerminologyRelation'/);

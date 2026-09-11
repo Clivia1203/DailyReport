@@ -276,6 +276,7 @@ const DEFAULT_SETTINGS = {
   terminologyExclusions: [],
   terminologyPending: [],
   terminologyRelations: [],
+  terminologyRescanVersion: 0,
   terminologyDiscovery: {
     initialized: false,
     lastRunAt: 0,
@@ -289,6 +290,14 @@ const DEFAULT_SETTINGS = {
 
 // 开机自启带 --hidden 参数（由 applyLoginItem 写入启动项），启动时据此静默驻留
 const startHidden = process.argv.includes('--hidden');
+
+// 词典重扫版本：识别规则升级（如词条类型、决定持久化）后，对既有词典做一次全量重扫。
+// 成功一次即写入当前版本，之后不再重复；恢复旧备份时版本号随之回退，会再触发一次。
+const TERMINOLOGY_RESCAN_VERSION = 20260911;
+
+function terminologyRescanDue() {
+  return Number(settings.terminologyRescanVersion || 0) < TERMINOLOGY_RESCAN_VERSION;
+}
 
 let settings = {
   ...DEFAULT_SETTINGS,
@@ -421,6 +430,9 @@ function loadSettings() {
       }
       if (Array.isArray(s.terminologyRelations)) {
         settings.terminologyRelations = normalizeTerminologyRelations(s.terminologyRelations);
+      }
+      if (Number.isFinite(Number(s.terminologyRescanVersion))) {
+        settings.terminologyRescanVersion = Number(s.terminologyRescanVersion);
       }
       if (Array.isArray(s.terminologyPending)) {
         settings.terminologyPending = normalizeTerminologyPending(
@@ -795,6 +807,10 @@ function normalizeRestoredSettings(snapshot) {
   restored.terminology = normalizeTerminology(snapshot?.terminology);
   restored.terminologyExclusions = normalizeTerminologyExclusions(snapshot?.terminologyExclusions);
   restored.terminologyRelations = normalizeTerminologyRelations(snapshot?.terminologyRelations);
+  // 备份里没有版本号（旧版导出）时按 0 处理：恢复后用当前规则再全量重扫一次。
+  restored.terminologyRescanVersion = Number.isFinite(Number(snapshot?.terminologyRescanVersion))
+    ? Number(snapshot.terminologyRescanVersion)
+    : 0;
   restored.terminologyPending = normalizeTerminologyPending(
     snapshot?.terminologyPending,
     restored.terminologyRelations
@@ -2094,7 +2110,8 @@ function sendTerminologyProgress(event, progress) {
 }
 
 ipcMain.handle('terminology:discover', async (event, payload = {}) => {
-  const force = !!payload.force;
+  // 升级后的首次识别自动升级为全量重扫，用新规则（词条类型、稳定决定）重建既有词典。
+  const force = !!payload.force || terminologyRescanDue();
   const key = apiKeyFromStorage();
   if (!key) return { ok: false, error: '尚未配置 API Key，请先到设置中连接 AI' };
 
@@ -2137,6 +2154,7 @@ ipcMain.handle('terminology:discover', async (event, payload = {}) => {
         recordCount: 0,
         termCount: settings.terminology.length
       });
+      settings.terminologyRescanVersion = TERMINOLOGY_RESCAN_VERSION;
       saveSettings();
       notify({ phase: 'saved', model, recordCount: 0, termCount: settings.terminology.length });
       return {
@@ -2179,6 +2197,8 @@ ipcMain.handle('terminology:discover', async (event, payload = {}) => {
       recordCount: result.recordCount,
       termCount: settings.terminology.length
     });
+    // 重扫成功才记账：失败时保留待重扫标记，下次启动自动再试一次。
+    settings.terminologyRescanVersion = TERMINOLOGY_RESCAN_VERSION;
     // 重扫完成后立即复核暂缓依据：无关日报不惊扰，相关日报变化的原样回到待确认。
     recheckTerminologyDeferralsIfNeeded();
     saveSettings();
