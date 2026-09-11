@@ -93,6 +93,8 @@ const {
   buildDiscoveryPrompt,
   buildConsolidationPrompt,
   parseTerminologyResponseDetailed,
+  verifyExtractedTerms,
+  verifyUncertainRelations,
   mergeTerminologyResults,
   normalizeDiscoveryState
 } = require('./lib/terminology-discovery');
@@ -1188,8 +1190,14 @@ async function discoverTerminologyFromEntries({ key, model, entries, existing = 
       prompt: buildDiscoveryPrompt(chunks[index], customPrompt, locale),
       notify
     });
-    candidates.push(batchResult.terms);
-    uncertainRelations.push(...batchResult.uncertainRelations);
+    // 机器验收：名字必须逐字出现在本批原文里，编造或切错的一律丢弃。
+    const batchTerms = verifyExtractedTerms(batchResult.terms, chunks[index]);
+    candidates.push(batchTerms);
+    uncertainRelations.push(...verifyUncertainRelations(
+      batchResult.uncertainRelations,
+      [...existing, ...batchTerms],
+      chunks[index]
+    ));
     notify({
       scope: 'terminology',
       phase: 'batch-done',
@@ -1212,8 +1220,14 @@ async function discoverTerminologyFromEntries({ key, model, entries, existing = 
         prompt: buildConsolidationPrompt(discovered, existing, customPrompt, locale),
         notify
       });
-      if (consolidated.terms.length) discovered = consolidated.terms;
-      uncertainRelations.push(...consolidated.uncertainRelations);
+      // 归并结果同样过机器验收：规范名或任一别名必须能在全部原文里找到出处。
+      const verifiedTerms = verifyExtractedTerms(consolidated.terms, sources);
+      if (verifiedTerms.length) discovered = verifiedTerms;
+      uncertainRelations.push(...verifyUncertainRelations(
+        consolidated.uncertainRelations,
+        [...existing, ...verifiedTerms],
+        sources
+      ));
     } catch {
       // 归并调用失败时保留已经逐批识别出的候选，不让一次辅助调用导致已有结果丢失。
       consolidationFallback = true;

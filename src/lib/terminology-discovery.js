@@ -272,6 +272,51 @@ function parseTerminologyResponse(value) {
   return parseTerminologyResponseDetailed(value)?.terms || null;
 }
 
+/* ---------- 机器验收：AI 输出的名字必须逐字来自日报原文 ---------- */
+
+// 归一化仅用于比对（NFKC、去空白、小写）；编造、切错的词在这道闸被拦下。
+function verifyText(value) {
+  return String(value || '')
+    .normalize('NFKC')
+    .replace(/\s+/g, '')
+    .toLocaleLowerCase();
+}
+
+function sourceCorpus(sources) {
+  return (Array.isArray(sources) ? sources : [])
+    .map(source => verifyText(source?.text))
+    .join('\n');
+}
+
+function verifyNameAppears(name, corpus, known = null) {
+  const key = verifyText(name);
+  return key.length >= 2 && (corpus.includes(key) || !!known?.has(key));
+}
+
+function verifyExtractedTerms(terms, sources) {
+  const corpus = sourceCorpus(sources);
+  if (!corpus) return [];
+  return (Array.isArray(terms) ? terms : []).filter(term => {
+    const names = [term?.canonicalName, ...(Array.isArray(term?.aliases) ? term.aliases : [])];
+    return names.some(name => verifyNameAppears(name, corpus));
+  });
+}
+
+function verifyUncertainRelations(relations, terms, sources) {
+  const corpus = sourceCorpus(sources);
+  if (!corpus) return [];
+  const known = new Set();
+  for (const term of Array.isArray(terms) ? terms : []) {
+    for (const name of [term?.canonicalName, ...(Array.isArray(term?.aliases) ? term.aliases : [])]) {
+      const key = verifyText(name);
+      if (key.length >= 2) known.add(key);
+    }
+  }
+  return (Array.isArray(relations) ? relations : [])
+    .filter(relation => verifyNameAppears(relation?.left?.canonicalName, corpus, known)
+      && verifyNameAppears(relation?.right?.canonicalName, corpus, known));
+}
+
 function mergeTerminologyResults(results) {
   return normalizeTerminology((Array.isArray(results) ? results : [])
     .flatMap(items => Array.isArray(items) ? items : []));
@@ -302,6 +347,8 @@ module.exports = {
   buildConsolidationPrompt,
   parseTerminologyResponse,
   parseTerminologyResponseDetailed,
+  verifyExtractedTerms,
+  verifyUncertainRelations,
   mergeTerminologyResults,
   normalizeDiscoveryState
 };

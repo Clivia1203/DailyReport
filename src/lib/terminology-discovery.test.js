@@ -7,6 +7,8 @@ const {
   buildConsolidationPrompt,
   parseTerminologyResponse,
   parseTerminologyResponseDetailed,
+  verifyExtractedTerms,
+  verifyUncertainRelations,
   mergeTerminologyResults,
   normalizeDiscoveryState
 } = require('./terminology-discovery');
@@ -116,4 +118,35 @@ test('normalizeDiscoveryState: 非法元数据回退为稳定默认值', () => {
     recordCount: 0,
     termCount: 0
   });
+});
+
+test('机器验收：AI 输出的名字必须逐字出现在原文里，编造即丢弃', () => {
+  const sources = [
+    { ref: 'R001', id: 'a', date: '2026-09-01', time: '09:00', text: 'DP3C-X2 硬件飞线问题解决' },
+    { ref: 'R002', id: 'b', date: '2026-09-02', time: '10:00', text: '双轴推进驱动器现场测试' }
+  ];
+  const kept = verifyExtractedTerms([
+    { canonicalName: 'DP3C-X2', aliases: ['飞线问题'] },
+    // 规范名不在原文、但别名逐字出现：整条保留（有真实出处）。
+    { canonicalName: '驱动器项目', aliases: ['双轴推进驱动器'] },
+    // 规范名和别名都查无出处：编造，丢弃。
+    { canonicalName: '编造的型号X9', aliases: ['不存在的说法'] },
+    // 全角/空格差异不算编造。
+    { canonicalName: 'ｄｐ３ｃ－ｘ ２', aliases: [] }
+  ], sources);
+  assert.equal(kept.length, 3);
+  assert.deepEqual(kept.map(item => item.canonicalName), ['DP3C-X2', '驱动器项目', 'ｄｐ３ｃ－ｘ ２']);
+});
+
+test('机器验收：不确定关系的两侧名字也必须有出处', () => {
+  const sources = [
+    { ref: 'R001', id: 'a', date: '2026-09-01', time: '09:00', text: '处理铭工现场问题' }
+  ];
+  const terms = [{ canonicalName: 'DP3C-X2', aliases: [] }];
+  const kept = verifyUncertainRelations([
+    { left: { canonicalName: '铭工现场问题' }, right: { canonicalName: 'DP3C-X2' } },
+    { left: { canonicalName: '铭工现场问题' }, right: { canonicalName: '凭空的另一侧' } }
+  ], terms, sources);
+  assert.equal(kept.length, 1);
+  assert.equal(kept[0].right.canonicalName, 'DP3C-X2');
 });
