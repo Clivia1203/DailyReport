@@ -16,6 +16,21 @@ test('主界面后台工作同时受可见性和焦点约束', () => {
   assert.match(appSource, /if \(!isRendererInteractive\(\)\) \{[\s\S]*state\.needsVisibleRefresh[\s\S]*return;/);
 });
 
+test('本地数据刷新只看可见性：小窗录入时主窗口列表实时更新', () => {
+  assert.match(appSource, /function isRendererVisible\(\)/);
+  const refreshStart = appSource.indexOf('async function refresh(');
+  const refreshEnd = appSource.indexOf('(async function init()', refreshStart);
+  const refreshFunction = appSource.slice(refreshStart, refreshEnd === -1 ? appSource.length : refreshEnd);
+  assert.notEqual(refreshStart, -1, 'refresh 函数不存在');
+  assert.match(refreshFunction, /if \(!isRendererVisible\(\)\) \{\s*\n\s*state\.needsVisibleRefresh = true;/);
+  // 纯本地渲染不再被焦点闸门拦住；联网/AI 类工作仍由 isRendererInteractive 把关。
+  assert.doesNotMatch(refreshFunction, /isRendererInteractive/);
+  const closureStart = appSource.indexOf('async function loadWorkbenchClosure');
+  const closureEnd = appSource.indexOf('function renderWorkbenchClosureCard', closureStart);
+  const closureFunction = appSource.slice(closureStart, closureEnd === -1 ? appSource.length : closureEnd);
+  assert.match(closureFunction, /if \(!isRendererInteractive\(\)\) return null;/);
+});
+
 test('主界面恢复时只补一次刷新，静默启动不主动联网', () => {
   assert.match(appSource, /function resumeRendererWork\(reason = 'visible'\)/);
   assert.match(appSource, /state\.needsVisibleRefresh/);

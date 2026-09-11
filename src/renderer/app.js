@@ -373,6 +373,12 @@ function isRendererInteractive() {
   return visible && focused;
 }
 
+// 本地数据刷新只要求可见：主窗口开着但焦点在小窗录入时，列表仍要实时更新。
+// 联网和 AI 类工作继续用 isRendererInteractive（可见且聚焦）约束。
+function isRendererVisible() {
+  return !document.hidden && document.visibilityState !== 'hidden';
+}
+
 // 周期/焦点恢复时的公共校准：录入时间跟随 + 统计数字（跨零点翻卡）
 function recalibrate() {
   if (!isRendererInteractive()) return;
@@ -4944,13 +4950,13 @@ document.querySelectorAll('textarea[data-resizable="true"]').forEach(installText
 customSelect?.enhanceAll(document);
 
 async function refresh({ autoReason = 'source-change', schedule = true } = {}) {
-  if (!isRendererInteractive()) {
+  if (!isRendererVisible()) {
     state.needsVisibleRefresh = true;
     return;
   }
   const requestId = ++state.refreshRequestId;
   const entries = await window.api.list();
-  if (requestId !== state.refreshRequestId || !isRendererInteractive()) {
+  if (requestId !== state.refreshRequestId || !isRendererVisible()) {
     state.needsVisibleRefresh = true;
     return;
   }
