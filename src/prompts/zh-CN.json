@@ -121,6 +121,21 @@
     "constraint5": "5. 同一事项只允许输出一个规范名称，其它写法全部放进该名称的 aliases；可能同指一件事的两个候选禁止拆成两个词条，必须作为 uncertain_matches 提出等待用户选择。",
     "formatType": "matter 或 person：人物词条（人名、成员、客户联系人）填 person，其它一律 matter",
     "personTypeLabel": "；类型：人物",
-    "constraint6": "6. 人物和事项是两类词条：人名条目和事项条目之间不存在“是否同一事项”的问题，禁止放入 uncertain_matches，禁止互加别名；一个人的名字与包含这个人的事项（如培养、拜访、评审）永远算两类。uncertain_matches 只能在同类词条之间提出。"
+    "constraint6": "6. 人物和事项是两类词条：人名条目和事项条目之间不存在“是否同一事项”的问题，禁止放入 uncertain_matches，禁止互加别名；一个人的名字与包含这个人的事项（如培养、拜访、评审）永远算两类。uncertain_matches 只能在同类词条之间提出。",
+    "extractTask": "任务：从下面的日报记录里逐字摘出所有指代具体人物或具体事项的叫法（型号、项目、产品、系统、事项、人名等）。只做摘抄，不做归并、不判断关系。",
+    "extractRules": "摘录规则：",
+    "extractRule1": "1. name 必须逐字来自原文，不得改写、缩写、翻译或拼接；原文怎么写就怎么摘。",
+    "extractRule2": "2. 每个叫法标注 type：人名、成员、客户联系人填 person；其余一律填 matter。",
+    "extractRule3": "3. 已认识清单里的叫法不要再输出；同一叫法的所有出处编号都记进 refs。",
+    "extractRule4": "4. 整句叙述和动词短语不是叫法；不要输出句子片段。",
+    "extractKnown": "已认识的叫法（直接跳过，不要输出）：",
+    "extractNoKnown": "（无）",
+    "formatMentionName": "原文中逐字出现的叫法",
+    "formatMentionType": "person 或 matter",
+    "formatMentionRefs": "出处编号，例如 R001",
+    "clusterTask": "请把摘出的新叫法归并成词典词条：可能指同一事项的叫法归入一组，形成一个规范名称加若干常用说法；证据不足的放入 uncertain_matches 等用户选择。",
+    "clusterMentions": "本次摘出的新叫法（出处 · 类型 · 叫法）：",
+    "typePerson": "人物",
+    "typeMatter": "事项"
   }
 }

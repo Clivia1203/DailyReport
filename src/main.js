@@ -90,9 +90,15 @@ const {
   discoverySystemPrompt,
   discoverySources,
   splitDiscoverySources,
-  buildDiscoveryPrompt,
-  buildConsolidationPrompt,
+  buildExtractionPrompt,
+  buildClusteringPrompt,
   parseTerminologyResponseDetailed,
+  parseMentionsResponse,
+  normalizeMention,
+  mergeMentions,
+  verifyMentions,
+  dictionaryNameKeys,
+  dictionaryNamesForPrompt,
   verifyExtractedTerms,
   verifyUncertainRelations,
   mergeTerminologyResults,
@@ -1077,7 +1083,8 @@ function responseMessageReasoning(data) {
   return responseMessageText(message?.reasoning_content ?? message?.reasoning);
 }
 
-async function requestTerminologyDiscovery({ key, model, prompt, locale = settings.locale, notify = () => {} }) {
+async function requestTerminologyDiscovery({ key, model, prompt, parse, locale = settings.locale, notify = () => {} }) {
+  const parseResponse = typeof parse === 'function' ? parse : parseTerminologyResponseDetailed;
   let thinkingEnabled = true;
   let jsonModeEnabled = true;
   let repairAttempted = false;
@@ -1121,7 +1128,7 @@ async function requestTerminologyDiscovery({ key, model, prompt, locale = settin
           });
         }
       }, null, { reasoningEffort: thinkingEnabled ? closureReasoningEffort() : 'low' });
-      const parsed = parseTerminologyResponseDetailed(content);
+      const parsed = parseResponse(content);
       if (!parsed) {
         if (thinkingEnabled) {
           // 结构化词典不需要把思考文本返回给解析器；若思考预算挤占了最终 JSON，
@@ -1170,8 +1177,10 @@ async function requestTerminologyDiscovery({ key, model, prompt, locale = settin
 async function discoverTerminologyFromEntries({ key, model, entries, existing = [], customPrompt, locale = settings.locale, notify = () => {} }) {
   const sources = discoverySources(entries);
   const chunks = sources.length ? splitDiscoverySources(sources) : [];
-  const candidates = [];
-  const uncertainRelations = [];
+  // 词典优先：已有词条的叫法本地就能确认，AI 只负责摘录新叫法。
+  const knownKeys = dictionaryNameKeys(existing);
+  const knownNames = dictionaryNamesForPrompt(existing);
+  const mentions = [];
   notify({ scope: 'terminology', phase: 'started', model, totalBatches: chunks.length, recordCount: sources.length });
 
   for (let index = 0; index < chunks.length; index += 1) {
@@ -1187,49 +1196,45 @@ async function discoverTerminologyFromEntries({ key, model, entries, existing = 
       key,
       model,
       locale,
-      prompt: buildDiscoveryPrompt(chunks[index], customPrompt, locale),
+      prompt: buildExtractionPrompt(chunks[index], knownNames, customPrompt, locale),
+      parse: parseMentionsResponse,
       notify
     });
-    // 机器验收：名字必须逐字出现在本批原文里，编造或切错的一律丢弃。
-    const batchTerms = verifyExtractedTerms(batchResult.terms, chunks[index]);
-    candidates.push(batchTerms);
-    uncertainRelations.push(...verifyUncertainRelations(
-      batchResult.uncertainRelations,
-      [...existing, ...batchTerms],
-      chunks[index]
-    ));
+    // 机器验收：叫法必须逐字出现在本批原文里，且不与已有词典重复。
+    mentions.push(...verifyMentions(batchResult.mentions, chunks[index], knownKeys));
     notify({
       scope: 'terminology',
       phase: 'batch-done',
       model,
       batch: index + 1,
       totalBatches: chunks.length,
-      candidateCount: mergeTerminologyResults(candidates).length
+      candidateCount: mergeMentions(mentions).length
     });
   }
 
-  let discovered = mergeTerminologyResults(candidates).slice(0, MAX_DISCOVERY_CANDIDATES);
+  const newMentions = mergeMentions(mentions).slice(0, MAX_DISCOVERY_CANDIDATES);
+  let discovered = [];
+  let uncertainRelations = [];
   let consolidationFallback = false;
-  if (discovered.length > 0 && chunks.length > 1) {
-    notify({ scope: 'terminology', phase: 'consolidating', model, candidateCount: discovered.length });
+  if (newMentions.length) {
+    notify({ scope: 'terminology', phase: 'consolidating', model, candidateCount: newMentions.length });
     try {
-      const consolidated = await requestTerminologyDiscovery({
+      const clustered = await requestTerminologyDiscovery({
         key,
         model,
         locale,
-        prompt: buildConsolidationPrompt(discovered, existing, customPrompt, locale),
+        prompt: buildClusteringPrompt(newMentions, existing, customPrompt, locale),
         notify
       });
-      // 归并结果同样过机器验收：规范名或任一别名必须能在全部原文里找到出处。
-      const verifiedTerms = verifyExtractedTerms(consolidated.terms, sources);
-      if (verifiedTerms.length) discovered = verifiedTerms;
-      uncertainRelations.push(...verifyUncertainRelations(
-        consolidated.uncertainRelations,
-        [...existing, ...verifiedTerms],
+      // 归类结果同样过机器验收：名字必须有出处，编造即丢弃。
+      discovered = verifyExtractedTerms(clustered.terms, sources);
+      uncertainRelations = verifyUncertainRelations(
+        clustered.uncertainRelations,
+        [...existing, ...discovered],
         sources
-      ));
+      );
     } catch {
-      // 归并调用失败时保留已经逐批识别出的候选，不让一次辅助调用导致已有结果丢失。
+      // 归类失败时保留词典原状，不把未经归类的叫法直接写进去；下次识别可重试。
       consolidationFallback = true;
     }
   }
@@ -1240,7 +1245,7 @@ async function discoverTerminologyFromEntries({ key, model, entries, existing = 
     uncertainRelations,
     recordCount: sources.length,
     batchCount: chunks.length,
-    candidateCount: discovered.length,
+    candidateCount: newMentions.length,
     consolidationFallback
   };
 }

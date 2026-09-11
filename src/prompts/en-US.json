@@ -121,6 +121,21 @@
     "constraint5": "5. A single matter may have exactly one canonical name; put every other wording into its aliases. Never output two separate entries that may refer to the same matter—raise the pair in uncertain_matches and wait for the user's choice.",
     "formatType": "matter or person: fill person for people entries (names, members, customer contacts); everything else is matter",
     "personTypeLabel": "; type: person",
-    "constraint6": "6. People and matters are different kinds of entries: a person entry and a matter entry are never “the same matter”, so never put such a pair in uncertain_matches and never add each other's aliases. A person's name and an activity involving that person (onboarding, visits, reviews) are always two kinds. uncertain_matches may only be proposed between entries of the same kind."
+    "constraint6": "6. People and matters are different kinds of entries: a person entry and a matter entry are never “the same matter”, so never put such a pair in uncertain_matches and never add each other's aliases. A person's name and an activity involving that person (onboarding, visits, reviews) are always two kinds. uncertain_matches may only be proposed between entries of the same kind.",
+    "extractTask": "Task: quote verbatim every wording in the entries below that refers to a specific person or a specific matter (model numbers, projects, products, systems, issues, names). Quote only—no grouping, no relationship judgments.",
+    "extractRules": "Quoting rules:",
+    "extractRule1": "1. name must appear verbatim in the source text; never rewrite, abbreviate, translate, or stitch it.",
+    "extractRule2": "2. Mark type for each wording: person for names, members, customer contacts; matter for everything else.",
+    "extractRule3": "3. Do not output wordings already on the known list; record every source ref of a wording in refs.",
+    "extractRule4": "4. Whole sentences and verb phrases are not wordings; do not output sentence fragments.",
+    "extractKnown": "Already-known wordings (skip these, do not output):",
+    "extractNoKnown": "(none)",
+    "formatMentionName": "A wording that appears verbatim in the entries",
+    "formatMentionType": "person or matter",
+    "formatMentionRefs": "Source ref, e.g. R001",
+    "clusterTask": "Group the newly quoted wordings into dictionary entries: wordings that may refer to the same matter form one group with a single canonical name and its common forms; put pairs with insufficient evidence into uncertain_matches and wait for the user's choice.",
+    "clusterMentions": "Newly quoted wordings (ref · type · wording):",
+    "typePerson": "person",
+    "typeMatter": "matter"
   }
 }

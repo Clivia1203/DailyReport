@@ -70,31 +70,160 @@ function discoveryFormat(locale = 'zh-CN') {
   }, null, 2);
 }
 
-function buildDiscoveryPrompt(sources, customPrompt, locale = 'zh-CN') {
+function extractionFormat(locale = 'zh-CN') {
+  const rules = terminologyPromptRules(locale);
+  return JSON.stringify({
+    mentions: [{
+      name: rules.formatMentionName,
+      type: rules.formatMentionType,
+      refs: [rules.formatMentionRefs]
+    }]
+  }, null, 2);
+}
+
+/* ---------- 第一段：摘词（只做原文摘抄，不做判断） ---------- */
+
+function cleanMentionName(value) {
+  return String(value || '')
+    .normalize('NFKC')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/^[「」『』“”"'（）()]+|[「」『』“”"'（）()]+$/g, '')
+    .slice(0, 120);
+}
+
+function mentionRefs(value, max = 20) {
+  const values = Array.isArray(value) ? value : String(value || '').split(/[\n,，、;；]+/);
+  const result = [];
+  const seen = new Set();
+  for (const item of values) {
+    const text = String(item || '').trim().slice(0, 40);
+    if (!text) continue;
+    const key = text.toLocaleLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    result.push(text);
+    if (result.length >= max) break;
+  }
+  return result;
+}
+
+function normalizeMention(value) {
+  const source = value && typeof value === 'object' ? value : {};
+  const name = cleanMentionName(source.name || source.term || source.text || source.canonicalName);
+  if (!name) return null;
+  return {
+    name,
+    type: terminologyType(source.type),
+    refs: mentionRefs(source.refs || source.references)
+  };
+}
+
+function dictionaryNameKeys(existing = []) {
+  const keys = new Set();
+  for (const term of normalizeTerminology(existing)) {
+    for (const name of [term.canonicalName, ...term.aliases]) {
+      const key = verifyText(name);
+      if (key.length >= 2) keys.add(key);
+    }
+  }
+  return keys;
+}
+
+function dictionaryNamesForPrompt(existing = [], max = 300) {
+  const names = [];
+  const seen = new Set();
+  for (const term of normalizeTerminology(existing)) {
+    for (const name of [term.canonicalName, ...term.aliases]) {
+      const key = verifyText(name);
+      if (key.length < 2 || seen.has(key)) continue;
+      seen.add(key);
+      names.push(name);
+      if (names.length >= max) return names;
+    }
+  }
+  return names;
+}
+
+function mergeMentions(items) {
+  const byKey = new Map();
+  for (const mention of Array.isArray(items) ? items : []) {
+    const normalized = normalizeMention(mention);
+    if (!normalized) continue;
+    const key = verifyText(normalized.name);
+    if (key.length < 2) continue;
+    const existing = byKey.get(key);
+    if (!existing) {
+      byKey.set(key, normalized);
+      continue;
+    }
+    // 同名提及跨批合并：人物标记保留，出处编号并集。
+    existing.type = existing.type === 'person' || normalized.type === 'person' ? 'person' : 'matter';
+    existing.refs = mentionRefs([...existing.refs, ...normalized.refs]);
+  }
+  return [...byKey.values()];
+}
+
+function verifyMentions(mentions, sources, knownKeys = null) {
+  const corpus = sourceCorpus(sources);
+  if (!corpus) return [];
+  const known = knownKeys || new Set();
+  return (Array.isArray(mentions) ? mentions : [])
+    .map(normalizeMention)
+    .filter(mention => {
+      const key = verifyText(mention.name);
+      return key.length >= 2 && corpus.includes(key) && !known.has(key);
+    });
+}
+
+function buildExtractionPrompt(sources, knownNames = [], customPrompt, locale = 'zh-CN') {
   const rules = terminologyPromptRules(locale);
   const list = Array.isArray(sources) ? sources : [];
   const sourceText = list.length
     ? list.map(cleanSourceText).join('\n')
     : rules.noRecords;
   const prompt = String(customPrompt || catalogFor(locale).terminologyDiscoveryPrompt || DEFAULT_TERMINOLOGY_DISCOVERY_PROMPT).trim();
+  const known = Array.isArray(knownNames) && knownNames.length ? knownNames.join('、') : '';
   return [
-    rules.task,
+    rules.extractTask,
     prompt,
     '',
     rules.records,
     sourceText,
     '',
-    rules.returnJson,
-    discoveryFormat(locale),
+    rules.extractKnown,
+    known || rules.extractNoKnown,
     '',
-    rules.constraints,
-    rules.constraint1,
-    rules.constraint2,
-    rules.constraint3,
-    rules.constraint4,
-    rules.constraint5,
-    rules.constraint6
+    rules.returnJson,
+    extractionFormat(locale),
+    '',
+    rules.extractRules,
+    rules.extractRule1,
+    rules.extractRule2,
+    rules.extractRule3,
+    rules.extractRule4
   ].join('\n');
+}
+
+function parseMentionsResponse(value) {
+  const text = stripJsonFence(value);
+  if (!text) return null;
+  let bestResult = null;
+  let bestScore = -1;
+  for (const candidate of jsonCandidates(text).reverse()) {
+    try {
+      const parsed = JSON.parse(candidate);
+      const items = Array.isArray(parsed) ? parsed : (parsed?.mentions || parsed?.terms);
+      if (!Array.isArray(items) || !items.length) continue;
+      const mentions = items.map(normalizeMention).filter(Boolean);
+      if (!mentions.length) continue;
+      if (mentions.length > bestScore) {
+        bestResult = { mentions };
+        bestScore = mentions.length;
+      }
+    } catch { /* 尝试下一个完整 JSON 片段 */ }
+  }
+  return bestResult;
 }
 
 function formatTerminologyList(items, locale = 'zh-CN') {
@@ -110,12 +239,24 @@ function formatTerminologyList(items, locale = 'zh-CN') {
   }).join('\n');
 }
 
-function buildConsolidationPrompt(candidates, existing = [], customPrompt, locale = 'zh-CN') {
+function formatMentionList(mentions, locale = 'zh-CN') {
   const rules = terminologyPromptRules(locale);
-  const list = normalizeTerminology(candidates).slice(0, MAX_DISCOVERY_CANDIDATES);
+  const list = mergeMentions(mentions);
+  if (!list.length) return rules.noRecords;
+  return list.map((mention, index) => {
+    const refs = mention.refs.length ? mention.refs.join(',') : '-';
+    const type = mention.type === 'person' ? rules.typePerson : rules.typeMatter;
+    return `${index + 1}. [${refs}] ${type} ${mention.name}`;
+  }).join('\n');
+}
+
+/* ---------- 第二段：归类（在干净的叫法清单上判断同指） ---------- */
+
+function buildClusteringPrompt(mentions, existing = [], customPrompt, locale = 'zh-CN') {
+  const rules = terminologyPromptRules(locale);
   const prompt = String(customPrompt || catalogFor(locale).terminologyDiscoveryPrompt || DEFAULT_TERMINOLOGY_DISCOVERY_PROMPT).trim();
   return [
-    rules.consolidate,
+    rules.clusterTask,
     '',
     rules.mergeRules,
     prompt,
@@ -124,15 +265,17 @@ function buildConsolidationPrompt(candidates, existing = [], customPrompt, local
     rules.existing,
     formatTerminologyList(existing, locale),
     '',
-    rules.candidates,
-    formatTerminologyList(list, locale),
+    rules.clusterMentions,
+    formatMentionList(mentions, locale),
     '',
     rules.returnJson,
     discoveryFormat(locale),
     '',
     rules.aliasesOnly,
     rules.uncertainMatches,
-    rules.constraint5
+    rules.constraint4,
+    rules.constraint5,
+    rules.constraint6
   ].join('\n');
 }
 
@@ -343,10 +486,16 @@ module.exports = {
   discoverySystemPrompt,
   discoverySources,
   splitDiscoverySources,
-  buildDiscoveryPrompt,
-  buildConsolidationPrompt,
+  buildExtractionPrompt,
+  buildClusteringPrompt,
   parseTerminologyResponse,
   parseTerminologyResponseDetailed,
+  parseMentionsResponse,
+  normalizeMention,
+  mergeMentions,
+  verifyMentions,
+  dictionaryNameKeys,
+  dictionaryNamesForPrompt,
   verifyExtractedTerms,
   verifyUncertainRelations,
   mergeTerminologyResults,

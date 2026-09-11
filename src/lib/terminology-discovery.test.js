@@ -3,8 +3,14 @@ const assert = require('node:assert/strict');
 const {
   discoverySources,
   splitDiscoverySources,
-  buildDiscoveryPrompt,
-  buildConsolidationPrompt,
+  buildExtractionPrompt,
+  buildClusteringPrompt,
+  normalizeMention,
+  mergeMentions,
+  verifyMentions,
+  dictionaryNameKeys,
+  dictionaryNamesForPrompt,
+  parseMentionsResponse,
   parseTerminologyResponse,
   parseTerminologyResponseDetailed,
   verifyExtractedTerms,
@@ -19,14 +25,58 @@ const entries = [
   { id: 'c', text: '两轴功率段继续排查', ts: new Date(2026, 8, 3, 10, 0).getTime(), createdAt: 3 }
 ];
 
-test('discoverySources 和分批提示词覆盖全部日报', () => {
+test('discoverySources 和分批摘词提示词覆盖全部日报，并列出已知叫法', () => {
   const sources = discoverySources(entries);
   const chunks = splitDiscoverySources(sources, { maxSources: 1, maxChars: 10000 });
-  const prompts = chunks.map(chunk => buildDiscoveryPrompt(chunk));
+  const known = dictionaryNamesForPrompt([{ canonicalName: '双轴推进驱动器', aliases: ['两轴'] }]);
+  const prompts = chunks.map(chunk => buildExtractionPrompt(chunk, known));
   assert.equal(prompts.length, entries.length);
   for (const source of sources) {
     assert.ok(prompts.some(prompt => prompt.includes(`[${source.ref}]`) && prompt.includes(source.text)));
   }
+  assert.ok(prompts.every(prompt => prompt.includes('已认识的叫法') && prompt.includes('双轴推进驱动器、两轴')));
+  // 逐字摘录与 JSON 形状要求必须在场。
+  assert.ok(prompts.every(prompt => prompt.includes('逐字') && prompt.includes('mentions')));
+});
+
+test('提及的清洗、验收与合并：逐字回查、剔除已知、跨批去重', () => {
+  const sources = [
+    { ref: 'R001', id: 'a', date: '2026-09-01', time: '09:00', text: 'DP3C-X2 飞线问题，陆永波跟进' },
+    { ref: 'R002', id: 'b', date: '2026-09-02', time: '10:00', text: '陆永波回复客户' }
+  ];
+  const known = dictionaryNameKeys([{ canonicalName: '飞线问题', aliases: [] }]);
+  const verified = verifyMentions([
+    { name: '「DP3C-X2」', type: 'matter', refs: ['R001'] },
+    { name: '陆永波', type: 'person', refs: ['R001'] },
+    { name: '飞线问题', type: 'matter', refs: ['R001'] },      // 已知叫法：剔除
+    { name: '编造的词', type: 'matter', refs: ['R001'] }        // 原文查无：剔除
+  ], sources, known);
+  assert.deepEqual(verified.map(item => item.name), ['DP3C-X2', '陆永波']);
+  assert.equal(verified[0].type, 'matter');
+  assert.equal(verified[1].type, 'person');
+
+  const merged = mergeMentions([
+    { name: '陆永波', type: 'matter', refs: ['R001'] },
+    { name: '陆永波 ', type: 'person', refs: ['R002'] },
+    { name: 'DP3C-X2', type: 'matter', refs: ['R001'] }
+  ]);
+  assert.equal(merged.length, 2);
+  const person = merged.find(item => item.name === '陆永波');
+  assert.equal(person.type, 'person');
+  assert.deepEqual(person.refs, ['R001', 'R002']);
+});
+
+test('parseMentionsResponse: 兼容代码围栏与 terms 字段名', () => {
+  const fenced = parseMentionsResponse([
+    '```json',
+    '{"mentions":[{"name":"DP3C-X2","type":"matter","refs":["R001"]}]}',
+    '```'
+  ].join('\n'));
+  assert.equal(fenced.mentions.length, 1);
+  assert.equal(fenced.mentions[0].name, 'DP3C-X2');
+  const viaTerms = parseMentionsResponse('{"terms":[{"name":"陆永波","type":"person","refs":["R002"]}]}');
+  assert.equal(viaTerms.mentions[0].type, 'person');
+  assert.equal(parseMentionsResponse('说明文字，没有 JSON'), null);
 });
 
 test('parseTerminologyResponse: 能处理代码围栏、蛇形字段和字符串别名', () => {
@@ -90,21 +140,21 @@ test('mergeTerminologyResults: 同一规范名称的跨批次候选会合并别�
   assert.equal(result[0].note, '宏观名称');
 });
 
-test('buildConsolidationPrompt: 明确要求保留已有词典并处理细分不确定性', () => {
-  const prompt = buildConsolidationPrompt(
-    [{ canonicalName: 'DP3C-X2', aliases: ['两轴'] }],
-    [{ canonicalName: 'DP3C-X2', aliases: ['双轴'] }]
+test('buildClusteringPrompt: 已有词典、新叫法清单和不确定关系规则齐全', () => {
+  const prompt = buildClusteringPrompt(
+    [{ name: 'DP3C-X2', type: 'matter', refs: ['R001'] }],
+    [{ canonicalName: '双轴驱动器', aliases: ['双轴'] }]
   );
   assert.match(prompt, /用户已经存在的词典/);
   assert.match(prompt, /不得删除/);
-  assert.match(prompt, /功率段/);
   assert.match(prompt, /DP3C-X2/);
   assert.match(prompt, /uncertain_matches/);
-  assert.match(prompt, /用户选择|user to decide|ユーザー/);
+  assert.match(prompt, /同一事项只允许输出一个规范名称/);
+  assert.match(prompt, /人物和事项是两类词条/);
 });
 
-test('buildConsolidationPrompt: 支持使用用户修改后的识别规则', () => {
-  const prompt = buildConsolidationPrompt([], [], '只合并有明确上下文证据的叫法；不确定时保持分开。');
+test('buildClusteringPrompt: 支持使用用户修改后的识别规则', () => {
+  const prompt = buildClusteringPrompt([], [], '只合并有明确上下文证据的叫法；不确定时保持分开。');
   assert.match(prompt, /只合并有明确上下文证据/);
   assert.match(prompt, /不确定时保持分开/);
 });
