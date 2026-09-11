@@ -299,9 +299,10 @@ const DEFAULT_SETTINGS = {
 // 开机自启带 --hidden 参数（由 applyLoginItem 写入启动项），启动时据此静默驻留
 const startHidden = process.argv.includes('--hidden');
 
-// 词典重扫版本：识别规则升级（如词条类型、决定持久化）后，对既有词典做一次全量重扫。
+// 词典重扫版本：识别规则升级（如词条类型、两段式工序、无别名词条清理）且影响到
+// 已存数据时，把它升到当天日期——升级后首次识别自动全量重建。
 // 成功一次即写入当前版本，之后不再重复；恢复旧备份时版本号随之回退，会再触发一次。
-const TERMINOLOGY_RESCAN_VERSION = 20260911;
+const TERMINOLOGY_RESCAN_VERSION = 20260912;
 
 function terminologyRescanDue() {
   return Number(settings.terminologyRescanVersion || 0) < TERMINOLOGY_RESCAN_VERSION;
