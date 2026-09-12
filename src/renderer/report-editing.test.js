@@ -124,5 +124,5 @@ test('查看态和编辑态都使用内部滚动，报告卡片不再承担外�
   assert.match(reportContentRule, /scrollbar-gutter:stable;/);
   assert.match(reportEditorRule, /overflow:auto;/);
   assert.match(reportEditorRule, /scrollbar-gutter:stable;/);
-  assert.match(cssSource, /#view-report\s*\{[^}]*overflow-y:auto;[^}]*scrollbar-gutter:\s*stable;/);
+  assert.match(cssSource, /#view-report\s*\{[^}]*overflow-y:\s*auto;[^}]*scrollbar-gutter:\s*stable;/);
 });

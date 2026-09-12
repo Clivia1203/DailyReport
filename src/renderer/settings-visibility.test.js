@@ -13,7 +13,8 @@ test('小窗口设置页的 AI 设置入口属于同一滚动内容流', () => {
   const aiViewStart = htmlSource.indexOf('<!-- ===== AI 设置视图 ===== -->');
   assert.ok(settingsStart >= 0 && aiViewStart > settingsStart, '设置视图边界不存在');
   const settings = htmlSource.slice(settingsStart, aiViewStart);
-  const scrollIndex = settings.indexOf('class="scroll-wrap settings-wrap"');
+  const scrollMatch = settings.match(/class="scroll-wrap(?: edge-fade-host)? settings-wrap"/);
+  const scrollIndex = scrollMatch?.index ?? -1;
   const entryIndex = settings.indexOf('class="card settings-ai-entry"');
   assert.ok(scrollIndex >= 0 && entryIndex > scrollIndex, 'AI 设置入口必须位于设置滚动容器内');
   assert.match(settings, /<div class="card settings-ai-entry">\s*<button[^>]*id="btn-ai-settings"/s);

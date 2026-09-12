@@ -118,6 +118,10 @@ test('AI 工作过程标题、状态和操作按钮各有稳定区域，长状�
   assert.doesNotMatch(cssSource, /\.report-thinking-head\s*\{[^}]*flex-wrap:\s*wrap/);
 });
 
+test('报告 AI 工作过程没有展开时连滚动包装层也必须隐藏', () => {
+  assert.match(appSource, /const contentVisible = showDetails && thinking\.open;[\s\S]*reportThinkingContentWrap\.hidden = !contentVisible;[\s\S]*reportThinkingContent\.hidden = !contentVisible/);
+});
+
 test('报告 AI 工作过程按报告周期缓存，空周期不会继承其他周期', () => {
   assert.match(appSource, /const reportThinkingCache = reportLifecycle\.createReportThinkingCache\(\)/);
   assert.match(appSource, /function syncReportThinkingForPeriod\(\)[\s\S]*reportThinkingCache\.read/);
@@ -166,6 +170,96 @@ test('工作台在左栏中拥有独立的可视高度和滚动容器', () => {
   assert.match(cssSource, /\.cols\s*\{[^}]*align-items:\s*stretch/s);
   assert.match(cssSource, /\.side-col\s*\{[^}]*min-height:\s*0[^}]*overflow:\s*hidden/s);
   assert.match(cssSource, /\.recent-summary-panel\s*\{[^}]*overflow-y:\s*auto/s);
+});
+
+test('滚动区域在上下仍有内容时渐隐，并保护日期标题不被覆盖', () => {
+  assert.match(appSource, /function syncScrollEdgeFade\(scroller/);
+  assert.match(appSource, /has-scroll-top/);
+  assert.match(appSource, /has-scroll-bottom/);
+  assert.match(appSource, /paddingBottom/);
+  assert.match(appSource, /new ResizeObserver\(update\)/);
+  assert.match(appSource, /new MutationObserver\(update\)/);
+  assert.match(cssSource, /\.edge-fade-host::before,[\s\S]*z-index:\s*1/);
+  assert.match(cssSource, /\.edge-fade-host\.has-scroll-top::before/);
+  assert.match(cssSource, /\.edge-fade-host\.has-scroll-bottom::after/);
+  assert.match(cssSource, /\.day-head\s*\{[^}]*position:\s*sticky[^}]*z-index:\s*2/s);
+  assert.match(cssSource, /\.edge-fade-host::before,[\s\S]*pointer-events:\s*none/);
+});
+
+test('渐隐固定在滚动视口边缘，不会跟随日报内容漂移且范围克制', () => {
+  assert.match(htmlSource, /<div class="scroll-wrap edge-fade-host recent-summary-wrap">[\s\S]*id="recent-summary-panel"[\s\S]*id="recent-summary-thumb"/);
+  assert.match(appSource, /const fadeHost = explicitHost \|\| scroller\.closest\('\.edge-fade-host'\)/);
+  assert.match(appSource, /weeklyWorkbenchWrap\.hidden = !visible/);
+  assert.match(cssSource, /\.edge-fade-host\.has-scroll-top::before/);
+  assert.match(cssSource, /\.edge-fade-host\.has-scroll-bottom::after/);
+  assert.doesNotMatch(cssSource, /\.scroll-edge-fade-scroller::before/);
+  assert.match(cssSource, /height:\s*28px/);
+  assert.match(cssSource, /backdrop-filter:\s*blur\(6px\)/);
+  assert.match(cssSource, /\.recent-summary-wrap\s*\{\s*display:\s*none/);
+});
+
+test('边缘渐隐让内容本身连续软化，不能用实色覆盖制造硬边界', () => {
+  assert.doesNotMatch(appSource, /scroller\.classList\.add\('edge-fade-content'\)/);
+  assert.match(cssSource, /-webkit-mask-image:\s*linear-gradient/);
+  assert.match(cssSource, /mask-image:\s*linear-gradient/);
+  assert.doesNotMatch(cssSource, /backdrop-filter:\s*blur\(1px\)/);
+  assert.match(cssSource, /color-mix\(in srgb, var\(--bg\) 82%, transparent\)/);
+  assert.match(cssSource, /\.content::before,\s*\.content::after,\s*\.edge-fade-host::before,\s*\.edge-fade-host::after/);
+  assert.doesNotMatch(htmlSource, /edge-fade-mask-host|edge-fade-maskable|edge-fade-content/);
+});
+
+test('无明确内容框的滚动区统一使用同一套边界软化层，日报卡片边框不能走另一条路径', () => {
+  assert.match(htmlSource, /<div class="scroll-wrap edge-fade-host">[\s\S]*<section class="list" id="list">/);
+  assert.match(htmlSource, /<div class="scroll-wrap edge-fade-host recent-summary-wrap">[\s\S]*id="recent-summary-panel"/);
+  assert.match(htmlSource, /<div class="scroll-wrap edge-fade-host report-side-wrap"[^>]*>[\s\S]*<aside class="report-side">/);
+  assert.doesNotMatch(htmlSource, /edge-fade-mask-host|edge-fade-maskable|edge-fade-content/);
+  assert.match(cssSource, /\.content::before,\s*\.content::after,\s*\.edge-fade-host::before,\s*\.edge-fade-host::after/);
+  assert.match(cssSource, /backdrop-filter:\s*blur\(6px\)/);
+  assert.match(cssSource, /\.edge-fade-host\.has-scroll-bottom::after/);
+  assert.match(cssSource, /\.day-head\s*\{[\s\S]*z-index:\s*2/s);
+});
+
+test('小窗口主视图发生纵向溢出时拥有独立滚动出口和视口渐隐', () => {
+  assert.match(appSource, /function attachScrollEdgeFade\(scroller, fadeHost\)/);
+  assert.match(appSource, /attachScrollEdgeFade\(viewMain, \$\('\.content'\)\)/);
+  assert.match(cssSource, /\.content::before,[\s\S]*pointer-events:\s*none/);
+  assert.match(cssSource, /\.content\.has-scroll-top::before/);
+  assert.match(cssSource, /\.content\.has-scroll-bottom::after/);
+  assert.match(cssSource, /#view-main\s*\{[^}]*overflow-y:\s*auto[^}]*scrollbar-width:\s*none/s);
+  assert.match(cssSource, /#view-main::-webkit-scrollbar\s*\{\s*display:\s*none;/);
+  assert.doesNotMatch(cssSource, /@media \(max-height:\s*760px\)\s+and\s+\(min-width:\s*1200px\)/);
+});
+
+test('周期总结只在页面边缘渐隐，明确内容框不叠加虚化', () => {
+  assert.match(htmlSource, /<div class="scroll-wrap report-content-wrap"[^>]*>[\s\S]*id="report-content"/);
+  assert.match(htmlSource, /<div class="scroll-wrap edge-fade-host report-side-wrap"[^>]*>[\s\S]*<aside class="report-side">/);
+  assert.match(htmlSource, /class="settings-scroll ai-settings-content"/);
+  assert.match(htmlSource, /<div class="scroll-wrap closure-modal-scroll-wrap"[^>]*>[\s\S]*id="closure-modal-content"/);
+  assert.match(appSource, /attachScrollEdgeFade\(viewReport, \$\('\.content'\)\)/);
+  assert.doesNotMatch(appSource, /attachScrollEdgeFade\(reportContent,/);
+  assert.match(appSource, /attachScrollEdgeFade\(reportSide, reportSideWrap\)/);
+  assert.doesNotMatch(appSource, /attachScrollEdgeFade\(reportThinkingContent,/);
+  assert.doesNotMatch(appSource, /attachScrollEdgeFade\(closureModalContent,/);
+  assert.doesNotMatch(appSource, /aiSettingsPanels\.map\(panel => attachScrollEdgeFade/);
+  assert.match(cssSource, /\.report-content-wrap[\s\S]*\.report-side-wrap/);
+});
+
+test('明确内容框不使用渐隐，只有页面边缘和无框滚动区保留渐隐', () => {
+  assert.match(htmlSource, /<div class="scroll-wrap edge-fade-host recent-summary-wrap">/);
+  assert.match(htmlSource, /<div class="scroll-wrap edge-fade-host">[\s\S]*<section class="list" id="list">/);
+  assert.match(htmlSource, /<div class="scroll-wrap edge-fade-host settings-wrap">/);
+  assert.match(htmlSource, /<div class="scroll-wrap edge-fade-host report-side-wrap"[^>]*>[\s\S]*<aside class="report-side">/);
+  assert.doesNotMatch(htmlSource, /class="settings-scroll ai-settings-content scroll-wrap/);
+  assert.match(appSource, /const fadeHost = explicitHost \|\| scroller\.closest\('\.edge-fade-host'\)/);
+  assert.doesNotMatch(appSource, /attachScrollEdgeFade\(reportContent, reportContentWrap\)/);
+  assert.match(appSource, /attachScrollEdgeFade\(reportSide, reportSideWrap\)/);
+  assert.doesNotMatch(appSource, /attachScrollEdgeFade\(reportThinkingContent,/);
+  assert.doesNotMatch(appSource, /attachScrollEdgeFade\(terminologyThinkingContent,/);
+  assert.doesNotMatch(appSource, /attachScrollEdgeFade\(closureModalContent,/);
+  assert.doesNotMatch(appSource, /aiSettingsPanels\.map\(panel => attachScrollEdgeFade/);
+  assert.match(cssSource, /\.edge-fade-host::before,[\s\S]*\.edge-fade-host::after/);
+  assert.doesNotMatch(cssSource, /\.scroll-wrap::before/);
+  assert.doesNotMatch(htmlSource, /edge-fade-mask-host|edge-fade-maskable|edge-fade-content/);
 });
 
 test('主视图用共享标题栏对齐左右两栏，问候日期不再提前占用左栏', () => {

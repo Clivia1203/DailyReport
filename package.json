@@ -27,7 +27,8 @@
     "files": [
       "src/**/*",
       "package.json",
-      "!**/*.test.js"
+      "!**/*.test.js",
+      "!src/assets/icon-v*.png"
     ],
     "win": {
       "target": [

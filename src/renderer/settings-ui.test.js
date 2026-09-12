@@ -171,6 +171,34 @@ test('清空 API Key 后不回填旧掩码，并把清除意图传给主进程',
   );
 });
 
+test('已保存 API Key 默认只读，替换操作显式进入编辑状态', () => {
+  assert.match(htmlSource, /id="ai-key-sub"/);
+  assert.match(htmlSource, /id="ai-key-replace"[^>]*>替换<\/button>/);
+
+  const focusStart = appSource.indexOf("aiKey.addEventListener('focus'");
+  const inputStart = appSource.indexOf("aiKey.addEventListener('input'", focusStart);
+  const focusHandler = appSource.slice(focusStart, inputStart === -1 ? appSource.length : inputStart);
+  assert.notEqual(focusStart, -1, 'API Key 聚焦处理器不存在');
+  assert.doesNotMatch(focusHandler, /aiKey\.value\s*=\s*''/, '聚焦掩码时不能静默清空输入框');
+  assert.match(appSource, /aiKey\.readOnly\s*=\s*mode\s*===\s*'stored'/);
+  assert.match(appSource, /aiKeyReplace\.addEventListener\('click'/);
+  assert.match(appSource, /dataset\.mode\s*=\s*'replace'/);
+  assert.match(appSource, /dataset\.savedMask/);
+  assert.match(appSource, /function restoreSavedMaskedAiKey\(\)/);
+  assert.match(appSource, /正在替换 API Key；输入新 Key 后可测试并保存，留空则保持当前 Key。/);
+});
+
+test('API Key 的替换按钮与输入框同高且保持同一行对齐', () => {
+  const keyControl = cssSource.match(/\.ai-key-control\s*\{([\s\S]*?)\n\}/)?.[1] || '';
+  const replaceButton = cssSource.match(/\.ai-key-control\s+\.ai-key-replace\s*\{([\s\S]*?)\n\}/)?.[1] || '';
+  assert.match(keyControl, /align-items\s*:\s*center/);
+  assert.match(keyControl, /flex-wrap\s*:\s*nowrap/);
+  assert.match(replaceButton, /height\s*:\s*36px/);
+  assert.match(replaceButton, /min-width\s*:\s*56px/);
+  assert.match(replaceButton, /padding\s*:\s*0 8px/);
+  assert.match(replaceButton, /flex\s*:\s*0 0 auto/);
+});
+
 test('软件启动时自动检查已保存的 AI 配置，且同一会话不会重复检查', () => {
   assert.match(appSource, /let aiStartupCheckPromise\s*=\s*null/);
   assert.match(appSource, /function autoTestAiOnStartup\(\)/);
@@ -343,6 +371,27 @@ test('术语页先显示新增表单，并支持词典模糊搜索', () => {
   assert.match(appSource, /terminologySearch\?\.addEventListener\('input', renderTerminologyUI\)/);
   assert.match(appSource, /window\.api\.setTerminology\(allTerms\.filter\(item => item\.id !== term\.id\)\)/);
   assert.match(cssSource, /\.terminology-search-wrap input\s*\{[\s\S]*border-radius:10px/);
+});
+
+test('术语词典清空操作使用显式按钮，并与搜索框成组', () => {
+  assert.match(
+    htmlSource,
+    /<div class="terminology-list-actions">[\s\S]*<button class="btn small danger-ghost" id="terminology-clear"/
+  );
+  assert.match(cssSource, /\.terminology-list-actions\s*\{[\s\S]*display:flex[\s\S]*gap:8px/);
+});
+
+test('术语编辑行的自定义下拉框与两侧输入框保持同一顶部间距和宽度', () => {
+  assert.match(cssSource, /\.terminology-grid \.custom-select\s*\{[\s\S]*width:100%[\s\S]*margin-top:4px/);
+});
+
+test('术语词条的编辑删除按钮固定在右侧同一行，并与长文字保持隔离', () => {
+  assert.match(cssSource, /\.terminology-item\s*\{[\s\S]*display:grid[\s\S]*grid-template-columns:minmax\(0,1fr\) auto/);
+  assert.match(cssSource, /\.terminology-copy\s*\{[\s\S]*min-width:0/);
+  assert.match(cssSource, /\.terminology-item-actions\s*\{[\s\S]*flex:none[\s\S]*flex-wrap:nowrap[\s\S]*white-space:nowrap/);
+  assert.match(cssSource, /\.terminology-item-actions \.link-btn\s*\{[\s\S]*height:28px/);
+  assert.match(cssSource, /\.terminology-item-actions \.link-btn\s*\{[\s\S]*border:1px solid var\(--border\)/);
+  assert.match(cssSource, /\.terminology-item-actions \.link-btn\s*\{[\s\S]*flex:0 0 auto/);
 });
 
 test('术语识别提供默认收起的 AI 思考与输出面板', () => {

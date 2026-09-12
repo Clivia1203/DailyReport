@@ -1010,14 +1010,67 @@ body.textarea-resizing * { cursor: nwse-resize !important; user-select: none !im
 /* ---------- 主体布局：录入/导出/工具栏固定，仅列表滚动 ---------- */
 
 .content {
-  flex: 1; overflow: hidden;
+  flex: 1; overflow: hidden; position: relative;
   width: min(860px, calc(100% - 48px));
   margin: 0 auto;
   padding-bottom: 20px;
   display: flex; flex-direction: column;
 }
 
+/* 所有无明确内容框的滚动视口共用同一套边缘软化层。
+   它同时使用低强度底色、backdrop blur 和连续 mask，让卡片背景与边框一起软化，
+   不再出现“文字模糊了但圆角边框还单独留着”的两套视觉算法。 */
+.content::before,
+.content::after,
+.edge-fade-host::before,
+.edge-fade-host::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 28px;
+  opacity: 0;
+  pointer-events: none;
+  z-index: 1;
+  transition: opacity .15s ease;
+  background: linear-gradient(to bottom,
+    color-mix(in srgb, var(--bg) 82%, transparent) 0%,
+    color-mix(in srgb, var(--bg) 52%, transparent) 35%,
+    color-mix(in srgb, var(--bg) 18%, transparent) 68%,
+    transparent 100%);
+  -webkit-backdrop-filter: blur(6px);
+  backdrop-filter: blur(6px);
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  -webkit-mask-size: 100% 100%;
+  mask-size: 100% 100%;
+  -webkit-mask-image: linear-gradient(to bottom, #000 0%, #000 18%, transparent 100%);
+  mask-image: linear-gradient(to bottom, #000 0%, #000 18%, transparent 100%);
+}
+.content::before,
+.edge-fade-host::before { top: 0; }
+.content::after,
+.edge-fade-host::after { bottom: 0; transform: scaleY(-1); }
+.content.has-scroll-top::before,
+.content.has-scroll-bottom::after { opacity: 1; }
+
 .view { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 14px; }
+
+/* 主视图是否需要滚动由真实内容高度决定，不按窗口断点预设。
+   隐藏原生滚动条避免它改变布局，实际溢出时由边缘渐隐提示用户。 */
+#view-main {
+  overflow-y: auto;
+  overflow-x: hidden;
+  scrollbar-width: none;
+}
+#view-main::-webkit-scrollbar { display: none; }
+#view-report {
+  overflow-y: auto;
+  overflow-x: hidden;
+  scrollbar-width: none;
+  scrollbar-gutter: stable;
+}
+#view-report::-webkit-scrollbar { display: none; }
 
 /* ---------- 主视图共享标题栏 ---------- */
 
@@ -1220,6 +1273,12 @@ body.textarea-resizing * { cursor: nwse-resize !important; user-select: none !im
   overflow-y: auto;
   display: flex; flex-direction: column; gap: 20px;
   padding: 2px 2px 20px;
+}
+
+/* 滚动状态仍由 JS 按真实内容高度控制；日期标题保持更高层级，避免被软化层覆盖。 */
+.edge-fade-host.has-scroll-top::before,
+.edge-fade-host.has-scroll-bottom::after {
+  opacity: 1;
 }
 
 .day-head {
@@ -1647,8 +1706,11 @@ body.textarea-resizing * { cursor: nwse-resize !important; user-select: none !im
   .wb-closure-thinking .report-thinking-title { color:var(--text-2); font-size:10.5px; }
   .wb-closure-thinking .report-thinking-status { margin-left:0; font-size:9.5px; }
   .wb-closure-thinking .report-thinking-note { margin-top:4px; font-size:9.5px; line-height:1.45; }
+  .wb-closure-thinking .report-thinking-content-wrap {
+    height:160px; max-height:160px; margin-top:8px;
+  }
   .wb-closure-thinking .report-thinking-content {
-    height:160px; max-height:160px; margin-top:8px; padding:8px 9px;
+    height:100%; max-height:none; margin:0; padding:8px 9px;
     border-radius:8px; font-size:10px; line-height:1.55;
   }
   .wb-closure-card > .wb-closure-thinking + .wb-empty { margin-top:11px; }
@@ -1900,7 +1962,6 @@ body.textarea-resizing * { cursor: nwse-resize !important; user-select: none !im
     column-gap: 10px;
     row-gap: 10px;
   }
-
   #view-main > .main-titlebar,
   #view-main > .cols,
   #view-main .side-col { display: contents; }
@@ -2014,7 +2075,14 @@ body.textarea-resizing * { cursor: nwse-resize !important; user-select: none !im
   display: flex;
 }
 .scroll-wrap > .list,
-.scroll-wrap > .settings-scroll { flex: 1; min-width: 0; }
+.scroll-wrap > .settings-scroll,
+.scroll-wrap > .recent-summary-panel { flex: 1; min-width: 0; }
+
+/* 左栏近期总结在窄窗口完全移除，宽屏时成为统计卡下方的独立滚动视口。 */
+.recent-summary-wrap { display: none; flex: 1 1 auto; min-height: 0; }
+@media (min-width: 1200px) {
+  .recent-summary-wrap { display: flex; }
+}
 
 .ov-thumb {
   position: fixed;               /* 游离于布局外：水平位置由 JS 贴内容列右缘外侧 */
@@ -2154,8 +2222,11 @@ body.textarea-resizing * { cursor: nwse-resize !important; user-select: none !im
   text-align:right;
 }
 .report-thinking-note { margin-top:5px; color:var(--text-2); font-size:11px; }
+.report-thinking-content-wrap {
+  height:220px; max-height:220px; margin-top:10px; overflow:hidden;
+}
 .report-thinking-content {
-  height:220px; max-height:220px; overflow:auto; margin:10px 0 0;
+  width:100%; height:100%; max-height:none; overflow:auto; margin:0;
   padding:10px 12px; border:1px solid var(--border);
   border-radius:9px; background:var(--card); color:var(--text-2);
   white-space:pre-wrap; word-break:break-word;
@@ -2163,7 +2234,7 @@ body.textarea-resizing * { cursor: nwse-resize !important; user-select: none !im
 }
 .report-thinking-content[hidden] { display:none; }
 .terminology-thinking { margin-top:12px; }
-.terminology-thinking .report-thinking-content { height:180px; max-height:180px; }
+.terminology-thinking .report-thinking-content-wrap { height:180px; max-height:180px; }
 
 .report-layout {
   --report-side-width: 280px;
@@ -2232,6 +2303,14 @@ body.textarea-resizing * { cursor: nwse-resize !important; user-select: none !im
   overscroll-behavior:contain;
   scrollbar-gutter:stable;
 }
+.report-content-wrap,
+.report-side-wrap { overflow:hidden; }
+.report-content-wrap > .report-content,
+.report-side-wrap > .report-side {
+  flex:1 1 auto;
+  min-width:0;
+  min-height:0;
+}
 .report-side-content {
   min-width:0; min-height:100%;
   display:flex; flex-direction:column; gap:14px;
@@ -2268,11 +2347,13 @@ body.textarea-resizing * { cursor: nwse-resize !important; user-select: none !im
 .ai-state-badge { color:var(--text-3); font-size:12px; }
 .ai-state-badge.ok { color:var(--success); font-weight:650; }
 .ai-key-row { align-items:flex-start; }
-.ai-key-control { display:flex; align-items:center; gap:7px; flex:0 1 auto; max-width:100%; flex-wrap:wrap; }
-.ai-key-input { width:240px; max-width:100%; height:36px; padding:0 12px; border:1px solid var(--border); border-radius:10px; background:var(--input-bg); color:var(--text); outline:none; font-family:Consolas, "Courier New", monospace; }
+.ai-key-control { display:flex; align-items:center; gap:7px; flex:0 1 auto; min-width:0; max-width:100%; flex-wrap:nowrap; }
+.ai-key-input { width:240px; min-width:0; max-width:100%; flex:1 1 auto; height:36px; padding:0 12px; border:1px solid var(--border); border-radius:10px; background:var(--input-bg); color:var(--text); outline:none; font-family:Consolas, "Courier New", monospace; }
 .ai-key-input:focus { border-color:var(--accent); background:var(--card); }
+.ai-key-input[readonly] { cursor:default; }
 .ai-base-url-input { width:300px; max-width:100%; height:36px; padding:0 12px; border:1px solid var(--border); border-radius:10px; background:var(--input-bg); color:var(--text); outline:none; font:inherit; }
 .ai-base-url-input:focus { border-color:var(--accent); background:var(--card); }
+.ai-key-control .ai-key-replace { height:36px; min-width:56px; padding:0 8px; border-radius:10px; flex:0 0 auto; }
 .ai-key-toggle { width:36px; height:36px; flex:none; }
 .ai-key-toggle svg { width:17px; height:17px; }
 .ai-model-select { min-width:180px; max-width:260px; }
@@ -2319,6 +2400,7 @@ body.textarea-resizing * { cursor: nwse-resize !important; user-select: none !im
 .terminology-editor-head { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; margin-bottom:10px; }
 .terminology-editor-title { color:var(--text-2); font-size:12px; font-weight:650; }
 .terminology-list-toolbar { display:flex; align-items:center; justify-content:space-between; gap:14px; margin-top:16px; padding-top:14px; border-top:1px solid var(--border); }
+.terminology-list-actions { display:flex; align-items:center; justify-content:flex-end; gap:8px; flex:0 1 auto; min-width:0; }
 .terminology-clear-wrap { flex:none; }
 .terminology-list-heading { min-width:0; }
 .terminology-list-title { color:var(--text-2); font-size:12px; font-weight:650; }
@@ -2363,18 +2445,28 @@ body.textarea-resizing * { cursor: nwse-resize !important; user-select: none !im
 .terminology-deferred-actions { display:flex; flex:none; gap:5px; margin:2px -5px -3px; }
 .terminology-prompt-row { margin-top:12px; border-top:1px solid var(--border); }
 .terminology-prompt-title { padding-top:0; }
-.terminology-item { display:flex; align-items:flex-start; justify-content:space-between; gap:14px; padding:10px 12px; border-radius:10px; background:var(--input-bg); }
+.terminology-item { display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:start; gap:14px; padding:10px 12px; border-radius:10px; background:var(--input-bg); }
 .terminology-copy { min-width:0; }
 .terminology-name { display:flex; align-items:center; gap:6px; color:var(--text); font-size:13px; font-weight:650; overflow-wrap:anywhere; }
 .terminology-type-badge { flex:none; padding:1px 6px; border-radius:6px; background:var(--accent-soft, rgba(59,130,246,.12)); color:var(--accent); font-size:10px; font-weight:600; line-height:1.4; }
 .terminology-aliases, .terminology-note { margin-top:4px; color:var(--text-2); font-size:11px; line-height:1.5; overflow-wrap:anywhere; }
 .terminology-note { color:var(--text-3); }
-.terminology-item-actions { display:flex; flex:0 1 auto; max-width:100%; flex-wrap:wrap; gap:2px; }
+.terminology-item-actions { display:flex; align-items:flex-start; flex:none; flex-wrap:nowrap; gap:6px; white-space:nowrap; }
+.terminology-item-actions .link-btn {
+  width:auto; height:28px; min-width:0; max-width:none; flex:0 0 auto;
+  display:inline-flex; align-items:center; justify-content:center;
+  padding:0 8px; border:1px solid var(--border); border-radius:7px;
+  background:var(--card); color:var(--text-2); font-size:12px; line-height:1;
+}
+.terminology-item-actions .link-btn:hover { background:var(--input-bg); border-color:var(--border-strong); color:var(--text); }
 .danger-link { color:var(--danger); }
+.terminology-item-actions .danger-link { color:var(--danger); }
+.terminology-item-actions .danger-link:hover { background:var(--danger-soft); border-color:var(--danger); color:var(--danger); }
 .terminology-editor { margin-top:12px; padding-top:12px; border-top:1px solid var(--border); }
 .terminology-grid { display:grid; grid-template-columns:minmax(0,1.2fr) minmax(0,0.6fr) minmax(0,1fr); gap:10px; align-items:start; }
 .terminology-editor label { display:flex; flex-direction:column; color:var(--text-2); font-size:11px; line-height:1.5; }
 .terminology-editor input, .terminology-editor textarea { width:100%; margin-top:4px; }
+.terminology-grid .custom-select { width:100%; margin-top:4px; }
 .terminology-editor input {
   height:36px; padding:0 10px; border:1px solid var(--border); border-radius:9px;
   background:var(--input-bg); color:var(--text); font:inherit; outline:none;
@@ -2387,8 +2479,14 @@ body.textarea-resizing * { cursor: nwse-resize !important; user-select: none !im
 .terminology-actions { display:flex; align-items:center; justify-content:flex-end; gap:7px; margin-top:8px; }
 .terminology-actions .set-msg { flex:1; }
 
-.closure-modal { width:min(760px, calc(100vw - 48px)); max-height:min(760px, calc(100vh - 48px)); overflow:auto; }
+.closure-modal { width:min(760px, calc(100vw - 48px)); max-height:min(760px, calc(100vh - 48px)); display:flex; flex-direction:column; overflow:hidden; }
 .closure-modal-note { margin:-3px 0 12px; color:var(--text-3); font-size:12px; line-height:1.6; }
+.closure-modal-scroll-wrap { flex:1 1 auto; min-height:0; overflow:hidden; }
+.closure-modal-scroll-wrap > .closure-modal-content {
+  height:100%; min-height:0; overflow-y:auto; overflow-x:hidden;
+  padding-right:4px; scrollbar-width:none;
+}
+.closure-modal-scroll-wrap > .closure-modal-content::-webkit-scrollbar { display:none; }
 .closure-modal-content { display:flex; flex-direction:column; gap:9px; }
 .closure-modal-section-title { color:var(--text-2); font-size:12px; font-weight:650; }
 .closure-modal-content .wb-closure-item { padding:12px 12px 12px 10px; border:1px solid var(--border); border-left:3px solid var(--border-strong); }
@@ -2397,8 +2495,6 @@ body.textarea-resizing * { cursor: nwse-resize !important; user-select: none !im
 
 @media (max-width: 1199px) {
   #view-report {
-    overflow-y:auto;
-    overflow-x:hidden;
     scrollbar-gutter:stable;
     padding-bottom:20px;
   }
@@ -2458,7 +2554,8 @@ body.textarea-resizing * { cursor: nwse-resize !important; user-select: none !im
   .terminology-discovery { align-items:flex-start; flex-direction:column; }
   .terminology-discovery .btn { align-self:flex-start; }
   .terminology-list-toolbar { align-items:stretch; flex-direction:column; gap:8px; }
-  .terminology-search-wrap { width:100%; min-width:0; flex-basis:auto; }
+  .terminology-list-actions { width:100%; justify-content:flex-start; flex-wrap:wrap; }
+  .terminology-list-actions .terminology-search-wrap { width:auto; min-width:220px; flex:1 1 220px; }
 }
 
 @media (max-width: 560px) {

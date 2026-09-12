@@ -220,6 +220,8 @@ const viewSettings = $('#view-settings');
 const viewAiSettings = $('#view-ai-settings');
 const viewReport = $('#view-report');
 const btnSettings = $('#btn-settings');
+let updateMainViewportFade = () => false;
+let updateReportViewportFade = () => false;
 
 function showView(name) {
   viewMain.hidden = name !== 'main';
@@ -228,6 +230,8 @@ function showView(name) {
   viewReport.hidden = name !== 'report';
   btnSettings.hidden = name === 'settings' || name === 'ai-settings';
   if (typeof syncWeeklyWorkbenchViewport === 'function') syncWeeklyWorkbenchViewport();
+  requestAnimationFrame(updateMainViewportFade);
+  requestAnimationFrame(updateReportViewportFade);
 }
 
 btnSettings.addEventListener('click', () => { showView('settings'); loadSettingsUI(); });
@@ -758,10 +762,12 @@ const reportThinking = $('#report-thinking');
 const reportThinkingStatus = $('#report-thinking-status');
 const reportThinkingToggle = $('#report-thinking-toggle');
 const reportThinkingContent = $('#report-thinking-content');
+const reportThinkingContentWrap = $('#report-thinking-content-wrap');
 const reportThinkingNote = $('#report-thinking-note');
 const reportTitle = $('#report-title');
 const reportMeta = $('#report-meta');
 const reportContent = $('#report-content');
+const reportContentWrap = $('#report-content-wrap');
 const reportGenerate = $('#report-generate');
 const reportEditor = $('#report-editor');
 const reportFull = $('#report-full');
@@ -776,6 +782,8 @@ const reportSourceList = $('#report-source-list');
 const reportConnection = $('#report-connection');
 const reportLayout = $('#report-layout');
 const reportResizer = $('#report-resizer');
+const reportSide = $('.report-side');
+const reportSideWrap = $('#report-side-wrap');
 const reportLifecycle = window.DRReportLifecycle;
 const reportThinkingCache = reportLifecycle.createReportThinkingCache();
 const reportGeneration = window.DRReportGeneration;
@@ -1359,7 +1367,9 @@ function renderReportThinking() {
   reportThinking.hidden = !thinking.visible;
   reportThinkingToggle.hidden = !showDetails;
   reportThinkingNote.hidden = !showDetails;
-  reportThinkingContent.hidden = !showDetails || !thinking.open;
+  const contentVisible = showDetails && thinking.open;
+  reportThinkingContentWrap.hidden = !contentVisible;
+  reportThinkingContent.hidden = !contentVisible;
   reportThinkingToggle.textContent = uiText(thinking.open ? '收起详细过程' : '查看详细过程');
   reportThinkingToggle.setAttribute('aria-expanded', String(thinking.open));
   if (reportThinkingNote) {
@@ -1670,6 +1680,7 @@ function renderReportState(message) {
   reportStatus.className = `report-status${message ? ' active' : ''}${incomplete ? ' incomplete' : ''}`;
   reportEdit.hidden = !data;
   reportFull.classList.toggle('editing', state.report.editing);
+  reportContentWrap.hidden = state.report.editing;
   reportContent.hidden = state.report.editing;
   reportEditor.hidden = !data || !state.report.editing;
   reportEditFoot.hidden = !data || !state.report.editing;
@@ -2300,6 +2311,7 @@ const DR = window.DRStats;
 /* ---------- 近期总结（仅宽屏） ---------- */
 
 const weeklyWorkbench = $('#recent-summary-panel');
+const weeklyWorkbenchWrap = weeklyWorkbench.closest('.recent-summary-wrap');
 let updateWorkbenchThumb = () => false;
 let closureThinkingTimer = null;
 
@@ -2467,6 +2479,7 @@ function syncClosureThinkingNode(box) {
   const toggle = box.querySelector('.closure-thinking-toggle');
   const status = box.querySelector('.report-thinking-status');
   const note = box.querySelector('.report-thinking-note');
+  const contentWrap = box.querySelector('.report-thinking-content-wrap');
   const content = box.querySelector('.report-thinking-content');
   if (!thinking?.visible || !toggle || !status || !note || !content) return false;
 
@@ -2479,7 +2492,9 @@ function syncClosureThinkingNode(box) {
   status.textContent = closureThinkingStatus(thinking);
   note.textContent = uiText(thinking.progressNote
     || '实时状态代表实际生成进度；详细过程仅用于查看，不会写入总结或导出文件。');
-  content.hidden = !showDetails || !thinking.open;
+  const contentVisible = showDetails && thinking.open;
+  if (contentWrap) contentWrap.hidden = !contentVisible;
+  content.hidden = !contentVisible;
 
   const blocks = [];
   if (thinking.progressNote) blocks.push(`${uiText('进度：')}${uiText(thinking.progressNote)}`);
@@ -2515,7 +2530,9 @@ function renderClosureThinking() {
 
   const note = wbNode('div', 'report-thinking-note');
   const content = wbNode('pre', 'report-thinking-content');
-  box.append(head, note, content);
+  const contentWrap = wbNode('div', 'scroll-wrap report-thinking-content-wrap');
+  contentWrap.appendChild(content);
+  box.append(head, note, contentWrap);
   syncClosureThinkingNode(box);
   return box;
 }
@@ -2760,6 +2777,7 @@ function syncWeeklyWorkbenchViewport() {
   const wasVisible = isClosureWorkbenchVisible();
   const wide = window.matchMedia('(min-width: 1200px)').matches;
   const visible = wide && !viewMain.hidden && !!state.settings?.ai?.configured;
+  if (weeklyWorkbenchWrap) weeklyWorkbenchWrap.hidden = !visible;
   weeklyWorkbench.hidden = !visible;
   updateWorkbenchThumb();
   const visibleNow = isClosureWorkbenchVisible();
@@ -3285,6 +3303,7 @@ function renderList() {
       : '还没有记录，按 Alt+Shift+D 或在上方输入第一条');
     div.append(em, tip);
     listEl.appendChild(div);
+    syncScrollEdgeFade(listEl);
     return;
   }
 
@@ -3327,6 +3346,7 @@ function renderList() {
     dayEl.append(head, wrap);
     listEl.appendChild(dayEl);
   }
+  syncScrollEdgeFade(listEl);
 }
 
 function buildEntryEl(e) {
@@ -3519,6 +3539,8 @@ const aiProvider = $('#ai-provider');
 const aiBaseUrl = $('#ai-base-url');
 const aiKey = $('#ai-key');
 const aiKeyToggle = $('#ai-key-toggle');
+const aiKeyReplace = $('#ai-key-replace');
+const aiKeySub = $('#ai-key-sub');
 const aiModel = $('#ai-model');
 const aiClosureModel = $('#ai-closure-model');
 const aiReasoningEffort = $('#ai-reasoning-effort');
@@ -3549,6 +3571,7 @@ const terminologyThinkingStatus = $('#terminology-thinking-status');
 const terminologyThinkingToggle = $('#terminology-thinking-toggle');
 const terminologyThinkingNote = $('#terminology-thinking-note');
 const terminologyThinkingContent = $('#terminology-thinking-content');
+const terminologyThinkingContentWrap = $('#terminology-thinking-content-wrap');
 const terminologyPending = $('#terminology-pending');
 const terminologyPendingCount = $('#terminology-pending-count');
 const terminologyPendingList = $('#terminology-pending-list');
@@ -3632,46 +3655,97 @@ function renderAiKeyToggle(visible) {
   aiKeyToggle.setAttribute('aria-label', aiKeyToggle.title);
 }
 
+function syncAiKeyEditorUI(ai = state.settings?.ai) {
+  const configured = !!ai?.configured;
+  const mode = aiKey.dataset.mode || (configured ? 'stored' : 'empty');
+  const replacementActive = mode === 'replace' || mode === 'draft';
+  const hint = mode === 'stored'
+    ? '已保存的 Key 已隐藏；点击眼睛可查看，点击“替换”后输入新 Key。'
+    : mode === 'replace'
+    ? '正在替换 API Key；输入新 Key 后可测试并保存，留空则保持当前 Key。'
+    : mode === 'empty'
+    ? '尚未配置 API Key，请输入后测试连接并保存。'
+    : 'API Key 当前可编辑；点击眼睛可切换显示。';
+  if (aiKeySub) aiKeySub.textContent = uiText(hint);
+  if (aiKeyReplace) {
+    aiKeyReplace.hidden = !configured;
+    aiKeyReplace.textContent = uiText(replacementActive ? '取消' : '替换');
+  }
+  aiKey.readOnly = mode === 'stored';
+  aiKey.setAttribute('aria-readonly', String(aiKey.readOnly));
+}
+
 function setMaskedAiKey(ai) {
   const configured = !!ai?.configured && !!ai?.maskedApiKey;
   aiKey.type = 'password';
   aiKey.value = configured ? ai.maskedApiKey : '';
   aiKey.dataset.masked = String(configured);
   aiKey.dataset.saved = String(configured);
+  aiKey.dataset.savedMask = configured ? ai.maskedApiKey : '';
+  aiKey.dataset.mode = configured ? 'stored' : 'empty';
   renderAiKeyToggle(false);
+  syncAiKeyEditorUI();
+}
+
+function restoreSavedMaskedAiKey() {
+  const savedMask = aiKey.dataset.savedMask || '';
+  setMaskedAiKey({ configured: !!savedMask, maskedApiKey: savedMask });
 }
 
 function readAiKeyDraft() {
   const masked = aiKey.dataset.masked === 'true';
   const saved = aiKey.dataset.saved === 'true';
+  const mode = aiKey.dataset.mode || '';
+  const replacementActive = mode === 'replace' || mode === 'draft';
   const value = masked ? '' : aiKey.value.trim();
   const configured = !!state.settings?.ai?.configured;
-  const preserveExistingApiKey = configured && (masked || saved);
+  const preserveExistingApiKey = configured && (masked || saved || (replacementActive && !value));
   return {
     value,
-    useStoredApiKey: preserveExistingApiKey,
+    useStoredApiKey: preserveExistingApiKey && !value,
     preserveExistingApiKey,
-    clearRequested: !masked && !saved && !value
+    clearRequested: !masked && !saved && !replacementActive && !value
   };
 }
 
 aiKey.addEventListener('focus', () => {
   if (aiKey.dataset.masked !== 'true') return;
-  aiKey.value = '';
-  aiKey.dataset.masked = 'false';
-  aiKey.dataset.saved = 'true';
-  renderAiKeyToggle(false);
+  // 已保存的掩码只读显示；替换操作必须通过“替换”按钮显式进入编辑状态。
+  syncAiKeyEditorUI();
 });
 
 aiKey.addEventListener('input', () => {
   aiKey.dataset.masked = 'false';
   aiKey.dataset.saved = 'false';
+  aiKey.dataset.mode = 'draft';
+  syncAiKeyEditorUI();
 });
 
 aiKey.addEventListener('blur', () => {
-  if (!aiKey.value.trim() && state.settings?.ai?.configured && aiKey.dataset.saved === 'true') {
+  if (!aiKey.value.trim()
+    && state.settings?.ai?.configured
+    && aiKey.dataset.saved === 'true'
+    && aiKey.dataset.mode !== 'replace') {
     setMaskedAiKey(state.settings.ai);
   }
+});
+
+aiKeyReplace.addEventListener('click', () => {
+  if (!state.settings?.ai?.configured) return;
+  cancelAiTestRun();
+  const replacementActive = aiKey.dataset.mode === 'replace' || aiKey.dataset.mode === 'draft';
+  if (replacementActive) {
+    restoreSavedMaskedAiKey();
+    return;
+  }
+  aiKey.type = 'password';
+  aiKey.value = '';
+  aiKey.dataset.masked = 'false';
+  aiKey.dataset.saved = 'true';
+  aiKey.dataset.mode = 'replace';
+  renderAiKeyToggle(false);
+  syncAiKeyEditorUI();
+  aiKey.focus();
 });
 
 aiKeyToggle.addEventListener('click', async () => {
@@ -3683,12 +3757,15 @@ aiKeyToggle.addEventListener('click', async () => {
     aiKey.type = 'text';
     aiKey.dataset.masked = 'false';
     aiKey.dataset.saved = 'true';
+    aiKey.dataset.mode = 'revealed';
     renderAiKeyToggle(true);
+    syncAiKeyEditorUI();
     return;
   }
   const visible = aiKey.type !== 'password';
   aiKey.type = visible ? 'password' : 'text';
   renderAiKeyToggle(!visible);
+  syncAiKeyEditorUI();
 });
 
 function syncSilentRow() {
@@ -3908,6 +3985,7 @@ function syncAiSettingsUI(ai = state.settings?.ai) {
   syncAiModels(ai);
   if (aiTest) aiTest.disabled = aiConnectionChecking;
   aiMsg.textContent = '';
+  syncAiKeyEditorUI(ai);
 }
 
 const aiNavItems = [...document.querySelectorAll('.ai-nav-item')];
@@ -3973,7 +4051,9 @@ function renderTerminologyThinking() {
   terminologyThinking.hidden = !thinking.visible;
   terminologyThinkingToggle.hidden = !showDetails;
   terminologyThinkingNote.hidden = !showDetails;
-  terminologyThinkingContent.hidden = !showDetails || !thinking.open;
+  const contentVisible = showDetails && thinking.open;
+  terminologyThinkingContentWrap.hidden = !contentVisible;
+  terminologyThinkingContent.hidden = !contentVisible;
   terminologyThinkingToggle.textContent = uiText(thinking.open ? '收起详细过程' : '查看详细过程');
   terminologyThinkingToggle.setAttribute('aria-expanded', String(thinking.open));
   terminologyThinkingNote.textContent = uiText(thinking.progressNote
@@ -4902,6 +4982,90 @@ document.addEventListener('keydown', async e => {
 
 // 给滚动容器装一个自绘 thumb：滚动时浮现于内容右缘，静止 0.7s 隐去，可拖拽。
 // 原生滚动条已隐藏（CSS），任何状态下都不占布局空间。
+const SCROLL_EDGE_TOLERANCE = 4;
+
+function applyScrollEdgeFadeHostState(fadeHost) {
+  const state = fadeHost?.__scrollEdgeFadeStates;
+  if (!state) {
+    fadeHost?.classList.remove('has-scroll-top', 'has-scroll-bottom');
+    return;
+  }
+  const activeStates = [...state.entries()]
+    .filter(([source]) => source.isConnected && source.clientHeight > 0)
+    .map(([, current]) => current);
+  fadeHost.classList.toggle('has-scroll-top', activeStates.some(current => current.hasTop));
+  fadeHost.classList.toggle('has-scroll-bottom', activeStates.some(current => current.hasBottom));
+}
+
+// 根据真实可滚动范围切换上下边缘渐隐：底部 padding 不算作“仍有内容”。
+// 这样既不会在内容刚好放下时误显示，也不会把接近底部的最后一段内容长期罩住。
+function syncScrollEdgeFade(scroller, explicitHost = null) {
+  if (!scroller) return;
+  const fadeHost = explicitHost || scroller.closest('.edge-fade-host');
+  if (!fadeHost) return;
+
+  const maxScrollTop = Math.max(0, scroller.scrollHeight - scroller.clientHeight);
+  const paddingBottom = Number.parseFloat(getComputedStyle(scroller).paddingBottom) || 0;
+  const contentScrollRange = Math.max(0, maxScrollTop - paddingBottom);
+  const hasOverflow = contentScrollRange > SCROLL_EDGE_TOLERANCE;
+  const scrollTop = Math.max(0, scroller.scrollTop);
+  const state = fadeHost.__scrollEdgeFadeStates || new Map();
+  fadeHost.__scrollEdgeFadeStates = state;
+  state.set(scroller, {
+    hasTop: scroller.clientHeight > 0 && hasOverflow && scrollTop > SCROLL_EDGE_TOLERANCE,
+    hasBottom: scroller.clientHeight > 0
+      && hasOverflow
+      && scrollTop < contentScrollRange - SCROLL_EDGE_TOLERANCE,
+  });
+
+  // 多个页面可以共用 content 作为外层宿主；只采纳当前仍可见的滚动区，
+  // 防止切页时隐藏的页面把另一个页面的渐隐状态清掉。
+  applyScrollEdgeFadeHostState(fadeHost);
+}
+
+// 主视图在小窗口时自身也可能成为纵向滚动出口。它没有覆盖式滚动条，
+// 但仍复用同一套边缘状态，让活动图、工具栏等固定区溢出时也能被提示。
+function attachScrollEdgeFade(scroller, fadeHost) {
+  if (!scroller || !fadeHost) return () => false;
+
+  scroller.__scrollEdgeFadeCleanup?.();
+
+  function update() {
+    syncScrollEdgeFade(scroller, fadeHost);
+  }
+
+  scroller.addEventListener('scroll', update);
+  window.addEventListener('resize', update);
+
+  const resizeObserver = typeof ResizeObserver === 'function'
+    ? new ResizeObserver(update)
+    : null;
+  resizeObserver?.observe(scroller);
+
+  const mutationObserver = typeof MutationObserver === 'function'
+    ? new MutationObserver(update)
+    : null;
+  mutationObserver?.observe(scroller, {
+    childList: true,
+    subtree: true,
+    characterData: true,
+  });
+
+  const cleanup = () => {
+    scroller.removeEventListener('scroll', update);
+    window.removeEventListener('resize', update);
+    resizeObserver?.disconnect();
+    mutationObserver?.disconnect();
+    fadeHost.__scrollEdgeFadeStates?.delete(scroller);
+    applyScrollEdgeFadeHostState(fadeHost);
+    if (scroller.__scrollEdgeFadeCleanup === cleanup) delete scroller.__scrollEdgeFadeCleanup;
+  };
+  scroller.__scrollEdgeFadeCleanup = cleanup;
+
+  update();
+  return update;
+}
+
 function attachOverlayScrollbar(scroller, thumb) {
   let hideTimer = null;
   let dragging = false;
@@ -4912,6 +5076,7 @@ function attachOverlayScrollbar(scroller, thumb) {
   }
 
   function update() {
+    syncScrollEdgeFade(scroller);
     const { scrollTop, scrollHeight, clientHeight } = scroller;
     // 24px 容差吸收容器底部留白：视觉上一屏放得下就不显示
     if (scrollHeight <= clientHeight + 24) {
@@ -4948,6 +5113,22 @@ function attachOverlayScrollbar(scroller, thumb) {
     if (!dragging) scheduleHide();
   });
   window.addEventListener('resize', update);
+
+  // 内容高度可能因筛选、语言切换、异步闭环结果或视图重新显示而改变。
+  // 观察尺寸和子树变动，确保渐隐状态不会停留在旧的滚动范围上。
+  const resizeObserver = typeof ResizeObserver === 'function'
+    ? new ResizeObserver(update)
+    : null;
+  resizeObserver?.observe(scroller);
+  const mutationObserver = typeof MutationObserver === 'function'
+    ? new MutationObserver(update)
+    : null;
+  mutationObserver?.observe(scroller, {
+    childList: true,
+    subtree: true,
+    characterData: true,
+  });
+
   thumb.addEventListener('mousedown', e => {
     e.preventDefault();
     dragging = true;
@@ -4977,6 +5158,9 @@ function attachOverlayScrollbar(scroller, thumb) {
 const updateListThumb = attachOverlayScrollbar($('#list'), $('#list-thumb'));
 attachOverlayScrollbar($('.settings-scroll'), $('#settings-thumb'));
 updateWorkbenchThumb = attachOverlayScrollbar(weeklyWorkbench, $('#recent-summary-thumb'));
+updateMainViewportFade = attachScrollEdgeFade(viewMain, $('.content'));
+updateReportViewportFade = attachScrollEdgeFade(viewReport, $('.content'));
+attachScrollEdgeFade(reportSide, reportSideWrap);
 document.querySelectorAll('textarea[data-resizable="true"]').forEach(installTextareaResizer);
 
 /* ---------- 初始化 ---------- */
